@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * WHY THE BAR CROPS AT ALL
  * ---------------------------------------------------------------------------
- * The bar answers one question — "is CandidCue hearing me?" — and it answers it
+ * The bar answers one question — "is Speaking Glass hearing me?" — and it answers it
  * with the words that just arrived. Everything before those is answered
  * already: a presenter reading a sentence they finished twenty seconds ago
  * learns nothing they did not learn when it appeared.

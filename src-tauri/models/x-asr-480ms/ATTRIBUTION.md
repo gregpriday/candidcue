@@ -3,7 +3,7 @@
 
 # Bundled speech recognition model
 
-CandidCue transcribes speech on-device using a model it does not own. This file
+Speaking Glass transcribes speech on-device using a model it does not own. This file
 travels with the model because redistribution requires the attribution to travel
 with it, and the upstream archive ships no licence file of its own.
 
@@ -23,7 +23,7 @@ only the installed app.
 - Distributed via: <https://github.com/k2-fsa/sherpa-onnx>, as `sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`
 - **Licence: Apache License 2.0** (`Apache-2.0`) — <https://www.apache.org/licenses/LICENSE-2.0>
 
-CandidCue redistributes these model weights **unmodified**.
+Speaking Glass redistributes these model weights **unmodified**.
 
 ## Integrity
 

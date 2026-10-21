@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * THE DEFECT THIS FILE EXISTS FOR
  * ---------------------------------------------------------------------------
- * CandidCue attaches two `MediaStreamAudioSourceNode`s to one `MediaStream`:
+ * Speaking Glass attaches two `MediaStreamAudioSourceNode`s to one `MediaStream`:
  * `PcmCapture`, which encodes what the recogniser transcribes, and the analyser graph
  * behind the level meter and the §28.6 dead-input detector. Each built its own
  * `AudioContext` — the capture at `STT_SAMPLE_RATE_HZ`, the analyser at
@@ -15,7 +15,7 @@
  * (48 kHz) it was the analyser that lost, and the Settings screen printed the
  * contradiction one line above the other:
  *
- *     No signal — CandidCue cannot hear this microphone.
+ *     No signal — Speaking Glass cannot hear this microphone.
  *     Transcription is working.   "This is a test of the transcription."
  *
  * That silence reached the dead-input detector, which held following for the

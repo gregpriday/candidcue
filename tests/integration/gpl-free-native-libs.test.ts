@@ -41,7 +41,7 @@ afterAll(() => {
   for (const dir of workspaces) rmSync(dir, { recursive: true, force: true });
 });
 function workspace(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'candidcue-gpl-'));
+  const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-gpl-'));
   workspaces.push(dir);
   return dir;
 }
@@ -81,7 +81,7 @@ function executable(
   const parts = [head, filler, ...(anchors ? ANCHORS.map((a) => a.bytes) : []), ...payload].flatMap(
     (part) => [part, filler],
   );
-  const path = join(workspace(), 'candidcue');
+  const path = join(workspace(), 'speaking-glass');
   writeFileSync(path, Buffer.concat(parts));
   return path;
 }

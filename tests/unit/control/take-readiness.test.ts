@@ -412,7 +412,7 @@ describe('microphone access', () => {
     expect(denied.action).toEqual({ label: 'Open Windows Settings', microphone: 'privacy' });
     expect(denied.detail).toContain('Windows Settings → Privacy & security → Microphone');
     expect(denied.detail).toContain('“Let desktop apps access your microphone”');
-    // Windows caches nothing: reopening CandidCue changes nothing there.
+    // Windows caches nothing: reopening Speaking Glass changes nothing there.
     expect(denied.detail).not.toMatch(/reopen|quit/i);
 
     const restricted = microphoneAccessFinding('restricted', 'windows')!;

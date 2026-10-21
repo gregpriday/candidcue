@@ -1,4 +1,4 @@
-//! CandidCue Rust core (spec §44).
+//! Speaking Glass Rust core (spec §44).
 //!
 //! Module layout mirrors the trust boundaries: filesystem, database, downloads
 //! and cross-window authority all live here; the webviews only ever see typed
@@ -20,6 +20,7 @@ pub mod database;
 pub mod dialogs;
 pub mod diagnostics;
 pub mod errors;
+pub mod legacy_data;
 pub mod menu;
 pub mod net;
 pub mod scripts;

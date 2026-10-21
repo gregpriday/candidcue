@@ -63,7 +63,7 @@ describe('UpdateNotice', () => {
   it('offers the download page, not an install, to a copy that cannot replace itself', () => {
     const { container, handlers } = renderNotice({ ...AVAILABLE, canInstall: false });
     expect(buttons(container)).toEqual(['Later', 'Download']);
-    expect(container.textContent).toMatch(/candidcue\.com/);
+    expect(container.textContent).toMatch(/speakingglass\.com/);
     container.querySelectorAll('button')[1]!.click();
     flushSync();
     expect(handlers.ondownload).toHaveBeenCalledTimes(1);
@@ -90,7 +90,7 @@ describe('UpdateNotice', () => {
     expect(buttons(installing.container)).toEqual([]);
 
     const restarting = renderNotice({ kind: 'restarting', version: '0.2.0' });
-    expect(restarting.container.textContent).toMatch(/Restarting CandidCue/);
+    expect(restarting.container.textContent).toMatch(/Restarting Speaking Glass/);
   });
 
   it('reports a failure in words, with Close and Try Again', () => {

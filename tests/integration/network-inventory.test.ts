@@ -2,7 +2,7 @@
  * The network inventory, checked against the code it describes.
  *
  * `docs/network-inventory.md` is the single source of truth for every public
- * claim about what CandidCue does on the network — the README, the security
+ * claim about what Speaking Glass does on the network — the README, the security
  * policy, the privacy policy, the Settings privacy section and any website page
  * are all written from it. A source of truth nothing checks is a comment.
  *
@@ -546,7 +546,7 @@ describe('nothing arrives that phones home on the app’s behalf', () => {
     const present = FORBIDDEN.filter((name) => source.includes(name));
     expect(
       present,
-      `${relPath} pulls in ${present.join(', ')}. CandidCue's only background ` +
+      `${relPath} pulls in ${present.join(', ')}. Speaking Glass's only background ` +
         `request is the update check (${INVENTORY}), and the security policy and ` +
         `the privacy policy both say so in as many words.`,
     ).toEqual([]);
@@ -676,7 +676,7 @@ describe('the surfaces that describe the network', () => {
   it.each(LINKED)('%s points at the inventory', (relPath) => {
     expect(
       stripSourceComments(relPath).includes('network-inventory.md'),
-      `${relPath} describes what CandidCue does on the network without ` +
+      `${relPath} describes what Speaking Glass does on the network without ` +
         `pointing at ${INVENTORY}. Two descriptions with no link between them ` +
         `is exactly how the last one went stale.`,
     ).toBe(true);
@@ -693,14 +693,14 @@ describe('claims the inventory bans', () => {
    * covers.
    */
   const BANNED: { pattern: RegExp; bullet: string }[] = [
-    { pattern: /never uses the internet/i, bullet: '"CandidCue never uses the internet."' },
+    { pattern: /never uses the internet/i, bullet: '"Speaking Glass never uses the internet."' },
     { pattern: /nothing (ever )?leaves your/i, bullet: '"Nothing ever leaves your computer."' },
     { pattern: /completely offline/i, bullet: '"Completely offline from first launch."' },
     { pattern: /(there is )?no network code/i, bullet: '"There is no network code."' },
     { pattern: /\bautomatic updates\b/i, bullet: '"Automatic updates."' },
     {
       pattern: /never checks for updates/i,
-      bullet: '"CandidCue never checks for updates."',
+      bullet: '"Speaking Glass never checks for updates."',
     },
     {
       pattern: /support bundle can never contain/i,

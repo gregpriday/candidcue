@@ -2,7 +2,7 @@
  * F.8 external-change conflict: the state the mock backend hid.
  *
  * The editor store branched on `SaveResult.status === 'conflict'`. Rust's
- * `SaveResult` has no `status` field — a file that changed outside CandidCue
+ * `SaveResult` has no `status` field — a file that changed outside Speaking Glass
  * comes back as an ERROR with code `SCRIPT_CONFLICT` — so against the real
  * backend the conflict state was unreachable and Editor.svelte's "keep mine /
  * load disk / save both" sheet could never open. Only `mock-backend.ts`
@@ -117,7 +117,7 @@ describe('the editor reflects a real SCRIPT_CONFLICT', () => {
     saveBehaviour = async () => {
       throw appError(
         'SCRIPT_CONFLICT',
-        "This script's file changed outside CandidCue. Resolve the conflict before saving.",
+        "This script's file changed outside Speaking Glass. Resolve the conflict before saving.",
       );
     };
     setSource('# Keynote\n\nEdited.\n');
@@ -127,7 +127,7 @@ describe('the editor reflects a real SCRIPT_CONFLICT', () => {
     // Before the fix this was 'error', which opens the generic "Save failed"
     // sheet instead of the choice between the two real versions.
     expect(state.saveState).toBe('conflict');
-    expect(state.lastError).toContain('changed outside CandidCue');
+    expect(state.lastError).toContain('changed outside Speaking Glass');
     /*
      * And it counts as unsaved work, which is what lets the leave guard stop.
      *
@@ -141,14 +141,14 @@ describe('the editor reflects a real SCRIPT_CONFLICT', () => {
 
   it('still reports other failures as errors', async () => {
     saveBehaviour = async () => {
-      throw appError('SAVE_FAILED', 'CandidCue could not write the script file.');
+      throw appError('SAVE_FAILED', 'Speaking Glass could not write the script file.');
     };
     setSource('# Keynote\n\nEdited again.\n');
     await saveNow();
 
     const state = get(editor);
     expect(state.saveState).toBe('error');
-    expect(state.lastError).toBe('CandidCue could not write the script file.');
+    expect(state.lastError).toBe('Speaking Glass could not write the script file.');
     expect(editorHasUnsavedWork()).toBe(true);
   });
 
@@ -194,7 +194,7 @@ describe('resolving an external conflict never drops the editor text', () => {
 
     // Drive the store into the real conflict state, then let the disk move on.
     saveBehaviour = async () => {
-      throw appError('SCRIPT_CONFLICT', "This script's file changed outside CandidCue.");
+      throw appError('SCRIPT_CONFLICT', "This script's file changed outside Speaking Glass.");
     };
     setSource(unsaved);
     await saveNow();
@@ -274,7 +274,7 @@ describe('resolving an external conflict never drops the editor text', () => {
    */
   it('keeps the text and the conflict state when the copy cannot be written', async () => {
     createBehaviour = async () => {
-      throw appError('SAVE_FAILED', 'CandidCue could not write the script file.');
+      throw appError('SAVE_FAILED', 'Speaking Glass could not write the script file.');
     };
 
     await expect(useDiskVersion()).rejects.toBeTruthy();
@@ -287,7 +287,7 @@ describe('resolving an external conflict never drops the editor text', () => {
 
   it('does not reach the disk version when the copy fails', async () => {
     createBehaviour = async () => {
-      throw appError('SAVE_FAILED', 'CandidCue could not write the script file.');
+      throw appError('SAVE_FAILED', 'Speaking Glass could not write the script file.');
     };
     await expect(useDiskVersion()).rejects.toBeTruthy();
     expect(get(editor).source).not.toBe(diskDocument.source);
@@ -339,7 +339,7 @@ describe('resolving an external conflict never drops the editor text', () => {
 
   it('leaves the conflict unresolved when keeping the editor text fails', async () => {
     saveBehaviour = async () => {
-      throw appError('SAVE_FAILED', 'CandidCue could not write the script file.');
+      throw appError('SAVE_FAILED', 'Speaking Glass could not write the script file.');
     };
 
     await expect(keepEditorVersion()).rejects.toBeTruthy();

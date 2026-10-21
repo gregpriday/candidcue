@@ -45,7 +45,7 @@ export function platformLabel(os: string, arch: string): string {
 
 export function diagnosticRows(d: SystemDiagnostics): DiagnosticRow[] {
   const rows: DiagnosticRow[] = [
-    { label: 'CandidCue version', value: d.appVersion || 'unknown', tone: 'neutral' },
+    { label: 'Speaking Glass version', value: d.appVersion || 'unknown', tone: 'neutral' },
     { label: 'Platform', value: platformLabel(d.os, d.arch), tone: 'neutral' },
     {
       label: 'Database check',
@@ -116,4 +116,4 @@ export const SUPPORT_BUNDLE_CONTENTS = [
  * and the last sentence hands the decision to the person whose folder it is.
  */
 export const SUPPORT_BUNDLE_EXCLUSIONS =
-  'A bundle is designed to leave out your scripts, your transcripts and your microphone audio, and it never contains the database or a recording. What it carries is diagnostic state, versions, timings, and log lines with home paths and web addresses removed. CandidCue cannot recognise prose, so that last part rests on what the app writes rather than on a filter — reveal the bundle and read it before you send it to anyone.';
+  'A bundle is designed to leave out your scripts, your transcripts and your microphone audio, and it never contains the database or a recording. What it carries is diagnostic state, versions, timings, and log lines with home paths and web addresses removed. Speaking Glass cannot recognise prose, so that last part rests on what the app writes rather than on a filter — reveal the bundle and read it before you send it to anyone.';

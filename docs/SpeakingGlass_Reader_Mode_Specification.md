@@ -12,7 +12,7 @@ consulted and the code wins.
 
 ## 1. The use case, stated plainly
 
-CandidCue today has exactly one presentation gesture: **become the whole
+Speaking Glass today has exactly one presentation gesture: **become the whole
 panel.** Press Present and the control window goes borderless, fills the
 monitor it is on, and rises above the menu bar (`src-tauri/src/windows/present.rs`).
 That is correct for the rig it was built for — a presenter standing at a camera,

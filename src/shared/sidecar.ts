@@ -18,7 +18,7 @@
  * wrong and leaves the confirming to the person who can actually see the rig.
  *
  * The one thing worth being firm about is the honesty flag. A checklist item
- * that says "CandidCue has verified this" when it has verified nothing is worse
+ * that says "Speaking Glass has verified this" when it has verified nothing is worse
  * than no checklist at all: it converts a reminder into a false assurance, and
  * the presenter stops looking at the thing that is about to break.
  *
@@ -136,14 +136,14 @@ export interface SidecarCheck {
    */
   why: string;
   /**
-   * Whether CandidCue can confirm this itself. Almost nothing here is.
+   * Whether Speaking Glass can confirm this itself. Almost nothing here is.
    *
    * An item with `false` must be rendered as a reminder the presenter ticks,
    * never as a claim about state the app cannot see.
    */
   verifiable: boolean;
   /**
-   * What CandidCue would see, and when — null when it would see nothing at all.
+   * What Speaking Glass would see, and when — null when it would see nothing at all.
    *
    * For the verifiable item this is the evidence. For the rest it is the honest
    * bad news: the one symptom the app can actually report arrives AFTER the take
@@ -186,7 +186,7 @@ const SIDECAR_CHECKS: readonly SidecarCheck[] = frozen([
     why: 'Both strips are drawn over the edges of the same panel the script is on, so the text nearest an edge sits under a row of buttons you are not looking at and cannot read. Turning them off hands the whole panel back; keeping them means the safe area has to exclude them.',
     verifiable: false,
     symptom:
-      'The display reports a size, not a shape, so whatever CandidCue is told about this panel includes any strip you can see on it.',
+      'The display reports a size, not a shape, so whatever Speaking Glass is told about this panel includes any strip you can see on it.',
   },
   {
     id: 'stay-on-screen',
@@ -194,12 +194,12 @@ const SIDECAR_CHECKS: readonly SidecarCheck[] = frozen([
     why: 'Opening an app on the iPad, or swiping home, suspends the Sidecar session. The prompter goes dark mid-sentence and the stage lands back on the Mac, where you are not looking.',
     verifiable: false,
     symptom:
-      'CandidCue finds out when the display disappears from under the stage — by which point the take has already been interrupted.',
+      'Speaking Glass finds out when the display disappears from under the stage — by which point the take has already been interrupted.',
   },
   {
     id: 'keep-awake',
     label: 'Stop the Mac from sleeping its displays',
-    why: 'Reading from a prompter is the one activity that produces no keystrokes and no pointer movement for minutes at a time, so a Mac on its normal settings can decide nobody is there and dim the screen you are reading from. CandidCue does not hold the Mac awake for you.',
+    why: 'Reading from a prompter is the one activity that produces no keystrokes and no pointer movement for minutes at a time, so a Mac on its normal settings can decide nobody is there and dim the screen you are reading from. Speaking Glass does not hold the Mac awake for you.',
     verifiable: false,
     symptom: null,
   },

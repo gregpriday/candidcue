@@ -1041,7 +1041,7 @@ mod tests {
         let legacy = serde_json::json!({
             "schemaVersion": 1,
             "audio": { "language": "en", "delayProfile": "low", "vadSensitivity": 0.8 },
-            "commands": { "wakePhrase": "CandidCue", "lunaFallback": true },
+            "commands": { "wakePhrase": "Speaking Glass", "lunaFallback": true },
             "coaching": { "mode": "studio", "targetWpmLow": 115 },
             "following": {
                 "feel": "calm",

@@ -109,7 +109,7 @@ describe('diagnostics presentation is honest about what it knows', () => {
     const text = diagnosticsClipboardText(base);
     const rows = diagnosticRows(base);
     expect(text.split('\n')).toHaveLength(rows.length);
-    expect(text).toContain('CandidCue version: 0.1.0');
+    expect(text).toContain('Speaking Glass version: 0.1.0');
     expect(text).toContain(base.dataDir);
   });
 

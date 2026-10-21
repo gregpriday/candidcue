@@ -722,7 +722,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   // ---------------------------------------------------------------- Window --
   'window.main': {
     id: 'window.main',
-    label: 'CandidCue',
+    label: 'Speaking Glass',
     available: () => true,
     run: (a) => a.showMainWindow(),
   },
@@ -744,7 +744,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   },
   'window.settings': {
     id: 'window.settings',
-    label: 'CandidCue Settings',
+    label: 'Speaking Glass Settings',
     /*
      * Always enabled, because choosing it OPENS the window if it is not there.
      * §20.4: "Bring an existing window forward instead of creating duplicates"
@@ -809,7 +809,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
    */
   'help.website': {
     id: 'help.website',
-    label: 'CandidCue on GitHub',
+    label: 'Speaking Glass on GitHub',
     available: (c) => !presenting(c),
     run: (a) => a.openWebDestination('website'),
   },

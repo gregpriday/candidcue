@@ -1,4 +1,4 @@
-CandidCue bundles two typefaces, each licensed under the SIL Open Font License,
+Speaking Glass bundles two typefaces, each licensed under the SIL Open Font License,
 Version 1.1. Each copyright notice below covers the font files named above it;
 the one licence text that follows applies to both.
 

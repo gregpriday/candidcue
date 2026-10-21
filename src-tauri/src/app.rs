@@ -12,6 +12,20 @@ use crate::scripts::{DataPaths, ScriptLocks};
 use crate::windows::{events, CONTROL_LABEL};
 
 pub fn run() {
+    let context = tauri::generate_context!();
+
+    // The CandidCue data folder, copied into place before anything can create
+    // the new one (`legacy_data`). With no data directory at all, Tauri's own
+    // resolution fails the same way in `setup` and says so there.
+    //
+    // `_legacy_lock` is held for as long as the process runs: while it is,
+    // no other launch replaces the folder this one is using. `run` below never
+    // returns, so the binding is never dropped.
+    let (legacy_data, _legacy_lock) = match dirs::data_dir() {
+        Some(data_dir) => crate::legacy_data::migrate(&data_dir, &context.config().identifier),
+        None => (crate::legacy_data::Outcome::NotNeeded, None),
+    };
+
     // Logging is initialised inside `setup`, not here. It needs the log
     // directory, the log directory comes from the app data dir, and that needs
     // an `AppHandle` which does not exist until the builder does. See
@@ -180,7 +194,7 @@ pub fn run() {
             // `list_session_takes`. Takes stopped writing transcripts and take
             // history (#214), and their storage went with #217.
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
 
             // Data directory layout (spec §47.1).
@@ -231,6 +245,7 @@ pub fn run() {
                     );
                 }
             }
+            legacy_data.log();
 
             /*
              * Start each run with an empty client trace — but keep the last one.
@@ -454,11 +469,11 @@ pub fn run() {
             crate::commands::shell_cmds::restore_window_frame(&handle);
             install_window_frame_recorder(&handle);
 
-            tracing::info!("CandidCue started; database ready at {:?}", data_dir);
+            tracing::info!("Speaking Glass started; database ready at {:?}", data_dir);
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("error while running CandidCue")
+        .build(context)
+        .expect("error while running Speaking Glass")
         .run(|handle, event| {
             /*
              * Quit (⌘Q, the application menu, a logout) as well as a window

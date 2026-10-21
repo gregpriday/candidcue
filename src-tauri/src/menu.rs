@@ -3,7 +3,7 @@
 //! ---------------------------------------------------------------------------
 //! WHY THIS FILE EXISTS AT ALL
 //! ---------------------------------------------------------------------------
-//! CandidCue shipped with no native menu. Everything it could do lived behind an
+//! Speaking Glass shipped with no native menu. Everything it could do lived behind an
 //! in-webview shortcut or a button on the screen that owned it, which means the
 //! application had no PUBLISHED list of its own commands: nothing a user could
 //! read to find out that Blank Stage exists, nothing that told them the key, and
@@ -326,7 +326,7 @@ pub fn install(app: &AppHandle) {
          * happen. Forwarding everything was wrong for the same reason targeting
          * control unconditionally was: ⌘W over the stage would close the
          * document window, and Insert would write into an editor two windows
-         * away. Dropping everything is wrong too — Window › CandidCue pressed
+         * away. Dropping everything is wrong too — Window › Speaking Glass pressed
          * over the stage is exactly the gesture "get me back to the other
          * window", and it has to work from there most of all.
          *
@@ -460,13 +460,13 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      * The application menu, macOS only.
      *
      * On Windows and Linux there is no application menu: About and Quit belong
-     * to Help and File respectively, and inventing a "CandidCue" menu there
+     * to Help and File respectively, and inventing a "Speaking Glass" menu there
      * would be macOS mimicry of exactly the kind §22.3 warns against.
      */
     #[cfg(target_os = "macos")]
     {
         let about = AboutMetadata {
-            name: Some("CandidCue".into()),
+            name: Some("Speaking Glass".into()),
             version: Some(env!("CARGO_PKG_VERSION").into()),
             comments: Some(
                 "A voice-following teleprompter. Speech is transcribed on this machine and never leaves it."
@@ -478,10 +478,10 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         };
         let app_menu = Submenu::with_items(
             app,
-            "CandidCue",
+            "Speaking Glass",
             true,
             &[
-                &PredefinedMenuItem::about(app, Some("About CandidCue"), Some(about))?,
+                &PredefinedMenuItem::about(app, Some("About Speaking Glass"), Some(about))?,
                 &sep()?,
                 // ⌘, — the platform key for preferences, and the reason a user
                 // reaches for the menu bar at all before they know the app.
@@ -489,11 +489,11 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 &sep()?,
                 &PredefinedMenuItem::services(app, None)?,
                 &sep()?,
-                &PredefinedMenuItem::hide(app, Some("Hide CandidCue"))?,
+                &PredefinedMenuItem::hide(app, Some("Hide Speaking Glass"))?,
                 &PredefinedMenuItem::hide_others(app, None)?,
                 &PredefinedMenuItem::show_all(app, None)?,
                 &sep()?,
-                &PredefinedMenuItem::quit(app, Some("Quit CandidCue"))?,
+                &PredefinedMenuItem::quit(app, Some("Quit Speaking Glass"))?,
             ],
         )?;
         menu.append(&app_menu)?;
@@ -538,7 +538,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     /*
      * Settings and Quit, for the platforms with no application menu.
      *
-     * On macOS both live under "CandidCue" above, which is where every Mac user
+     * On macOS both live under "Speaking Glass" above, which is where every Mac user
      * looks for them. Windows and Linux have no such menu — the convention there
      * is Settings at the bottom of File (or Edit) and Exit below it — so
      * building them only inside the `cfg(target_os = "macos")` block left
@@ -721,10 +721,10 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let minimize = PredefinedMenuItem::minimize(app, None)?;
     let maximize = PredefinedMenuItem::maximize(app, None)?;
     let separator = sep()?;
-    let main_window = item("window.main", "CandidCue", None)?;
+    let main_window = item("window.main", "Speaking Glass", None)?;
     // §20.4: the Settings window is listed, and choosing it brings the existing
     // one forward rather than making a second.
-    let settings_window = item("window.settings", "CandidCue Settings", None)?;
+    let settings_window = item("window.settings", "Speaking Glass Settings", None)?;
     /*
      * §13.4: the Stage window is listed WHILE IT EXISTS.
      *
@@ -775,7 +775,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             // actions above because leaving the app is a different kind of
             // thing to do, and a user reaching for "Reveal Logs" should not
             // land in a browser.
-            &item("help.website", "CandidCue on GitHub", None)?,
+            &item("help.website", "Speaking Glass on GitHub", None)?,
             &item("help.release-notes", "Release Notes", None)?,
             &item("help.download", "Download Latest Version", None)?,
             &item("help.check-for-updates", "Check for Updates…", None)?,
@@ -795,9 +795,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         help.append(&sep()?)?;
         help.append(&PredefinedMenuItem::about(
             app,
-            Some("About CandidCue"),
+            Some("About Speaking Glass"),
             Some(AboutMetadata {
-                name: Some("CandidCue".into()),
+                name: Some("Speaking Glass".into()),
                 version: Some(env!("CARGO_PKG_VERSION").into()),
                 comments: Some(
                     "A voice-following teleprompter. Speech is transcribed on this machine and never leaves it."

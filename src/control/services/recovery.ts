@@ -47,7 +47,7 @@ export interface ScriptRescueResult {
 }
 
 /**
- * Did CandidCue actually start?
+ * Did Speaking Glass actually start?
  *
  * A browser dev session has no Rust at all, and "no backend" is not "broken
  * database" — reporting a boot failure there would put the recovery screen in
@@ -79,7 +79,7 @@ export async function getBootStatus(): Promise<BootStatusReport> {
       databaseReady: false,
       code: 'DATABASE_UNAVAILABLE',
       message:
-        'CandidCue could not determine whether its database opened: it asked, and the ' +
+        'Speaking Glass could not determine whether its database opened: it asked, and the ' +
         'answer could not be read.',
       dataDirectory: '',
     };
@@ -137,15 +137,15 @@ export async function writeUnsavedRecovery(scriptId: string, source: string): Pr
 export function bootFailureTitle(status: BootStatusReport): string {
   switch (status.code) {
     case 'DATABASE_CORRUPT':
-      return 'CandidCue’s database is damaged';
+      return 'Speaking Glass’s database is damaged';
     case 'DATABASE_MIGRATION_FAILED':
-      return 'CandidCue couldn’t finish updating';
+      return 'Speaking Glass couldn’t finish updating';
     case 'DATABASE_BACKUP_REQUIRED':
-      return 'CandidCue couldn’t back up its database';
+      return 'Speaking Glass couldn’t back up its database';
     case 'DATABASE_UNAVAILABLE':
-      return 'CandidCue couldn’t check its database';
+      return 'Speaking Glass couldn’t check its database';
     default:
-      return 'CandidCue couldn’t open its database';
+      return 'Speaking Glass couldn’t open its database';
   }
 }
 
@@ -161,19 +161,19 @@ export function describeBootFailure(status: BootStatusReport): string {
   switch (status.code) {
     case 'DATABASE_CORRUPT':
       return (
-        'CandidCue checks its database every time it opens, and this time it found damage, ' +
+        'Speaking Glass checks its database every time it opens, and this time it found damage, ' +
         'so it stopped without changing anything.'
       );
     case 'DATABASE_MIGRATION_FAILED':
       return (
-        'This version of CandidCue needed to update its database and couldn’t, so it ' +
+        'This version of Speaking Glass needed to update its database and couldn’t, so it ' +
         'stopped rather than leave the database half-changed.'
       );
     case 'DATABASE_BACKUP_REQUIRED':
       return (
-        'This version of CandidCue needs to update its database, and it always saves a ' +
+        'This version of Speaking Glass needs to update its database, and it always saves a ' +
         'backup first. It couldn’t save one, so it changed nothing. That usually means the ' +
-        'disk is full, or CandidCue isn’t allowed to write to its data folder.'
+        'disk is full, or Speaking Glass isn’t allowed to write to its data folder.'
       );
     /*
      * The shell's own wording for this one narrates the exchange ("it asked,
@@ -181,9 +181,9 @@ export function describeBootFailure(status: BootStatusReport): string {
      * consequence; the exchange is in the log.
      */
     case 'DATABASE_UNAVAILABLE':
-      return 'CandidCue couldn’t confirm that its database was ready, so it opened nothing.';
+      return 'Speaking Glass couldn’t confirm that its database was ready, so it opened nothing.';
     default:
-      return status.message ?? 'CandidCue couldn’t open its database.';
+      return status.message ?? 'Speaking Glass couldn’t open its database.';
   }
 }
 

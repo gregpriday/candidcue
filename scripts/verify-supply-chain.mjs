@@ -42,7 +42,7 @@ const OUT = join(ROOT, 'sbom');
  * question, and the whole point is that the question gets asked before the
  * build rather than after the lawyers.
  *
- * Notably absent: GPL and AGPL in every form. CandidCue is distributed as a
+ * Notably absent: GPL and AGPL in every form. Speaking Glass is distributed as a
  * signed binary under the MIT licence, and a GPL or AGPL dependency would put
  * the whole binary under its terms instead.
  */

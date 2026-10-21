@@ -395,7 +395,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
    *
    * It is also gated on BEING IN THE EDITOR. The dot is a property of the
    * document the window is showing, and the editor store outlives the route —
-   * so leaving a failed save for the Library used to show "Library — CandidCue"
+   * so leaving a failed save for the Library used to show "Library — Speaking Glass"
    * with a modified dot beside it, claiming unsaved work in a window that is not
    * displaying a document at all.
    */
@@ -634,7 +634,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
         conflicted
           ? {
               title: 'Leave without resolving the conflict?',
-              body: 'This script also changed on disk. Stay to choose which version to keep — leaving now discards the version in CandidCue.',
+              body: 'This script also changed on disk. Stay to choose which version to keep — leaving now discards the version in Speaking Glass.',
               confirmLabel: 'Discard my version',
               cancelLabel: 'Stay and resolve',
               danger: true,
@@ -704,7 +704,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
           (err: unknown): BootStatusReport => ({
             databaseReady: false,
             code: 'DATABASE_UNAVAILABLE',
-            message: `CandidCue could not determine whether its database opened. ${describeError(err)}`,
+            message: `Speaking Glass could not determine whether its database opened. ${describeError(err)}`,
             dataDirectory: '',
           }),
         );
@@ -785,7 +785,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
           .then((findings) => {
             if (findings === null || disposed) return;
             showToast(
-              'CandidCue repaired some script records while starting. ' +
+              'Speaking Glass repaired some script records while starting. ' +
                 'Settings › Diagnostics has the details.',
               'info',
             );
@@ -797,7 +797,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
         if (settingsWarning !== null) {
           showToast(
-            `CandidCue could not load your settings, so this launch is using defaults. ${settingsWarning}`,
+            `Speaking Glass could not load your settings, so this launch is using defaults. ${settingsWarning}`,
             'danger',
           );
         }
@@ -1259,8 +1259,8 @@ import { rememberReaderFrame } from './lib/reader-frame';
       const rest = payload.rejected.length - 2;
       showToast(
         rest > 0
-          ? `CandidCue imports Markdown and plain text. ${names} and ${rest} more were not imported.`
-          : `CandidCue imports Markdown and plain text. ${names} was not imported.`,
+          ? `Speaking Glass imports Markdown and plain text. ${names} and ${rest} more were not imported.`
+          : `Speaking Glass imports Markdown and plain text. ${names} was not imported.`,
         'info',
       );
     }
@@ -1352,7 +1352,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   }
 
   /**
-   * Window › CandidCue — bring the document window forward.
+   * Window › Speaking Glass — bring the document window forward.
    *
    * Through Rust. This used to call `getCurrentWindow().setFocus()` directly,
    * which the capability does not permit — see `focusAppWindow`.
@@ -1409,10 +1409,10 @@ import { rememberReaderFrame } from './lib/reader-frame';
       {#if bootFailure === null}
         <!-- The same lockup as Welcome's wordmark. The mark is decorative, so
              the name is read once. -->
-        <p class="boot-mark"><BrandMark size={22} /><span>CandidCue</span></p>
+        <p class="boot-mark"><BrandMark size={22} /><span>Speaking Glass</span></p>
       {:else}
         <section class="boot-failure" role="alert">
-          <h1 class="boot-failure-title">CandidCue could not finish starting</h1>
+          <h1 class="boot-failure-title">Speaking Glass could not finish starting</h1>
           <p class="boot-failure-body">{bootFailure}</p>
           <Button variant="default" disabled={bootExporting} onclick={() => void exportBootSupportBundle()}>
             {bootExporting ? 'Exporting…' : 'Export support bundle'}
@@ -1427,7 +1427,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
             to it — repeating the advice underneath, hedged with "if it happens
             again", contradicts the copy it sits below.
           -->
-          <p class="boot-failure-note">{osCopy().quit} CandidCue and open it again.</p>
+          <p class="boot-failure-note">{osCopy().quit} Speaking Glass and open it again.</p>
         </section>
       {/if}
     </div>
@@ -1575,7 +1575,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     <div class="drop-card">
       <p class="drop-title">
         {dragHover.accepted === 0
-          ? 'CandidCue cannot import this'
+          ? 'Speaking Glass cannot import this'
           : dragHover.acceptsImages
             ? 'Drop to add'
             : 'Drop to import'}

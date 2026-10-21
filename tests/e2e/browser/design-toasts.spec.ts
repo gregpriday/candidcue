@@ -7,7 +7,7 @@
  * narrowest control window — in the combinations that carry design weight, and
  * writes a screenshot of each. It never runs in the normal suite:
  *
- *     DESIGN_CAPTURE_DIR=/abs/out CANDIDCUE_E2E_PORT=5328 \
+ *     DESIGN_CAPTURE_DIR=/abs/out SPEAKING_GLASS_E2E_PORT=5328 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-toasts.spec.ts
  *
@@ -101,7 +101,7 @@ const COPY_FAILED: Raise = { message: 'Could not copy to the clipboard', tone: '
 const HISTORY_FAILED: Raise = {
   message:
     'Could not open revision history. The revision store could not be read because another ' +
-    'copy of CandidCue has it open. Quit the other copy and try again.',
+    'copy of Speaking Glass has it open. Quit the other copy and try again.',
   tone: 'danger',
 };
 const DISK_RECEIPT: Raise = {
@@ -123,13 +123,13 @@ const RESTORED: Raise = {
 };
 const TRASHED: Raise = { message: 'Moved to Trash', tone: 'info' };
 const IMPORT_SKIPPED: Raise = {
-  message: 'CandidCue imports Markdown and plain text. notes.docx and 2 more were not imported.',
+  message: 'Speaking Glass imports Markdown and plain text. notes.docx and 2 more were not imported.',
   tone: 'info',
 };
 const IMPORTED: Raise = { message: 'Script imported. It is in your library.', tone: 'success' };
 const MIC_REFUSED: Raise = {
   message:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. ' +
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. ' +
     'Allow it in System Settings, then choose Try again in the take controls.',
   tone: 'danger',
   action: 'Open System Settings',
@@ -145,13 +145,13 @@ const FOLLOW_INTERRUPTED: Raise = {
   tone: 'danger',
 };
 const LOG_FOLDER_FAILED: Raise = {
-  message: 'The log folder could not be opened. The folder does not exist, or CandidCue is not allowed to open it.',
+  message: 'The log folder could not be opened. The folder does not exist, or Speaking Glass is not allowed to open it.',
   tone: 'danger',
 };
 const RESTORE_READY: Raise = {
   message:
     'Ready to restore 42 scripts from the export taken on 2026-10-01. ' +
-    'Quit and reopen CandidCue to apply it — nothing has changed yet.',
+    'Quit and reopen Speaking Glass to apply it — nothing has changed yet.',
   tone: 'success',
 };
 
@@ -373,7 +373,7 @@ test('e08 editor, close-up of a receipt over a failure', async ({ page }) => {
 
 const MORE_FAILURES: Raise[] = [
   { message: 'Could not export that script. The disk is full.', tone: 'danger' },
-  { message: 'Could not add that image. The file is not a picture CandidCue can read.', tone: 'danger' },
+  { message: 'Could not add that image. The file is not a picture Speaking Glass can read.', tone: 'danger' },
   { message: 'That script’s folder could not be opened.', tone: 'danger' },
 ];
 

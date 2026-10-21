@@ -1,4 +1,4 @@
-# CandidCue alignment benchmarks
+# Speaking Glass alignment benchmarks
 
 End-to-end testing of the speech-to-script alignment system **outside the
 application**: real Markdown scripts → controlled performances → (synthetic
@@ -36,11 +36,11 @@ cargo run --release -p cc-bench -- compare ../bench/results/baseline-tier-b.json
 
 Rebuilding `runs-local` from scratch needs the fixture audio and then a
 real-time pass through the recogniser. TTS clips live in the private,
-machine-wide `/private/tmp/candidcue-bench`: individual clips are in
+machine-wide `/private/tmp/speaking-glass-bench`: individual clips are in
 `tts-cache/`, while completed WAVs and their timing metadata are in `tts/`.
 Every checkout and worktree shares both. A cache miss does **not** call fal.ai
 by default; new spending must be approved explicitly with
-`CANDIDCUE_ALLOW_TTS_GENERATION=1`:
+`SPEAKING_GLASS_ALLOW_TTS_GENERATION=1`:
 
 ```bash
 cargo run --release -p cc-bench -- synth-audio --runs ../bench/runs-local
@@ -84,7 +84,7 @@ generated reports or audio. They contain only compact transcript events, gold
 timing, a manifest, and the spoken text. Keeping them makes a benchmark result
 reproducible without a TTS key, microphone, model download, or a fresh
 non-deterministic recognition pass. WAV files remain in the private shared
-`/private/tmp/candidcue-bench/tts` directory, and result JSON belongs under
+`/private/tmp/speaking-glass-bench/tts` directory, and result JSON belongs under
 ignored `bench/results/`.
 
 **The two bulk files per run are in Git LFS** (`.gitattributes`): `events.jsonl`
@@ -240,7 +240,7 @@ evaluator; Tier C has its own, in `crates/cc-bench/src/perceptual.rs`.
 
 ## Three gold timelines, not one
 
-`crates/cc-bench/src/passgold.rs`. CandidCue has at least three separate notions
+`crates/cc-bench/src/passgold.rs`. Speaking Glass has at least three separate notions
 of "where the reader is", and they diverge in normal use:
 
 | reference | what it licenses |
@@ -325,7 +325,7 @@ performance with macOS `say` (free, local, kept), and `capture-local` streams
 it through the shipping recogniser:
 
 ```bash
-export CANDIDCUE_TTS_CACHE_DIR=/private/tmp/candidcue-bench-say/tts-cache
+export SPEAKING_GLASS_TTS_CACHE_DIR=/private/tmp/speaking-glass-bench-say/tts-cache
 cargo run --release -p cc-bench -- synth-say
 cargo run --release -p cc-bench -- capture-local --runs /tmp/runs-say \
     --model ../src-tauri/models/x-asr-480ms --pace 30
@@ -378,7 +378,7 @@ cargo run --release -p cc-bench -- inspect starter skip_forward
 CC_ALIGN_DEBUG=1 cargo run --release -p cc-bench -- inspect starter retake
 
 # Regenerate missing Tier B fixture audio (explicit fal.ai spend approval)
-CANDIDCUE_ALLOW_TTS_GENERATION=1 cargo run --release -p cc-bench -- \
+SPEAKING_GLASS_ALLOW_TTS_GENERATION=1 cargo run --release -p cc-bench -- \
     synth-audio --runs ../bench/runs-mine
 
 # Stream fixtures through the on-device recogniser (~real time)
@@ -700,7 +700,7 @@ families off the run names and refuses a corpus that is missing one.
 #    re-synthesis is not deterministic and clip lengths drift by seconds. The
 #    machine-wide `tts/` directory is what makes that possible — point both
 #    captures at the same `--runs` corpus and neither re-renders.
-CANDIDCUE_ALLOW_TTS_GENERATION=1 \
+SPEAKING_GLASS_ALLOW_TTS_GENERATION=1 \
   cargo run --release -p cc-bench -- synth-audio --runs ../bench/runs-fr
 
 # 2. Stream it through the real recogniser at real-time pace.

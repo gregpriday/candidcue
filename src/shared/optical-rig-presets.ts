@@ -16,7 +16,7 @@
  * left alone, same as discovery leaves them alone.
  *
  * Known hardware distances are pulled from `defaultDistanceMm()` rather than
- * repeated here as literals, so a preset pick and CandidCue's own auto-discovery
+ * repeated here as literals, so a preset pick and Speaking Glass's own auto-discovery
  * can never quietly disagree about the same named hardware. Only the two
  * `generic` presets — desk and studio — need genuinely new numbers, because
  * `generic` has no discoverable default at all.
@@ -90,7 +90,7 @@ const DESK_AND_WEBCAM_DISTANCE_MM = 600;
 
 /**
  * A larger monitor behind a custom beamsplitter hood, set back further than
- * either Elgato unit. `generic` because CandidCue has no way to know the panel
+ * either Elgato unit. `generic` because Speaking Glass has no way to know the panel
  * behind an arbitrary hood, only that this arrangement reflects like one.
  */
 const STUDIO_GLASS_DISTANCE_MM = 3000;

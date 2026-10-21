@@ -78,14 +78,14 @@ let archiveBytes: number;
  * Base environment for every child process.
  *
  * Both override variables are deleted rather than inherited: a developer with
- * `CANDIDCUE_MODEL_CATALOGUE` exported would otherwise make "accepts the
+ * `SPEAKING_GLASS_MODEL_CATALOGUE` exported would otherwise make "accepts the
  * committed catalogue" quietly validate some other file.
  */
 function baseEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  delete env.CANDIDCUE_MODEL_CATALOGUE;
-  delete env.CANDIDCUE_MODEL_MIRROR;
-  delete env.CANDIDCUE_MODELS_DIR;
+  delete env.SPEAKING_GLASS_MODEL_CATALOGUE;
+  delete env.SPEAKING_GLASS_MODEL_MIRROR;
+  delete env.SPEAKING_GLASS_MODELS_DIR;
   return env;
 }
 
@@ -197,8 +197,8 @@ function runFetch(
   args: string[] = [],
 ): { ok: boolean; output: string } {
   const env = baseEnv();
-  env.CANDIDCUE_MODEL_CATALOGUE = writeCatalogue(catalogue);
-  env.CANDIDCUE_MODELS_DIR = modelsDir;
+  env.SPEAKING_GLASS_MODEL_CATALOGUE = writeCatalogue(catalogue);
+  env.SPEAKING_GLASS_MODELS_DIR = modelsDir;
   env.PATH = `${shimBin}${delimiter}${env.PATH ?? ''}`;
   env.SHIM_ARCHIVE = archivePath;
 
@@ -445,7 +445,7 @@ describe.skipIf(process.platform === 'win32')('fetch-stt-model.sh', () => {
     );
 
     const env = baseEnv();
-    env.CANDIDCUE_MODELS_DIR = dir;
+    env.SPEAKING_GLASS_MODELS_DIR = dir;
     env.PATH = `${shimBin}${delimiter}${env.PATH ?? ''}`;
     const patched = readFileSync(SCRIPT, 'utf8').replace(
       'HELPER="${REPO_ROOT}/scripts/model-catalogue.mjs"',
@@ -463,7 +463,7 @@ describe.skipIf(process.platform === 'win32')('fetch-stt-model.sh', () => {
 describe('model-catalogue.mjs', () => {
   const run = (args: string[], catalogue?: unknown) => {
     const env = baseEnv();
-    if (catalogue !== undefined) env.CANDIDCUE_MODEL_CATALOGUE = writeCatalogue(catalogue);
+    if (catalogue !== undefined) env.SPEAKING_GLASS_MODEL_CATALOGUE = writeCatalogue(catalogue);
     const result = spawnSync('node', [HELPER, ...args], { encoding: 'utf8', env });
     if (result.error) return { ok: false, output: String(result.error) };
     return { ok: result.status === 0, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
@@ -558,8 +558,8 @@ describe('model-catalogue.mjs', () => {
     ['not a URL at all', 'mirror.invalid'],
   ])('refuses a mirror override that is %s', (_label, mirror) => {
     const env = baseEnv();
-    env.CANDIDCUE_MODEL_CATALOGUE = writeCatalogue(catalogueFor());
-    env.CANDIDCUE_MODEL_MIRROR = mirror;
+    env.SPEAKING_GLASS_MODEL_CATALOGUE = writeCatalogue(catalogueFor());
+    env.SPEAKING_GLASS_MODEL_MIRROR = mirror;
     const result = spawnSync('node', [HELPER, 'fields'], { encoding: 'utf8', env });
     expect(result.status).not.toBe(0);
   });
@@ -575,12 +575,12 @@ describe('model-catalogue.mjs', () => {
   it('states the modification when the catalogue says the files were changed', () => {
     const modified = catalogueFor();
     entry(modified).attribution.modified = true;
-    entry(modified).attribution.licenseNote = 'Quantised to int8 by CandidCue.';
+    entry(modified).attribution.licenseNote = 'Quantised to int8 by Speaking Glass.';
 
     const { ok, output } = run(['attribution'], modified);
     expect(ok, output).toBe(true);
     expect(output).toContain('with modifications');
-    expect(output).toContain('Quantised to int8 by CandidCue.');
+    expect(output).toContain('Quantised to int8 by Speaking Glass.');
   });
 });
 

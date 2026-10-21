@@ -1,4 +1,4 @@
-//! In-app updates: find, download, verify and install a newer CandidCue
+//! In-app updates: find, download, verify and install a newer Speaking Glass
 //! (docs/updates.md, #191).
 //!
 //! ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@
 //! ---------------------------------------------------------------------------
 //! One HTTPS `GET` of [`endpoint_for_version`], carrying what the request itself
 //! carries and nothing else: the URL (channel, OS and architecture), a
-//! `User-Agent: CandidCue/<version>`, an `Accept` header, and the machine's IP
+//! `User-Agent: SpeakingGlass/<version>`, an `Accept` header, and the machine's IP
 //! address. No identifier, no cookie, no body. `docs/network-inventory.md` is
 //! the public statement of exactly this, and the test that guards it reads this
 //! file.
@@ -196,7 +196,7 @@ pub fn install_support(
     }
 }
 
-/// `…/CandidCue.app/Contents/MacOS/candidcue`, and not translocated.
+/// `…/Speaking Glass.app/Contents/MacOS/speaking-glass`, and not translocated.
 fn is_inside_app_bundle(executable: &Path) -> bool {
     let text = executable.to_string_lossy();
     if text.contains("/AppTranslocation/") {
@@ -341,7 +341,7 @@ pub fn restart_refusal() -> Option<AppError> {
         AppError::structured(
             "UPDATE_RESTART_PENDING",
             ErrorCategory::Validation,
-            "CandidCue is restarting to finish installing an update. Start the take after it reopens.",
+            "Speaking Glass is restarting to finish installing an update. Start the take after it reopens.",
             true,
         )
         .with_log("take refused: an installed update is about to restart the app"),
@@ -478,7 +478,7 @@ pub enum UpdateProgress {
     },
     /// Downloaded and verified; replacing the app now.
     Installing,
-    /// Installed; CandidCue is about to close and reopen.
+    /// Installed; Speaking Glass is about to close and reopen.
     Restarting,
 }
 
@@ -511,7 +511,7 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<UpdateCheckResult, 
     let updater = app
         .updater_builder()
         .endpoints(vec![url])
-        .and_then(|builder| builder.header("User-Agent", format!("CandidCue/{current_version}")))
+        .and_then(|builder| builder.header("User-Agent", format!("SpeakingGlass/{current_version}")))
         .map(|builder| {
             builder
                 .timeout(CHECK_TIMEOUT)
@@ -573,13 +573,13 @@ fn check_error(err: tauri_plugin_updater::Error) -> AppError {
         | E::UrlParse(_) => AppError::structured(
             "UPDATE_RESPONSE_INVALID",
             ErrorCategory::Network,
-            "The update server sent an answer CandidCue could not read. Try again later.",
+            "The update server sent an answer Speaking Glass could not read. Try again later.",
             true,
         ),
         _ => AppError::structured(
             "UPDATE_CHECK_FAILED",
             ErrorCategory::Network,
-            "CandidCue could not reach the update server. Check your internet connection, then try again.",
+            "Speaking Glass could not reach the update server. Check your internet connection, then try again.",
             true,
         )
         .with_action(RecoveryAction::Retry),
@@ -637,7 +637,7 @@ pub async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
         return Err(AppError::structured(
             "UPDATE_SELF_INSTALL_UNSUPPORTED",
             ErrorCategory::Validation,
-            "This copy of CandidCue cannot update itself. Download the new version from candidcue.com.",
+            "This copy of Speaking Glass cannot update itself. Download the new version from speakingglass.com.",
             true,
         ));
     }
@@ -709,7 +709,7 @@ pub async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
         .unwrap_or(false);
     // The editor has flushed, so the run loop lets this exit through at once.
     // A quit that was already under way owns the exit instead, and the new
-    // version opens the next time CandidCue does.
+    // version opens the next time Speaking Glass does.
     if owner {
         app.request_restart();
     }
@@ -745,7 +745,7 @@ fn install_error(err: tauri_plugin_updater::Error) -> AppError {
     AppError::structured(
         "UPDATE_INSTALL_FAILED",
         ErrorCategory::Storage,
-        "The update was downloaded but could not be installed. Try again, or download the new version from candidcue.com.",
+        "The update was downloaded but could not be installed. Try again, or download the new version from speakingglass.com.",
         true,
     )
     .with_log(format!("update install failed: {err}"))
@@ -886,7 +886,7 @@ mod tests {
 
     #[test]
     fn a_mac_app_bundle_installs_itself() {
-        let exe = PathBuf::from("/Applications/CandidCue.app/Contents/MacOS/candidcue");
+        let exe = PathBuf::from("/Applications/Speaking Glass.app/Contents/MacOS/speaking-glass");
         assert_eq!(
             install_support("macos", Packaging::MacApp, &exe, false),
             InstallSupport::SelfInstall
@@ -897,7 +897,7 @@ mod tests {
     fn a_mac_development_binary_does_not() {
         // The plugin would replace the parent DIRECTORY of this binary — the
         // whole cargo target directory — with the downloaded app.
-        let exe = PathBuf::from("/Users/me/candidcue/src-tauri/target/debug/candidcue");
+        let exe = PathBuf::from("/Users/me/speaking-glass/src-tauri/target/debug/speaking-glass");
         assert_eq!(
             install_support("macos", Packaging::MacApp, &exe, false),
             InstallSupport::DownloadPage
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn a_translocated_mac_app_does_not() {
         let exe = PathBuf::from(
-            "/private/var/folders/x/AppTranslocation/ABC/d/CandidCue.app/Contents/MacOS/candidcue",
+            "/private/var/folders/x/AppTranslocation/ABC/d/Speaking Glass.app/Contents/MacOS/speaking-glass",
         );
         assert_eq!(
             install_support("macos", Packaging::MacApp, &exe, false),
@@ -917,7 +917,7 @@ mod tests {
 
     #[test]
     fn windows_installs_only_what_an_installer_put_there() {
-        let exe = PathBuf::from(r"C:\Program Files\CandidCue\candidcue.exe");
+        let exe = PathBuf::from(r"C:\Program Files\Speaking Glass\speaking-glass.exe");
         assert_eq!(
             install_support("windows", Packaging::Nsis, &exe, false),
             InstallSupport::SelfInstall
@@ -934,7 +934,7 @@ mod tests {
 
     #[test]
     fn linux_installs_only_a_running_appimage() {
-        let exe = PathBuf::from("/tmp/.mount_CandidXyz/usr/bin/candidcue");
+        let exe = PathBuf::from("/tmp/.mount_CandidXyz/usr/bin/speaking-glass");
         assert_eq!(
             install_support("linux", Packaging::AppImage, &exe, true),
             InstallSupport::SelfInstall
@@ -951,7 +951,7 @@ mod tests {
     /// download page instead of downloading something it cannot install.
     #[test]
     fn a_linux_package_install_is_sent_to_the_download_page() {
-        let exe = PathBuf::from("/usr/bin/candidcue");
+        let exe = PathBuf::from("/usr/bin/speaking-glass");
         for packaging in [Packaging::Deb, Packaging::Rpm, Packaging::Unknown] {
             assert_eq!(
                 install_support("linux", packaging, &exe, false),

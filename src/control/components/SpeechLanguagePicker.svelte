@@ -252,7 +252,7 @@
   /** Where a usable copy came from, as the end of "Currently using English, …". */
   function sourcePhrase(status: SpeechModelStatus): string {
     if (status.source === 'bundled') return 'installed with the app';
-    if (status.source === 'override') return 'loaded from CANDIDCUE_MODELS_DIR';
+    if (status.source === 'override') return 'loaded from SPEAKING_GLASS_MODELS_DIR';
     return 'downloaded to this machine';
   }
 
@@ -475,7 +475,7 @@
   /**
    * Run one install command against one model.
    *
-   * `failed` names the operation for when it is refused. A bare "CandidCue
+   * `failed` names the operation for when it is refused. A bare "Speaking Glass
    * cannot reach the network" under a Download button reads as a fact about
    * the language; "The download could not start" first says it was the press
    * that failed, and that the language is exactly where it was.
@@ -807,7 +807,7 @@
       -->
       {#if compact}
         {@render trouble(
-          'This version of CandidCue has no speech languages available. Voice following cannot run; everything else works.',
+          'This version of Speaking Glass has no speech languages available. Voice following cannot run; everything else works.',
           true,
         )}
       {:else}
@@ -816,7 +816,7 @@
             <span class="summary-icon" aria-hidden="true"><Icon name="info" size={16} /></span>
             <p class="summary-title">Voice following is unavailable</p>
             <p class="summary-body" role="alert">
-              This version of CandidCue has no speech languages available. Voice following cannot
+              This version of Speaking Glass has no speech languages available. Voice following cannot
               run; everything else works.
             </p>
           </div>
@@ -961,7 +961,7 @@
                   `canRemove` decides, not an inline condition: only a model
                   this machine DOWNLOADED is ours to delete. `bundled` lives
                   inside the app bundle, and `override` is a developer's
-                  CANDIDCUE_MODELS_DIR, where Remove would delete an invisible
+                  SPEAKING_GLASS_MODELS_DIR, where Remove would delete an invisible
                   app-data copy and leave the visible model exactly where it
                   was — a button that appears to do nothing.
                 -->

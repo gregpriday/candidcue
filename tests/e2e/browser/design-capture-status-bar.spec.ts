@@ -5,7 +5,7 @@
  * DESIGN_CAPTURE_DIR names a directory to write into, so the normal suite never
  * runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-capture-status-bar.spec.ts
  *
@@ -190,7 +190,7 @@ async function boot(page: Page, opts: Boot = {}): Promise<void> {
   });
   if (opts.workspace) {
     await page.addInitScript((workspace) => {
-      localStorage.setItem('candidcue.workspace.v1', JSON.stringify(workspace));
+      localStorage.setItem('speaking-glass.workspace.v1', JSON.stringify(workspace));
     }, opts.workspace);
   }
   await installCompilerHooks(page, opts);

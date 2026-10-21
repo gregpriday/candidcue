@@ -3,16 +3,16 @@
 
 # Third-party notices
 
-CandidCue is built on work other people published. This file names every
+Speaking Glass is built on work other people published. This file names every
 third-party component in a release, with its version and its licence, so the
 question "what is in this application, and under what terms?" can be answered
 from the application itself rather than from a repository.
 
 It ships inside the app. On macOS it is at
-`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux
-packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.
+`Speaking Glass.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux
+packages, at `/usr/lib/Speaking Glass/THIRD_PARTY_NOTICES.md`.
 
-CandidCue itself is free software under the MIT licence. Its text is in
+Speaking Glass itself is free software under the MIT licence. Its text is in
 `Contents/Resources/LICENSE.txt`, beside this file.
 
 Two third-party licences travel in full with the work they cover:
@@ -40,7 +40,7 @@ One file carries both copyright notices and the licence text:
 
 ## Shared libraries in the Linux AppImage
 
-The AppImage carries the shared libraries CandidCue needs from Ubuntu 22.04
+The AppImage carries the shared libraries Speaking Glass needs from Ubuntu 22.04
 ("jammy") so that it runs on distributions that lack them: chiefly WebKitGTK,
 GTK 3, GLib, GStreamer, cairo, pango, HarfBuzz, libsoup, GnuTLS and Nettle,
 and their dependencies. The `.deb` carries none of them; the package manager
@@ -51,7 +51,7 @@ with some offered under a choice that includes the GPL. None is under the GPL
 alone. The exact list is the AppImage's `usr/lib` directory, and the
 corresponding source for each is published in the Ubuntu 22.04 archive
 (<https://launchpad.net/ubuntu/jammy>), under the package that ships it. On
-request, the source for any of them is also available from the CandidCue
+request, the source for any of them is also available from the Speaking Glass
 project at <https://github.com/gregpriday/candidcue/issues>, for at least three
 years after the release that carried it.
 
@@ -106,9 +106,9 @@ On particular components:
 
 - **OpenFst** — Weighted finite-state transducers for the decoder. sherpa-onnx builds them from a fork and gives the libraries its own name; the code is the OpenFst authors' (Google LLC).
 
-- **PortAudio** — In the sherpa-onnx archive, but not linked: sherpa-onnx-sys does not put it on CandidCue's link line, and CandidCue captures audio in the renderer. It is listed because it is in what the build downloads. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.
+- **PortAudio** — In the sherpa-onnx archive, but not linked: sherpa-onnx-sys does not put it on Speaking Glass's link line, and Speaking Glass captures audio in the renderer. It is listed because it is in what the build downloads. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.
 
-- **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. No eSpeak NG code or data is in a CandidCue release binary, and each platform gets there differently, which is why each is measured. On macOS the stock archive is linked: the linker loads most of eSpeak NG's objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them; `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships. Windows and Linux linkers keep it — MSVC keeps the static initialisers of the text-to-speech objects it loads, those reach eSpeak NG, and a stripped GNU ld release binary carries its strings just the same — so those builds link sherpa-onnx's own text-to-speech-free build of the same release (-DSHERPA_ONNX_ENABLE_TTS=OFF) instead, whose libraries do not contain eSpeak NG at all. The crate still names the library, so the build supplies an empty one under its name (`sherpa-no-tts.mjs`), and `verify-no-gpl-in-binary.mjs` checks the finished executable for eSpeak NG's strings. A Windows or Linux build made without those libraries does contain eSpeak NG, and is not one CandidCue distributes.
+- **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. No eSpeak NG code or data is in a Speaking Glass release binary, and each platform gets there differently, which is why each is measured. On macOS the stock archive is linked: the linker loads most of eSpeak NG's objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them; `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships. Windows and Linux linkers keep it — MSVC keeps the static initialisers of the text-to-speech objects it loads, those reach eSpeak NG, and a stripped GNU ld release binary carries its strings just the same — so those builds link sherpa-onnx's own text-to-speech-free build of the same release (-DSHERPA_ONNX_ENABLE_TTS=OFF) instead, whose libraries do not contain eSpeak NG at all. The crate still names the library, so the build supplies an empty one under its name (`sherpa-no-tts.mjs`), and `verify-no-gpl-in-binary.mjs` checks the finished executable for eSpeak NG's strings. A Windows or Linux build made without those libraries does contain eSpeak NG, and is not one Speaking Glass distributes.
 
 - **kaldi-decoder** — Decoding graphs and search.
 
@@ -116,9 +116,9 @@ On particular components:
 
 - **kaldifst** — Kaldi's finite-state-transducer utilities on top of OpenFst. kaldi-decoder fetches it; sherpa-onnx renames the library.
 
-- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's macOS binary, two of piper's own symbols survive on arm64 (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, 416 bytes), three on x86_64, and NO eSpeak code does on either. So piper's own MIT terms are the operative ones there. Windows and Linux binaries contain none of piper-phonemize: they link sherpa-onnx's text-to-speech-free build, which does not include it (see eSpeak NG). `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
+- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In Speaking Glass's macOS binary, two of piper's own symbols survive on arm64 (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, 416 bytes), three on x86_64, and NO eSpeak code does on either. So piper's own MIT terms are the operative ones there. Windows and Linux binaries contain none of piper-phonemize: they link sherpa-onnx's text-to-speech-free build, which does not include it (see eSpeak NG). `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
 
-- **sherpa-onnx** — The inference runtime CandidCue calls. Its own licence text also travels with each installed model's ATTRIBUTION.md.
+- **sherpa-onnx** — The inference runtime Speaking Glass calls. Its own licence text also travels with each installed model's ATTRIBUTION.md.
 
 - **simple-sentencepiece** — Tokenisation. The library is called ssentencepiece; the project is simple-sentencepiece.
 

@@ -218,7 +218,7 @@ jobs:
         # the licensing story and the privacy copy of the artifact at once.
         run: >
           node scripts/verify-no-model-weights.mjs
-          src-tauri/target/release/bundle/macos/CandidCue.app
+          "src-tauri/target/release/bundle/macos/Speaking Glass.app"
 
   # Windows, end to end: the same suites, on the platform where the Windows-only
   # code paths (`cfg(windows)` FFI, the WebView2 microphone grant, the window
@@ -286,7 +286,7 @@ jobs:
         # stripped executable linked from the stock archive carries eSpeak NG's
         # strings and ucd-tools' Unicode tables, and the one the installer packs
         # must carry none of them (the script's header has the evidence).
-        run: node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/candidcue.exe
+        run: node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/speaking-glass.exe
 
   # Linux, end to end, on the same terms as Windows: the suites and Clippy where
   # the Linux arms (`cfg(target_os = "linux")` — the WebKitGTK microphone grant,
@@ -360,4 +360,4 @@ jobs:
         run: pnpm tauri build --bundles deb,appimage
 
       - name: The executable must carry no GPL code
-        run: node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/candidcue
+        run: node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/speaking-glass

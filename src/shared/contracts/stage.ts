@@ -363,7 +363,7 @@ export interface StageCalibrationDirective {
    *
    * The stage draws it; the operator measures it against the glass with a
    * physical ruler and types back what they got. That round trip is the only
-   * way CandidCue can learn millimetres per pixel — the window layer reports
+   * way Speaking Glass can learn millimetres per pixel — the window layer reports
    * `PhysicalSize` in device PIXELS, not physical units — and it is also the
    * only method that measures the finished optical path rather than the panel,
    * so it silently absorbs a beamsplitter that magnifies.
@@ -422,7 +422,7 @@ export interface StageHeartbeatPayload {
  * microphone was never captured" and "the transcript is fine but the aligner
  * is not" are three completely different faults that look identical from the
  * stage — a script that has stopped moving. One of them was another
- * application holding the microphone, which CandidCue cannot prevent and had
+ * application holding the microphone, which Speaking Glass cannot prevent and had
  * no way to report.
  *
  * Deliberately the RAW provider text rather than anything the aligner has

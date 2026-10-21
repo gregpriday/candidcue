@@ -41,7 +41,7 @@
      * Whether this take actually has a microphone and a transcription feed.
      *
      * False in a manual or fixed-speed take, where nothing is listening. The
-     * shared copy is written for voice — "still listening for CandidCue,
+     * shared copy is written for voice — "still listening for Speaking Glass,
      * resume", "Start speaking and the stage picks up your place" — and each
      * of those sentences is a lie without a microphone. The operator reads this panel to decide whether a
      * problem is their microphone or their script, so it says what is true.
@@ -188,7 +188,7 @@
      * panel" before Space.
      *
      * A soft pause keeps the microphone open, and says so, because that is the
-     * difference between it and a hard one. It used to add "Say “CandidCue,
+     * difference between it and a hard one. It used to add "Say “Speaking Glass,
      * resume”" — a voice command nothing in the app listens for. The one way
      * back that works is the key, so that is the only one offered.
      */
@@ -412,7 +412,7 @@
     --state-light: var(--warning);
   }
   /*
-   * A fault, and only a fault, is a block: the line, what CandidCue did, and
+   * A fault, and only a fault, is a block: the line, what Speaking Glass did, and
    * the remedy read as one thing. Leading rule is an inset ::before bar —
    * never a one-sided border on a rounded box.
    */

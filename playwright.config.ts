@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const e2ePort = process.env['CANDIDCUE_E2E_PORT'] ?? '1420';
+const e2ePort = process.env['SPEAKING_GLASS_E2E_PORT'] ?? '1420';
 
 /**
  * Browser-driven end-to-end layer (spec §55.8 alternative).
@@ -57,9 +57,9 @@ export default defineConfig({
    * a `vite.config.ts` edit. (A `server.watch.ignored` entry there would be the
    * tidier home for the rule if that file is ever open anyway.)
    *
-   * Screenshots therefore land in `node_modules/.cache/candidcue-e2e/<test>/`.
+   * Screenshots therefore land in `node_modules/.cache/speaking-glass-e2e/<test>/`.
    */
-  outputDir: './node_modules/.cache/candidcue-e2e',
+  outputDir: './node_modules/.cache/speaking-glass-e2e',
   timeout: 30_000,
   expect: { timeout: 7_000 },
   use: {
@@ -118,9 +118,9 @@ export default defineConfig({
      * on real hardware, which is the only place the sample-rate mismatch this
      * spec covers actually silences a tap.
      *
-     *     CANDIDCUE_E2E_WEBKIT=1 pnpm test:e2e
+     *     SPEAKING_GLASS_E2E_WEBKIT=1 pnpm test:e2e
      */
-    ...(process.env['CANDIDCUE_E2E_WEBKIT'] === '1'
+    ...(process.env['SPEAKING_GLASS_E2E_WEBKIT'] === '1'
       ? [
           {
             name: 'webkit',
@@ -137,7 +137,7 @@ export default defineConfig({
      *
      * `pnpm dev:vite --port N`, NOT `pnpm dev:vite -- --port N`: the separator
      * reaches Vite as a literal `--` argument and the port after it is dropped,
-     * so `CANDIDCUE_E2E_PORT` was silently ignored and every run tried to bind
+     * so `SPEAKING_GLASS_E2E_PORT` was silently ignored and every run tried to bind
      * 1420. With a dev server already on that port — which is the normal state
      * when the suite runs from a worktree — the server failed to start and the
      * whole suite failed on connection-refused instead.

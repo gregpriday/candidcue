@@ -1,7 +1,7 @@
 /**
  * FollowStatePanel — never claim a microphone you do not have.
  *
- * The shared follow copy is written for a voice take ("CandidCue is still
+ * The shared follow copy is written for a voice take ("Speaking Glass is still
  * listening", "Transcription is still connected", "Start speaking and
  * the stage picks up your place"). A manual or fixed-speed take has no realtime
  * connection and no open microphone, and the panel was showing all three of
@@ -96,7 +96,7 @@ describe('FollowStatePanel honesty', () => {
     const paused = textOf(false, 'paused', { heldByUser: true });
     /*
      * The no-microphone branch wins over the hold, and that is the point: on a
-     * take that never opened an input, "Text held — CandidCue is still
+     * take that never opened an input, "Text held — Speaking Glass is still
      * listening" would be false in its second half. So a manual take says
      * `paused` in its own words even when the operator did hold the text.
      */
@@ -104,7 +104,7 @@ describe('FollowStatePanel honesty', () => {
     // A manual take has no microphone, so it must not offer to be spoken to
     // nor claim a feed it does not have.
     expect(paused).toMatch(/transport moves the script/i);
-    expect(paused).not.toContain('CandidCue');
+    expect(paused).not.toContain('Speaking Glass');
     expect(paused).not.toContain('Transcription');
 
     const searching = textOf(false, 'searching');
@@ -191,20 +191,20 @@ describe('FollowStatePanel honesty', () => {
   });
 
   /*
-   * A soft pause offered "Say “CandidCue, resume”", and nothing in the app
+   * A soft pause offered "Say “Speaking Glass, resume”", and nothing in the app
    * listens for a wake word or a voice command. It names the key that works,
    * and keeps telling a soft pause from a hard one by the microphone.
    */
   it('offers only the way back from a pause that actually works', () => {
     const soft = textOf(true, 'following', { takePaused: 'listening' });
     expect(soft).toContain('Take paused');
-    expect(soft).not.toMatch(/CandidCue, resume|say “/i);
+    expect(soft).not.toMatch(/Speaking Glass, resume|say “/i);
     expect(soft).toMatch(/close this panel and press Space/i);
     expect(soft).toMatch(/microphone stays on/i);
 
     const hard = textOf(true, 'following', { takePaused: 'hard' });
     expect(hard).toMatch(/microphone is off/i);
-    expect(hard).not.toMatch(/CandidCue, resume/i);
+    expect(hard).not.toMatch(/Speaking Glass, resume/i);
   });
 
   it('separates an operator hold from an automatic one', () => {
@@ -213,7 +213,7 @@ describe('FollowStatePanel honesty', () => {
     expect(chosen).toMatch(/still listening/i);
 
     // The store's broad pause flag is raised by device loss too. Reading it as
-    // a decision claimed CandidCue was listening to a microphone that had gone.
+    // a decision claimed Speaking Glass was listening to a microphone that had gone.
     const automatic = textOf(true, 'holding', {
       heldByUser: false,
       micState: 'disconnected',

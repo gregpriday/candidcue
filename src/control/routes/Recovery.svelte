@@ -99,15 +99,15 @@
   const revealLabel = os.revealInFileManager;
   /*
    * Once a repair has run, the headline is what to do next. Left as the
-   * failure ("CandidCue's database is damaged") it outranked "Ready to
+   * failure ("Speaking Glass's database is damaged") it outranked "Ready to
    * rebuild" beneath it, and someone scanning for "am I done?" read the
    * opposite answer first.
    */
   const title = $derived(
     done
-      ? 'Reopen CandidCue to finish'
+      ? 'Reopen Speaking Glass to finish'
       : halted
-        ? 'Reopen CandidCue before trying again'
+        ? 'Reopen Speaking Glass before trying again'
         : recovery.bootFailureTitle(status),
   );
   const cause = $derived(recovery.describeBootFailure(status));
@@ -149,7 +149,7 @@
       backups = [];
       backupsError = describeError(err);
       backupsState = 'failed';
-      void say(`CandidCue couldn’t check for backups. ${backupsError}`, true);
+      void say(`Speaking Glass couldn’t check for backups. ${backupsError}`, true);
     }
   }
 
@@ -238,9 +238,9 @@
       body:
         'Script names, the Trash and reading settings go back to how they were then, and ' +
         'session history after that date isn’t in the backup. Every script keeps the text it ' +
-        'has now. CandidCue moves its current database into the ' +
+        'has now. Speaking Glass moves its current database into the ' +
         '“quarantine” folder in its data folder rather than deleting it, and the restore ' +
-        `finishes when you ${os.quitLower} and reopen CandidCue.`,
+        `finishes when you ${os.quitLower} and reopen Speaking Glass.`,
       confirmLabel: 'Restore backup',
       danger: true,
     });
@@ -254,7 +254,7 @@
     const confirmed = await requestConfirm({
       title: 'Rebuild the database from your script files?',
       body:
-        'CandidCue moves its current database into the “quarantine” folder in its data folder ' +
+        'Speaking Glass moves its current database into the “quarantine” folder in its data folder ' +
         `rather than deleting it, and builds a new one from your script files when you ${os.quitLower} ` +
         'and reopen it. Session history doesn’t come back, and names, the Trash and reading ' +
         'settings come back only where the old database can still be read.',
@@ -278,12 +278,12 @@
       done = { kind, previousStateAt: outcome.previousStateAt, when };
       void say(
         kind === 'restore'
-          ? `Backup restored. ${os.quit} and reopen CandidCue to finish.`
-          : `Ready to rebuild. ${os.quit} and reopen CandidCue to finish.`,
+          ? `Backup restored. ${os.quit} and reopen Speaking Glass to finish.`
+          : `Ready to rebuild. ${os.quit} and reopen Speaking Glass to finish.`,
       );
     } catch (err) {
       halted = { kind, detail: failureText(err) };
-      void say(`${haltedTitle(kind)}. ${os.quit} and reopen CandidCue before trying again.`, true);
+      void say(`${haltedTitle(kind)}. ${os.quit} and reopen Speaking Glass before trying again.`, true);
     } finally {
       busy = null;
     }
@@ -409,7 +409,7 @@
               {done.kind === 'restore' ? 'Backup restored' : 'Ready to rebuild'}
             </h2>
             <p class="outcome-text">
-              {os.quit} and reopen CandidCue to finish.
+              {os.quit} and reopen Speaking Glass to finish.
               {#if done.kind === 'restore'}
                 It opens with the backup{#if done.when !== null}&#32;from <span class="moment"
                     >{done.when}</span
@@ -457,7 +457,7 @@
               {/if}
             </p>
             <p class="outcome-aside">
-              Nothing is ever deleted: anything CandidCue set aside is in the “quarantine” folder
+              Nothing is ever deleted: anything Speaking Glass set aside is in the “quarantine” folder
               inside its data folder.
             </p>
             <p class="outcome-detail">Details: {halted.detail}</p>
@@ -479,7 +479,7 @@
         <div class="callout-body">
           <p class="safety-title">Your scripts are safe</p>
           <p class="safety-text">
-            Each one is a Markdown file in CandidCue’s data folder, kept apart from the database,
+            Each one is a Markdown file in Speaking Glass’s data folder, kept apart from the database,
             and nothing on this screen changes them.
           </p>
           {#if status.dataDirectory}
@@ -550,7 +550,7 @@
     <section class="help" aria-labelledby="help-title">
       <h2 id="help-title" class="help-title">Get help</h2>
       <p class="help-text">
-        If none of this works, report the problem and attach a support bundle: CandidCue’s logs
+        If none of this works, report the problem and attach a support bundle: Speaking Glass’s logs
         and diagnostics, designed to leave out your scripts. Read it before you send it.
       </p>
       <div class="help-actions">
@@ -591,7 +591,7 @@
 
 {#snippet quitAction()}
   <div class="actions">
-    <Button variant="primary" disabled={busy !== null} onclick={() => void quit()}>{os.quit} CandidCue</Button>
+    <Button variant="primary" disabled={busy !== null} onclick={() => void quit()}>{os.quit} Speaking Glass</Button>
   </div>
   {#if quitError}
     <div class="result bad">
@@ -611,10 +611,10 @@
     </div>
     <p class="option-text">
       {#if status.code === 'DATABASE_BACKUP_REQUIRED'}
-        Free up some space on this computer’s disk, or check that CandidCue is allowed to write
-        to its data folder. Then {os.quitLower} and reopen CandidCue, and it tries the update again.
+        Free up some space on this computer’s disk, or check that Speaking Glass is allowed to write
+        to its data folder. Then {os.quitLower} and reopen Speaking Glass, and it tries the update again.
       {:else}
-        {os.quit} and reopen CandidCue — a problem like this can be a one-off. If this screen comes
+        {os.quit} and reopen Speaking Glass — a problem like this can be a one-off. If this screen comes
         back, export a support bundle below and report the problem.
       {/if}
     </p>
@@ -635,12 +635,12 @@
     {#if backupsState === 'ready' && backups.length === 0}
       <!-- Says when backups are made, without guessing why this person has none. -->
       <p class="option-text">
-        There are no backups to restore. CandidCue saves one just before each update changes its
+        There are no backups to restore. Speaking Glass saves one just before each update changes its
         database.
       </p>
     {:else}
       <p class="option-text">
-        CandidCue saves a backup of its database just before each update changes it. Restoring
+        Speaking Glass saves a backup of its database just before each update changes it. Restoring
         one puts the database back the way it was then.
       </p>
       <dl class="outcomes">
@@ -664,7 +664,7 @@
       <div class="backups">
         <div class="list-note failed">
           {@render mark(false)}
-          <p>CandidCue couldn’t check for backups. {backupsError}</p>
+          <p>Speaking Glass couldn’t check for backups. {backupsError}</p>
           <Button size="sm" disabled={busy !== null} onclick={() => void loadBackups(true)}>
             Try again
           </Button>
@@ -695,7 +695,7 @@
               <span class="backup-meta">
                 {#if backup.verified}
                   Ready to restore · {backup.appVersion
-                    ? `saved just before the update to CandidCue ${backup.appVersion}`
+                    ? `saved just before the update to Speaking Glass ${backup.appVersion}`
                     : 'saved just before an update'}
                 {:else}
                   Damaged, so it can’t be restored
@@ -727,7 +727,7 @@
       {#if recommended}<StatusPill tone="accent" label="Recommended" size="sm" dot={false} />{/if}
     </div>
     <p class="option-text">
-      Your script files are the authority for what each script says, so CandidCue can build a new
+      Your script files are the authority for what each script says, so Speaking Glass can build a new
       database from them.
     </p>
     <dl class="outcomes">

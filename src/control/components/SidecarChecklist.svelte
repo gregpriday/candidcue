@@ -4,7 +4,7 @@
   ---------------------------------------------------------------------------
   A LIST OF REMINDERS, NOT A LIST OF RESULTS
   ---------------------------------------------------------------------------
-  Everything on this panel except the first line is invisible to CandidCue.
+  Everything on this panel except the first line is invisible to Speaking Glass.
   Whether the iPad is extending or mirroring, whether the link is wireless,
   whether the sidebar is showing, whether a Focus is on — macOS hands us a
   name, a pixel size and a scale factor, and nothing else.
@@ -139,7 +139,7 @@
       </span>
     </div>
     <p class="lead">
-      Sidecar makes a fine prompter and an awkward one. CandidCue cannot see any of the settings
+      Sidecar makes a fine prompter and an awkward one. Speaking Glass cannot see any of the settings
       below, so these are reminders you tick — not checks it has run.
     </p>
 
@@ -161,7 +161,7 @@
                 <span class="seen-word">Already true</span>
               </p>
               <details class="why-toggle">
-                <summary data-focus="control">How CandidCue knows</summary>
+                <summary data-focus="control">How Speaking Glass knows</summary>
                 <p class="why">{check.why}</p>
                 {#if check.symptom}
                   <p class="symptom">{check.symptom}</p>
@@ -195,7 +195,7 @@
                   <details class="why-toggle">
                     <summary data-focus="control">Only a starting point</summary>
                     <p class="hint-note">
-                      A starting point, not a measurement: nothing tells CandidCue whether the
+                      A starting point, not a measurement: nothing tells Speaking Glass whether the
                       strips are showing or which edges they are on. Adjust the edges on the
                       safe-area step while you watch the frame on the glass.
                     </p>

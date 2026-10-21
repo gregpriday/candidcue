@@ -20,7 +20,7 @@
   unsigned local build simply never consults this file.
 
   Deliberately NOT included: `com.apple.security.cs.allow-jit` and
-  `allow-unsigned-executable-memory`. Electron needs those for V8; CandidCue
+  `allow-unsigned-executable-memory`. Electron needs those for V8; Speaking Glass
   renders in WKWebView, whose JIT lives in a separate system process, so
   granting them here would only weaken the runtime for nothing.
 -->

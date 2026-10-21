@@ -110,9 +110,9 @@ describe('toast store', () => {
   it('keeps instructions and an explanatory info notice, but not a short receipt', () => {
     const instructions =
       'Ready to restore 42 scripts from the export taken on 2026-10-01. ' +
-      'Quit and reopen CandidCue to apply it — nothing has changed yet.';
+      'Quit and reopen Speaking Glass to apply it — nothing has changed yet.';
     expect(toastLifetimeMs('success', instructions, false)).toBe(0);
-    const explains = 'CandidCue imports Markdown and plain text. notes.docx was not imported.';
+    const explains = 'Speaking Glass imports Markdown and plain text. notes.docx was not imported.';
     expect(toastLifetimeMs('info', explains, false)).toBe(0);
     expect(toastLifetimeMs('success', 'Script imported. It is in your library.', false)).toBeGreaterThan(0);
   });

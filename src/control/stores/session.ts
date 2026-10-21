@@ -1233,7 +1233,7 @@ export function startLiveSession(input: StartSessionInput): string {
            * is what the first attempt at this did.
            *
            * So it is left alone deliberately. What this flag answers is "can
-           * CandidCue hear you", and a partial that arrived one second ago is
+           * Speaking Glass hear you", and a partial that arrived one second ago is
            * evidence that it can. The failure that matters is the other one: a
            * take reporting "nothing heard yet — check the microphone" over a
            * working microphone would send somebody to unplug hardware mid-take.
@@ -1439,12 +1439,12 @@ export function startLiveSession(input: StartSessionInput): string {
         const chosen = input.micDeviceLabel ?? 'The microphone you chose';
         showToast(
           (reason === 'missing'
-            ? `${chosen} is not connected, so CandidCue is using the system default input. `
+            ? `${chosen} is not connected, so Speaking Glass is using the system default input. `
             : reason === 'unknown'
               ? // Its id opened nothing and the webview would not name the inputs,
                 // so whether it is plugged in is not known — and not claimed.
-                `CandidCue could not open ${input.micDeviceLabel ?? 'the microphone you chose'}, so it is using the system default input. `
-              : 'The microphone you chose was busy, so CandidCue is using the system default input. ') +
+                `Speaking Glass could not open ${input.micDeviceLabel ?? 'the microphone you chose'}, so it is using the system default input. `
+              : 'The microphone you chose was busy, so Speaking Glass is using the system default input. ') +
             'Pick another input in the take controls if that is wrong.',
           'info',
           { key: TOAST_INPUT_FELL_BACK, durationMs: 0 },
@@ -1540,7 +1540,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * down while its start was still in flight — a second `startLiveSession`,
        * a stop, a navigation guard. Reporting it as one produced the worst
        * possible message: "Voice tracking is unavailable. Something went wrong
-       * and CandidCue has no specific advice for it", which is both alarming
+       * and Speaking Glass has no specific advice for it", which is both alarming
        * and, for a session that no longer exists, addressed to nobody. The
        * trace still records it; the presenter is not told about the internals
        * of a take they already ended.
@@ -1720,7 +1720,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
       if (compiledScript === null) {
         throw new StartSequenceError(
           'compile',
-          'CandidCue has not finished reading this script, so the take cannot start.',
+          'Speaking Glass has not finished reading this script, so the take cannot start.',
         );
       }
       const store = get(compiledStore);
@@ -1745,7 +1745,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
        */
       if (store.scriptId !== null && store.scriptId !== compiledScript.scriptId) return;
       if (store.status === 'error') {
-        throw new StartSequenceError('compile', store.error ?? 'CandidCue could not read this script.');
+        throw new StartSequenceError('compile', store.error ?? 'Speaking Glass could not read this script.');
       }
       const blocking = (store.result?.diagnostics ?? []).filter(
         (diagnostic) => diagnostic.blocking || diagnostic.severity === 'error',
@@ -2764,7 +2764,7 @@ function captureReopened(reopened: VoiceSessionPipeline): void {
  * sequence again, on the same pipeline and the same session. The refusal is
  * cleared only once that has resolved, because nothing short of it proves
  * anything — not opening System Settings, and not the OS now reporting a grant
- * a running webview may still be refused until CandidCue is reopened.
+ * a running webview may still be refused until Speaking Glass is reopened.
  *
  * A paused take is resumed instead. Reopening capture under a pause would send
  * audio the presenter asked not to send, and `resumeSession` already retries
@@ -2806,7 +2806,7 @@ export async function retryMicrophone(): Promise<boolean> {
   dismissToastByKey(TOAST_MIC_REFUSED);
   // Capture is open, which is all this claims. Whether following is on is the
   // presenter's switch, and the status line already says which.
-  showToast('CandidCue can use the microphone now.', 'success');
+  showToast('Speaking Glass can use the microphone now.', 'success');
   return true;
 }
 
@@ -4407,7 +4407,7 @@ export function connectionPill(connection: SessionState['connection']): {
 }
 
 /*
- * No wake phrase. This used to promise "still listening for “CandidCue,
+ * No wake phrase. This used to promise "still listening for “Speaking Glass,
  * resume”", and nothing in the app has ever answered that phrase — a presenter
  * who said it would have stood there waiting. What is true is that the
  * microphone is still open, which is what makes Resume immediate.

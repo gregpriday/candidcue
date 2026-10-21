@@ -63,7 +63,16 @@ pub async fn pick_script_to_import<R: Runtime>(
     let (tx, rx) = tokio::sync::oneshot::channel();
     builder(app)
         .set_title("Import a script")
-        .add_filter("Scripts", &["md", "markdown", "txt", "candidcue"])
+        .add_filter(
+            "Scripts",
+            &[
+                "md",
+                "markdown",
+                "txt",
+                crate::scripts::import_export::BUNDLE_EXTENSION,
+                crate::scripts::import_export::LEGACY_BUNDLE_EXTENSION,
+            ],
+        )
         .pick_file(move |picked| {
             let _ = tx.send(picked);
         });

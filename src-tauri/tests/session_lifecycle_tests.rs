@@ -21,10 +21,10 @@
 //!  - assert an actual `emit_to` reaches a webview labelled `stage`, via
 //!    tauri's MockRuntime — not that a policy function returned `Emit`.
 
-use candidcue_lib::coordinator::AppCoordinator;
-use candidcue_lib::scripts::{repo, CreateScriptInput, DataPaths, ScriptId, ScriptLocks};
-use candidcue_lib::sessions::{self, EndSessionSummary, StartSessionInput};
-use candidcue_lib::windows::{self, STAGE_LABEL};
+use speaking_glass_lib::coordinator::AppCoordinator;
+use speaking_glass_lib::scripts::{repo, CreateScriptInput, DataPaths, ScriptId, ScriptLocks};
+use speaking_glass_lib::sessions::{self, EndSessionSummary, StartSessionInput};
+use speaking_glass_lib::windows::{self, STAGE_LABEL};
 use std::sync::mpsc;
 use tauri::{Listener, Manager};
 
@@ -37,7 +37,7 @@ struct Harness {
 
 async fn harness() -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pool = candidcue_lib::database::init(dir.path())
+    let pool = speaking_glass_lib::database::init(dir.path())
         .await
         .expect("database init + migrations");
     let paths = DataPaths::new(dir.path().to_path_buf());
@@ -168,7 +168,7 @@ fn the_hydration_envelope_reaches_the_stage_under_the_live_generation() {
     .build()
     .expect("mock stage webview");
     stage.listen(
-        candidcue_lib::windows::events::STAGE_LOAD_SESSION,
+        speaking_glass_lib::windows::events::STAGE_LOAD_SESSION,
         move |event| {
             let _ = tx.send(event.payload().to_string());
         },

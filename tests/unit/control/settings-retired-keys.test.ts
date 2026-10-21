@@ -38,7 +38,7 @@ const ipc = vi.hoisted(() => {
         delayProfile: 'low',
       },
       commands: {
-        wakePhrase: 'CandidCue',
+        wakePhrase: 'Speaking Glass',
         wakeMode: 'strict',
       },
     },

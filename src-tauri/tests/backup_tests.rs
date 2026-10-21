@@ -18,8 +18,8 @@
 use std::fs;
 use std::path::Path;
 
-use candidcue_lib::backup;
-use candidcue_lib::scripts::{repo, CreateScriptInput, DataPaths};
+use speaking_glass_lib::backup;
+use speaking_glass_lib::scripts::{repo, CreateScriptInput, DataPaths};
 
 struct Harness {
     dir: tempfile::TempDir,
@@ -29,7 +29,7 @@ struct Harness {
 
 async fn harness() -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pool = candidcue_lib::database::init(dir.path())
+    let pool = speaking_glass_lib::database::init(dir.path())
         .await
         .expect("database init + migrations");
     let paths = DataPaths::new(dir.path().to_path_buf());
@@ -57,7 +57,7 @@ async fn close_fully(pool: &sqlx::SqlitePool, dir: &Path) {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        let database = dir.join("candidcue.sqlite3");
+        let database = dir.join("speaking-glass.sqlite3");
         for _ in 0..500 {
             match fs::OpenOptions::new().read(true).share_mode(0).open(&database) {
                 Ok(_) => return,
@@ -94,8 +94,8 @@ async fn a_complete_export_is_named_complete_and_carries_every_section() {
         .expect("create");
     // The pinned prompter display (#272), which used to live only in the
     // WebView's localStorage and so was never in an export at all.
-    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
-    candidcue_lib::settings::update_settings(
+    let current = speaking_glass_lib::settings::get_settings(&h.pool).await.expect("settings");
+    speaking_glass_lib::settings::update_settings(
         &h.pool,
         current.revision,
         serde_json::json!({
@@ -133,7 +133,7 @@ async fn a_complete_export_is_named_complete_and_carries_every_section() {
     assert!(names.contains(&"scripts".to_string()));
     assert!(names.contains(&"settings".to_string()));
 
-    assert!(export.join("candidcue.sqlite3").exists());
+    assert!(export.join("speaking-glass.sqlite3").exists());
     assert!(export.join("settings.json").exists());
     assert!(export.join("scripts").exists());
     let settings: serde_json::Value =
@@ -224,7 +224,7 @@ async fn a_failed_database_snapshot_produces_an_incomplete_export() {
 async fn an_export_is_never_visible_under_its_final_name_until_it_is_finished() {
     /*
      * The old export created its destination directory as its first action, so
-     * a folder named `CandidCue-export-…` existed — and could be copied to a
+     * a folder named `SpeakingGlass-export-…` existed — and could be copied to a
      * drive, or backed up by something else — before it had any content.
      * Staging is dot-prefixed and renamed last.
      */
@@ -277,8 +277,8 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     .expect("create");
     // The pinned prompter display (#272): restoring onto a reinstalled Mac with
     // the same prompter must bring back which panel takes open on.
-    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
-    candidcue_lib::settings::update_settings(
+    let current = speaking_glass_lib::settings::get_settings(&h.pool).await.expect("settings");
+    speaking_glass_lib::settings::update_settings(
         &h.pool,
         current.revision,
         serde_json::json!({
@@ -308,16 +308,16 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     // Destroy the live state as thoroughly as a user could, between launches.
     close_fully(&h.pool, h.dir.path()).await;
     fs::remove_dir_all(h.paths.scripts_dir()).expect("wipe scripts");
-    fs::remove_file(h.dir.path().join("candidcue.sqlite3")).ok();
+    fs::remove_file(h.dir.path().join("speaking-glass.sqlite3")).ok();
 
     // Phase 2: the next launch. `database::init` applies the marker before it
     // opens anything.
-    let pool = candidcue_lib::database::init(h.dir.path())
+    let pool = speaking_glass_lib::database::init(h.dir.path())
         .await
         .expect("startup applies the pending restore");
     // Read before the pool closes: the pin is in the restored database, not in
     // anything the WebView kept.
-    let restored = candidcue_lib::settings::get_settings(&pool).await.expect("settings");
+    let restored = speaking_glass_lib::settings::get_settings(&pool).await.expect("settings");
     pool.close().await;
     assert_eq!(
         restored.value.stage_behavior.display_fingerprint.as_deref(),
@@ -331,7 +331,7 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
         "the marker must be consumed, not retried every launch"
     );
     assert!(h.paths.scripts_dir().exists());
-    assert!(h.dir.path().join("candidcue.sqlite3").exists());
+    assert!(h.dir.path().join("speaking-glass.sqlite3").exists());
 
     // The content, not just the file count.
     let found = fs::read_dir(h.paths.scripts_dir())
@@ -384,6 +384,86 @@ async fn scheduling_a_restore_does_not_touch_live_data() {
 }
 
 #[tokio::test]
+async fn an_export_made_before_the_rename_still_restores() {
+    /*
+     * Before the app was Speaking Glass, its database was `candidcue.sqlite3`,
+     * and that is the name an export from then lists in its manifest. The
+     * export is checksummed, so the old shape is forged whole: the file renamed
+     * and the manifest entry with it.
+     */
+    let h = harness().await;
+    repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input("Keynote", "# Keynote\n\nWritten under the old name."),
+    )
+    .await
+    .expect("create");
+    // A setting, because the scripts alone could be rebuilt from their folders
+    // and would hide a database that never came back.
+    let current = speaking_glass_lib::settings::get_settings(&h.pool).await.expect("settings");
+    speaking_glass_lib::settings::update_settings(
+        &h.pool,
+        current.revision,
+        serde_json::json!({ "stageBehavior": { "displayFingerprint": "dsp-before-the-rename" } }),
+    )
+    .await
+    .expect("pin a display");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = Path::new(&export.path);
+    fs::rename(
+        export_root.join("speaking-glass.sqlite3"),
+        export_root.join("candidcue.sqlite3"),
+    )
+    .expect("the old name");
+    let mut manifest = manifest_of(export_root);
+    let renamed = manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .iter_mut()
+        .filter(|file| file["path"] == "speaking-glass.sqlite3")
+        .map(|file| file["path"] = serde_json::json!("candidcue.sqlite3"))
+        .count();
+    assert_eq!(renamed, 1, "the export lists its database once");
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect("an export from before the rename is accepted");
+    close_fully(&h.pool, h.dir.path()).await;
+    fs::remove_dir_all(h.paths.scripts_dir()).expect("wipe scripts");
+    fs::remove_file(h.dir.path().join("speaking-glass.sqlite3")).ok();
+
+    let pool = speaking_glass_lib::database::init(h.dir.path())
+        .await
+        .expect("the next launch applies it");
+    let restored = speaking_glass_lib::settings::get_settings(&pool).await.expect("settings");
+    pool.close().await;
+    assert_eq!(
+        restored.value.stage_behavior.display_fingerprint.as_deref(),
+        Some("dsp-before-the-rename"),
+        "the database itself came back, under today's name"
+    );
+    assert!(!h.dir.path().join("restore-pending.json").exists());
+    assert!(!h.dir.path().join("candidcue.sqlite3").exists());
+    let found = fs::read_dir(h.paths.scripts_dir())
+        .expect("scripts")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().join("script.md"))
+        .find(|p| p.exists())
+        .expect("a canonical file");
+    assert!(fs::read_to_string(found).expect("read").contains("Written under the old name."));
+}
+
+#[tokio::test]
 async fn a_restore_refuses_an_incomplete_export_before_touching_anything() {
     let h = harness().await;
     repo::create_script(&h.pool, &h.paths, create_input("Live", "# Live\n\nStill here."))
@@ -427,7 +507,7 @@ async fn a_restore_refuses_a_damaged_export() {
 
     // Corrupt one byte of the database snapshot, leaving its size intact so
     // only the checksum can catch it.
-    let db = Path::new(&export.path).join("candidcue.sqlite3");
+    let db = Path::new(&export.path).join("speaking-glass.sqlite3");
     let mut bytes = fs::read(&db).expect("read snapshot");
     let last = bytes.len() - 1;
     bytes[last] ^= 0xff;
@@ -624,7 +704,7 @@ async fn a_restore_that_cannot_succeed_gives_up_rather_than_looping() {
     fs::write(
         &marker,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "exportPath": "/nonexistent/CandidCue-export-does-not-exist",
+            "exportPath": "/nonexistent/SpeakingGlass-export-does-not-exist",
             "requestedAt": "2026-08-12T00:00:00Z",
             "appVersion": "1.0.0-rc.1",
             "attempts": 3,
@@ -703,11 +783,11 @@ async fn a_rebuild_moves_the_database_aside_and_never_deletes_it() {
     let quarantine = backup::rebuild_database_index(&h.paths).await.expect("rebuild");
 
     assert!(
-        !h.dir.path().join("candidcue.sqlite3").exists(),
+        !h.dir.path().join("speaking-glass.sqlite3").exists(),
         "the live database is gone so the baseline can be applied fresh"
     );
     assert!(
-        quarantine.join("candidcue.sqlite3").exists(),
+        quarantine.join("speaking-glass.sqlite3").exists(),
         "and it is in quarantine, because it may be the only copy of the \
          session history a rebuild cannot reconstruct"
     );
@@ -742,20 +822,20 @@ async fn a_rebuild_does_not_fail_over_a_sidecar_that_is_not_there() {
     for sidecars in [vec![], vec!["-wal"], vec!["-wal", "-shm"]] {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = DataPaths::new(dir.path().to_path_buf());
-        fs::write(dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
+        fs::write(dir.path().join("speaking-glass.sqlite3"), b"not really a database").expect("db");
         for suffix in &sidecars {
-            fs::write(dir.path().join(format!("candidcue.sqlite3{suffix}")), b"x").expect("sidecar");
+            fs::write(dir.path().join(format!("speaking-glass.sqlite3{suffix}")), b"x").expect("sidecar");
         }
 
         let quarantine = backup::rebuild_database_index(&paths)
             .await
             .unwrap_or_else(|e| panic!("rebuild with sidecars {sidecars:?} failed: {e:?}"));
 
-        assert!(!dir.path().join("candidcue.sqlite3").exists());
-        assert!(quarantine.join("candidcue.sqlite3").exists());
+        assert!(!dir.path().join("speaking-glass.sqlite3").exists());
+        assert!(quarantine.join("speaking-glass.sqlite3").exists());
         for suffix in &sidecars {
             assert!(
-                quarantine.join(format!("candidcue.sqlite3{suffix}")).exists(),
+                quarantine.join(format!("speaking-glass.sqlite3{suffix}")).exists(),
                 "a sidecar that WAS there must still be moved"
             );
         }
@@ -774,8 +854,8 @@ fn tiny_png() -> Vec<u8> {
     ]
 }
 
-fn script_id(raw: &str) -> candidcue_lib::scripts::ScriptId {
-    candidcue_lib::scripts::ScriptId::parse(raw).expect("summary ids are canonical UUIDs")
+fn script_id(raw: &str) -> speaking_glass_lib::scripts::ScriptId {
+    speaking_glass_lib::scripts::ScriptId::parse(raw).expect("summary ids are canonical UUIDs")
 }
 
 async fn trashed_at(pool: &sqlx::SqlitePool, id: &str) -> Option<String> {
@@ -795,8 +875,8 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
      * 8a0ece26" with no history and an image that no longer resolved, and the
      * second came back as a live draft — every file still on disk.
      */
-    use candidcue_lib::assets::{self, AssetRequest};
-    use candidcue_lib::scripts::{reconcile, ScriptLocks, ScriptMetadataPatch, ScriptStatus};
+    use speaking_glass_lib::assets::{self, AssetRequest};
+    use speaking_glass_lib::scripts::{reconcile, ScriptLocks, ScriptMetadataPatch, ScriptStatus};
 
     let h = harness().await;
     let locks = ScriptLocks::default();
@@ -856,7 +936,7 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
         "what the old database knew must survive to the relaunch"
     );
 
-    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let pool = speaking_glass_lib::database::init(h.dir.path()).await.expect("relaunch");
     let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
         .await
         .expect("reconciliation");
@@ -939,7 +1019,7 @@ async fn a_rebuild_interrupted_before_reading_names_reads_them_on_the_next_launc
      * points the next launch at them. Simulated by doing the rebuild's own
      * steps and stopping before the read.
      */
-    use candidcue_lib::scripts::{reconcile, ScriptLocks};
+    use speaking_glass_lib::scripts::{reconcile, ScriptLocks};
 
     let h = harness().await;
     let created = repo::create_script(&h.pool, &h.paths, create_input("Interrupted", "Body."))
@@ -948,11 +1028,11 @@ async fn a_rebuild_interrupted_before_reading_names_reads_them_on_the_next_launc
     close_fully(&h.pool, h.dir.path()).await;
 
     let quarantine = h.paths.quarantine_dir().join("pre-rebuild-interrupted");
-    let database = quarantine.join("candidcue.sqlite3");
+    let database = quarantine.join("speaking-glass.sqlite3");
     backup::salvage::record_pending_salvage(h.dir.path(), &database).expect("record");
     backup::quarantine_database_files(h.dir.path(), &quarantine, &database).expect("move");
 
-    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let pool = speaking_glass_lib::database::init(h.dir.path()).await.expect("relaunch");
     let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &ScriptLocks::default())
         .await
         .expect("reconciliation");
@@ -969,7 +1049,7 @@ async fn a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry() {
      * must survive to the launch that can read it, rather than being dropped
      * with the rest of the index once the other folders are adopted.
      */
-    use candidcue_lib::scripts::{reconcile, ScriptLocks};
+    use speaking_glass_lib::scripts::{reconcile, ScriptLocks};
 
     let h = harness().await;
     let readable = repo::create_script(&h.pool, &h.paths, create_input("Readable", "Fine."))
@@ -993,7 +1073,7 @@ async fn a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry() {
     let text = fs::read(&canonical).expect("text");
     fs::write(&canonical, [0xFF, 0xFE, 0xFD]).expect("not UTF-8");
 
-    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let pool = speaking_glass_lib::database::init(h.dir.path()).await.expect("relaunch");
     let locks = ScriptLocks::default();
     let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
         .await
@@ -1023,7 +1103,7 @@ async fn a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry() {
 
 #[tokio::test]
 async fn a_rebuild_over_an_unreadable_database_names_scripts_from_their_own_text() {
-    use candidcue_lib::scripts::{reconcile, ScriptLocks, ScriptStatus};
+    use speaking_glass_lib::scripts::{reconcile, ScriptLocks, ScriptStatus};
 
     let h = harness().await;
     let created = repo::create_script(
@@ -1045,16 +1125,16 @@ async fn a_rebuild_over_an_unreadable_database_names_scripts_from_their_own_text
     assert_eq!(busy, 0);
     close_fully(&h.pool, h.dir.path()).await;
     for suffix in ["-wal", "-shm"] {
-        let _ = fs::remove_file(h.dir.path().join(format!("candidcue.sqlite3{suffix}")));
+        let _ = fs::remove_file(h.dir.path().join(format!("speaking-glass.sqlite3{suffix}")));
     }
-    fs::write(h.dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
+    fs::write(h.dir.path().join("speaking-glass.sqlite3"), b"not really a database").expect("db");
 
     backup::rebuild_database_index(&h.paths)
         .await
         .expect("a database with nothing to salvage is still rebuilt");
     assert!(!h.dir.path().join("rebuild-script-index.json").exists());
 
-    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let pool = speaking_glass_lib::database::init(h.dir.path()).await.expect("relaunch");
     let locks = ScriptLocks::default();
     let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
         .await
@@ -1076,7 +1156,7 @@ async fn a_rebuild_reads_names_committed_only_to_the_write_ahead_log() {
      * The state is captured by copying the files while the pool is still open,
      * which is what a crashed process leaves behind.
      */
-    use candidcue_lib::scripts::{reconcile, ScriptLocks};
+    use speaking_glass_lib::scripts::{reconcile, ScriptLocks};
 
     let h = harness().await;
     let created = repo::create_script(&h.pool, &h.paths, create_input("Only in the log", "Body."))
@@ -1084,19 +1164,19 @@ async fn a_rebuild_reads_names_committed_only_to_the_write_ahead_log() {
         .expect("create");
 
     let crashed = tempfile::tempdir().expect("tempdir");
-    let wal = h.dir.path().join("candidcue.sqlite3-wal");
+    let wal = h.dir.path().join("speaking-glass.sqlite3-wal");
     assert!(
         fs::metadata(&wal).map(|m| m.len() > 0).unwrap_or(false),
         "the fixture needs an uncheckpointed WAL to mean anything"
     );
     for suffix in ["", "-wal", "-shm"] {
-        let from = h.dir.path().join(format!("candidcue.sqlite3{suffix}"));
+        let from = h.dir.path().join(format!("speaking-glass.sqlite3{suffix}"));
         if from.exists() {
-            fs::copy(&from, crashed.path().join(format!("candidcue.sqlite3{suffix}"))).expect("copy");
+            fs::copy(&from, crashed.path().join(format!("speaking-glass.sqlite3{suffix}"))).expect("copy");
         }
     }
     backup::copy_tree(&h.paths.scripts_dir(), &crashed.path().join("scripts")).expect("scripts");
-    let main = fs::read(crashed.path().join("candidcue.sqlite3")).expect("main file");
+    let main = fs::read(crashed.path().join("speaking-glass.sqlite3")).expect("main file");
     assert!(
         !main.windows(15).any(|w| w == b"Only in the log"),
         "the title must not have been checkpointed into the main file yet"
@@ -1104,7 +1184,7 @@ async fn a_rebuild_reads_names_committed_only_to_the_write_ahead_log() {
     let paths = DataPaths::new(crashed.path().to_path_buf());
 
     backup::rebuild_database_index(&paths).await.expect("rebuild");
-    let pool = candidcue_lib::database::init(crashed.path()).await.expect("relaunch");
+    let pool = speaking_glass_lib::database::init(crashed.path()).await.expect("relaunch");
     let report = reconcile::run_startup_reconciliation(&pool, &paths, &ScriptLocks::default())
         .await
         .expect("reconciliation");
@@ -1120,7 +1200,7 @@ async fn a_rescued_copy_says_which_folder_is_which_script() {
      * "Save my scripts somewhere else" copied a folder of UUID-named folders
      * and nothing else, so telling them apart meant opening every one (#252).
      */
-    use candidcue_lib::scripts::ScriptLocks;
+    use speaking_glass_lib::scripts::ScriptLocks;
 
     let h = harness().await;
     let launch = repo::create_script(
@@ -1164,7 +1244,7 @@ async fn a_rescued_copy_says_which_folder_is_which_script() {
 
     // With nothing to read the names from, each script's own first line.
     backup::salvage::clear_pending_index(h.dir.path());
-    fs::write(h.dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
+    fs::write(h.dir.path().join("speaking-glass.sqlite3"), b"not really a database").expect("db");
     let rescued = backup::rescue_scripts_to(&h.paths, &rescue("three")).await.expect("rescue");
     assert_eq!(rescued.scripts_copied, 2);
     let readme = readme_of(&rescue("three"), &rescued.names_file);
@@ -1184,7 +1264,7 @@ async fn an_ordinary_launch_with_nothing_pending_writes_no_backup() {
      */
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("first init");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("first init");
     pool.close().await;
 
     let backups = dir.path().join("backups");
@@ -1195,7 +1275,7 @@ async fn an_ordinary_launch_with_nothing_pending_writes_no_backup() {
     };
 
     // Second launch: same build, same schema, nothing pending.
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("second init");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("second init");
     pool.close().await;
 
     let after_second = if backups.exists() {
@@ -1223,7 +1303,7 @@ async fn a_database_from_before_the_1_0_baseline_is_quarantined_rather_than_refu
      * authority for script content anyway.
      */
     let dir = tempfile::tempdir().expect("tempdir");
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("init");
 
     /*
      * Forge the real tell: migration 1 carrying the checksum the PRE-BASELINE
@@ -1250,7 +1330,7 @@ async fn a_database_from_before_the_1_0_baseline_is_quarantined_rather_than_refu
         .expect("forge the pre-baseline checksum");
     pool.close().await;
 
-    let pool = candidcue_lib::database::init(dir.path())
+    let pool = speaking_glass_lib::database::init(dir.path())
         .await
         .expect("a pre-baseline database must not stop the app from starting");
     pool.close().await;
@@ -1288,7 +1368,7 @@ async fn a_healthy_database_with_a_future_migration_is_left_alone() {
      * 2 going through; this is one from a build newer than this one.
      */
     let dir = tempfile::tempdir().expect("tempdir");
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("init");
 
     // A future migration that is NOT the legacy one.
     sqlx::query(
@@ -1304,14 +1384,14 @@ async fn a_healthy_database_with_a_future_migration_is_left_alone() {
     // Reopening will fail for an unrelated reason — sqlx does not know a
     // migration 999 — and that is fine. What must NOT have happened is a
     // quarantine.
-    let _ = candidcue_lib::database::init(dir.path()).await;
+    let _ = speaking_glass_lib::database::init(dir.path()).await;
 
     assert!(
         !dir.path().join("quarantine").exists(),
         "a database with an unrecognised migration must not be quarantined"
     );
     assert!(
-        dir.path().join("candidcue.sqlite3").exists(),
+        dir.path().join("speaking-glass.sqlite3").exists(),
         "and it must still be where it was"
     );
 }
@@ -1328,7 +1408,7 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
      * still previews), and the first startup reconciliation rebuilds the entry
      * from the canonical file so the rest of the page searches too.
      */
-    use candidcue_lib::scripts::{reconcile, ScriptFilter, ScriptId, ScriptLocks};
+    use speaking_glass_lib::scripts::{reconcile, ScriptFilter, ScriptId, ScriptLocks};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let baseline = dir.path().join("baseline-migrations");
@@ -1347,7 +1427,7 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
     fs::write(dir.path().join(&rel_path), source).expect("canonical file");
     {
         let options = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(dir.path().join("candidcue.sqlite3"))
+            .filename(dir.path().join("speaking-glass.sqlite3"))
             .create_if_missing(true);
         let pool = sqlx::SqlitePool::connect_with(options).await.expect("open");
         sqlx::migrate::Migrator::new(baseline.as_path())
@@ -1365,7 +1445,7 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
         )
         .bind(id)
         .bind(&rel_path)
-        .bind(candidcue_lib::util::sha256_hex(source.as_bytes()))
+        .bind(speaking_glass_lib::util::sha256_hex(source.as_bytes()))
         .execute(&pool)
         .await
         .expect("seed script");
@@ -1378,7 +1458,7 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
         pool.close().await;
     }
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("upgrade");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("upgrade");
     let paths = DataPaths::new(dir.path().to_path_buf());
     let script_id = ScriptId::parse(id).expect("id");
     let search = |query: &'static str| {
@@ -1502,7 +1582,7 @@ async fn a_version_two_database_with_retained_transcripts(root: &Path) {
         .max_connections(1)
         .connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(root.join("candidcue.sqlite3"))
+                .filename(root.join("speaking-glass.sqlite3"))
                 .create_if_missing(true),
         )
         .await
@@ -1523,7 +1603,7 @@ async fn a_version_two_database_with_retained_transcripts(root: &Path) {
                 (id, title, canonical_rel_path, source_hash, created_at, updated_at)
              VALUES ('{OLD_SCRIPT}', 'Keynote', '{rel_path}', '{}',
                      '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
-            candidcue_lib::util::sha256_hex(source.as_bytes())
+            speaking_glass_lib::util::sha256_hex(source.as_bytes())
         ),
         "INSERT INTO settings (key, value_json, revision, updated_at)
          VALUES ('app', '{\"schemaVersion\":1,\"general\":{\"openTo\":\"last_script\",\"wordsPerMinuteEstimate\":155,\"saveTranscript\":\"forever\"}}',
@@ -1570,9 +1650,9 @@ async fn a_version_two_database_with_retained_transcripts(root: &Path) {
         .expect("the old retention sweep");
     pool.close().await;
 
-    let applied = applied_migrations_at(&root.join("candidcue.sqlite3")).await;
+    let applied = applied_migrations_at(&root.join("speaking-glass.sqlite3")).await;
     assert_eq!(applied, vec![1, 2], "the seed is a version-2 database");
-    let on_disk = fs::read(root.join("candidcue.sqlite3")).expect("seeded file");
+    let on_disk = fs::read(root.join("speaking-glass.sqlite3")).expect("seeded file");
     assert!(contains(&on_disk, RETAINED_WORDS), "the seed must hold the retained words");
     assert!(
         contains(&on_disk, SWEPT_WORDS),
@@ -1602,7 +1682,7 @@ fn contains(haystack: &[u8], needle: &str) -> bool {
 /// own last-connection checkpoint would hide a scrub that never truncated the
 /// log.
 fn live_bytes(root: &Path) -> Vec<u8> {
-    let mut bytes = fs::read(root.join("candidcue.sqlite3")).expect("live database");
+    let mut bytes = fs::read(root.join("speaking-glass.sqlite3")).expect("live database");
     bytes.extend(wal_bytes(root));
     bytes
 }
@@ -1610,7 +1690,7 @@ fn live_bytes(root: &Path) -> Vec<u8> {
 /// The write-ahead log, where an absent log reads as empty — and any OTHER
 /// failure to read it fails the test rather than passing as "nothing found".
 fn wal_bytes(root: &Path) -> Vec<u8> {
-    match fs::read(root.join("candidcue.sqlite3-wal")) {
+    match fs::read(root.join("speaking-glass.sqlite3-wal")) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(err) => panic!("could not read the write-ahead log: {err}"),
@@ -1667,7 +1747,7 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
     assert!(!columns.iter().any(|c| c == "transcript_retained"), "got {columns:?}");
 
     // Everything else survives.
-    let sessions = candidcue_lib::sessions::list_sessions(pool, Some(OLD_SCRIPT.into()), 10)
+    let sessions = speaking_glass_lib::sessions::list_sessions(pool, Some(OLD_SCRIPT.into()), 10)
         .await
         .expect("sessions");
     assert_eq!(sessions.len(), 1, "every session row survives");
@@ -1676,12 +1756,12 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
     assert_eq!(sessions[0].command_count, 3);
     let script = repo::get_summary(
         pool,
-        &candidcue_lib::scripts::ScriptId::parse(OLD_SCRIPT).expect("id"),
+        &speaking_glass_lib::scripts::ScriptId::parse(OLD_SCRIPT).expect("id"),
     )
     .await
     .expect("the script survives");
     assert_eq!(script.title, "Keynote");
-    let settings = candidcue_lib::settings::get_settings(pool).await.expect("settings");
+    let settings = speaking_glass_lib::settings::get_settings(pool).await.expect("settings");
     assert_eq!(settings.revision, 7);
     assert_eq!(settings.value.general.open_to, "last_script");
 }
@@ -1724,7 +1804,7 @@ async fn upgrading_removes_take_history_and_transcripts_from_the_live_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     a_version_two_database_with_retained_transcripts(dir.path()).await;
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("upgrade");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("upgrade");
 
     assert_retired_storage_removed(dir.path(), &pool).await;
     assert_rollback_copy_kept(dir.path()).await;
@@ -1742,7 +1822,7 @@ async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
     let old = tempfile::tempdir().expect("old install");
     a_version_two_database_with_retained_transcripts(old.path()).await;
     let old_pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new().filename(old.path().join("candidcue.sqlite3")),
+        sqlx::sqlite::SqliteConnectOptions::new().filename(old.path().join("speaking-glass.sqlite3")),
     )
     .await
     .expect("open the old install");
@@ -1752,7 +1832,7 @@ async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
         .expect("export from the old install");
     old_pool.close().await;
     assert!(export.complete);
-    let exported_database = Path::new(&export.path).join("candidcue.sqlite3");
+    let exported_database = Path::new(&export.path).join("speaking-glass.sqlite3");
     assert_eq!(applied_migrations_at(&exported_database).await, vec![1, 2]);
     let exported_bytes = fs::read(&exported_database).expect("export");
     assert!(contains(&exported_bytes, RETAINED_WORDS));
@@ -1763,7 +1843,7 @@ async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
         .expect("an old export still restores");
     close_fully(&h.pool, h.dir.path()).await;
 
-    let pool = candidcue_lib::database::init(h.dir.path())
+    let pool = speaking_glass_lib::database::init(h.dir.path())
         .await
         .expect("the next launch applies the restore and upgrades it");
 
@@ -1806,13 +1886,13 @@ async fn an_interrupted_scrub_is_finished_on_the_next_launch() {
     assert_eq!(busy, 0);
     close_fully(&h.pool, h.dir.path()).await;
     assert!(
-        contains(&fs::read(h.dir.path().join("candidcue.sqlite3")).expect("db"), RETAINED_WORDS),
+        contains(&fs::read(h.dir.path().join("speaking-glass.sqlite3")).expect("db"), RETAINED_WORDS),
         "the freed words must be on disk before the retry, or it proves nothing"
     );
     // As the interrupted launch left it: migration 3 applied, marker still there.
     fs::write(h.dir.path().join("retired-storage-scrub.pending"), "3\n").expect("marker");
 
-    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let pool = speaking_glass_lib::database::init(h.dir.path()).await.expect("relaunch");
 
     assert!(!contains(&live_bytes(h.dir.path()), RETAINED_WORDS));
     assert!(!h.dir.path().join("retired-storage-scrub.pending").exists());
@@ -1837,7 +1917,7 @@ async fn a_scrub_that_cannot_finish_is_retried_rather_than_forgotten() {
     a_version_two_database_with_retained_transcripts(dir.path()).await;
 
     let reader_options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(dir.path().join("candidcue.sqlite3"))
+        .filename(dir.path().join("speaking-glass.sqlite3"))
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
     let mut reader = sqlx::ConnectOptions::connect(&reader_options)
         .await
@@ -1848,11 +1928,11 @@ async fn a_scrub_that_cannot_finish_is_retried_rather_than_forgotten() {
         .await
         .expect("hold a snapshot from before the upgrade");
 
-    let pool = candidcue_lib::database::init(dir.path())
+    let pool = speaking_glass_lib::database::init(dir.path())
         .await
         .expect("a scrub that cannot finish must not stop the app opening");
     assert_eq!(
-        applied_migrations_at(&dir.path().join("candidcue.sqlite3")).await,
+        applied_migrations_at(&dir.path().join("speaking-glass.sqlite3")).await,
         vec![1, 2, 3, 4],
         "the storage itself is gone either way"
     );
@@ -1866,7 +1946,7 @@ async fn a_scrub_that_cannot_finish_is_retried_rather_than_forgotten() {
     sqlx::Connection::close(reader).await.expect("close the reader");
     pool.close().await;
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("next launch");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("next launch");
     assert_retired_storage_removed(dir.path(), &pool).await;
     assert_rollback_copy_kept(dir.path()).await;
     pool.close().await;
@@ -1882,7 +1962,7 @@ async fn a_stale_marker_over_a_fresh_database_is_simply_retired() {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(dir.path().join("retired-storage-scrub.pending"), "3\n").expect("marker");
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("fresh database");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("fresh database");
 
     assert!(!dir.path().join("retired-storage-scrub.pending").exists());
     assert!(pre_migration_snapshots(dir.path()).is_empty());
@@ -1923,7 +2003,7 @@ async fn a_version_three_database_with_a_display_profile(root: &Path) {
         .max_connections(1)
         .connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(root.join("candidcue.sqlite3"))
+                .filename(root.join("speaking-glass.sqlite3"))
                 .create_if_missing(true)
                 .foreign_keys(true),
         )
@@ -1952,7 +2032,7 @@ async fn a_version_three_database_with_a_display_profile(root: &Path) {
              VALUES ('{PROFILED_SCRIPT}', 'Launch', '{rel_path}', '{}', 'ready',
                      '{PROFILE_ID}', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z',
                      '2026-01-03T00:00:00Z')",
-            candidcue_lib::util::sha256_hex(source.as_bytes())
+            speaking_glass_lib::util::sha256_hex(source.as_bytes())
         ),
         format!(
             "INSERT INTO script_revisions
@@ -1983,7 +2063,7 @@ async fn a_version_three_database_with_a_display_profile(root: &Path) {
     pool.close().await;
 
     assert_eq!(
-        applied_migrations_at(&root.join("candidcue.sqlite3")).await,
+        applied_migrations_at(&root.join("speaking-glass.sqlite3")).await,
         vec![1, 2, 3],
         "the seed is a version-3 database"
     );
@@ -2052,7 +2132,7 @@ async fn assert_display_profiles_removed(root: &Path, pool: &sqlx::SqlitePool) {
     assert_eq!(last_opened.as_deref(), Some("2026-01-03T00:00:00Z"));
 
     // And the repository reads and copies it through the narrower row.
-    use candidcue_lib::scripts::{ScriptId, ScriptLocks, ScriptStatus};
+    use speaking_glass_lib::scripts::{ScriptId, ScriptLocks, ScriptStatus};
     let paths = DataPaths::new(root.to_path_buf());
     let locks = ScriptLocks::default();
     let id = ScriptId::parse(PROFILED_SCRIPT).expect("id");
@@ -2141,13 +2221,13 @@ async fn upgrading_removes_display_profiles_and_keeps_what_hangs_off_a_script() 
     let dir = tempfile::tempdir().expect("tempdir");
     a_version_three_database_with_a_display_profile(dir.path()).await;
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("upgrade");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("upgrade");
     assert_display_profiles_removed(dir.path(), &pool).await;
     pool.close().await;
 
     // A file whose schema text was edited must open again like any other, and
     // with nothing pending it takes no second backup.
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("next launch");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("next launch");
     let integrity: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
         .fetch_all(&pool)
         .await
@@ -2169,7 +2249,7 @@ async fn an_export_made_before_display_profiles_went_still_restores() {
     let old = tempfile::tempdir().expect("old install");
     a_version_three_database_with_a_display_profile(old.path()).await;
     let old_pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new().filename(old.path().join("candidcue.sqlite3")),
+        sqlx::sqlite::SqliteConnectOptions::new().filename(old.path().join("speaking-glass.sqlite3")),
     )
     .await
     .expect("open the old install");
@@ -2181,7 +2261,7 @@ async fn an_export_made_before_display_profiles_went_still_restores() {
     assert!(export.complete);
     let export_root = Path::new(&export.path);
     assert_eq!(
-        applied_migrations_at(&export_root.join("candidcue.sqlite3")).await,
+        applied_migrations_at(&export_root.join("speaking-glass.sqlite3")).await,
         vec![1, 2, 3]
     );
 
@@ -2203,7 +2283,7 @@ async fn an_export_made_before_display_profiles_went_still_restores() {
         .expect("a pre-#232 export still restores");
     close_fully(&h.pool, h.dir.path()).await;
 
-    let pool = candidcue_lib::database::init(h.dir.path())
+    let pool = speaking_glass_lib::database::init(h.dir.path())
         .await
         .expect("the next launch applies the restore and upgrades it");
     assert_display_profiles_removed(h.dir.path(), &pool).await;
@@ -2221,7 +2301,7 @@ fn forge_settings_json(export_root: &Path, settings: &serde_json::Value) {
     for file in manifest["files"].as_array_mut().expect("files") {
         if file["path"] == "settings.json" {
             file["bytes"] = serde_json::json!(bytes.len());
-            file["sha256"] = serde_json::json!(candidcue_lib::util::sha256_hex(&bytes));
+            file["sha256"] = serde_json::json!(speaking_glass_lib::util::sha256_hex(&bytes));
         }
     }
     for section in manifest["sections"].as_array_mut().expect("sections") {
@@ -2271,7 +2351,7 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
         .collect();
 
     let old = harness().await;
-    candidcue_lib::settings::get_settings(&old.pool).await.expect("settings row");
+    speaking_glass_lib::settings::get_settings(&old.pool).await.expect("settings row");
     sqlx::query("UPDATE settings SET value_json = ?, revision = 9 WHERE key = 'app'")
         .bind(document.to_string())
         .execute(&old.pool)
@@ -2287,7 +2367,7 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
 
     let snapshot = sqlx::SqlitePool::connect_with(
         sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(export_root.join("candidcue.sqlite3"))
+            .filename(export_root.join("speaking-glass.sqlite3"))
             .read_only(true),
     )
     .await
@@ -2311,8 +2391,8 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
     // Into an install whose own settings differ, so a restore that kept them
     // could not pass for one that brought the export's back.
     let h = harness().await;
-    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
-    candidcue_lib::settings::update_settings(
+    let current = speaking_glass_lib::settings::get_settings(&h.pool).await.expect("settings");
+    speaking_glass_lib::settings::update_settings(
         &h.pool,
         current.revision,
         serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 99 } }),
@@ -2324,18 +2404,18 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
         .expect("a pre-#219 export still restores");
     close_fully(&h.pool, h.dir.path()).await;
 
-    let pool = candidcue_lib::database::init(h.dir.path())
+    let pool = speaking_glass_lib::database::init(h.dir.path())
         .await
         .expect("the next launch applies the restore");
-    let restored = candidcue_lib::settings::get_settings(&pool).await.expect("settings");
+    let restored = speaking_glass_lib::settings::get_settings(&pool).await.expect("settings");
     assert_eq!(restored.revision, 9);
     let mut expected =
-        serde_json::from_value::<candidcue_lib::settings::AppSettings>(document).expect("loads");
+        serde_json::from_value::<speaking_glass_lib::settings::AppSettings>(document).expect("loads");
     assert_eq!(restored.value, expected, "every surviving setting comes back, not the defaults");
     assert_eq!(restored.value.stage_behavior.fixed_speed_wpm, 172);
     assert_eq!(restored.value.optical.profiles.len(), 1, "the calibrated rig comes back");
 
-    candidcue_lib::settings::update_settings(
+    speaking_glass_lib::settings::update_settings(
         &pool,
         restored.revision,
         serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 150 } }),
@@ -2369,11 +2449,11 @@ async fn recovery_mode_refuses_commands_that_would_write() {
      * and then inserts the row — so a stray call in recovery mode would leave
      * a real file on disk indexed only in the scratch in-memory database that
      * vanishes with the process. The user would have a script they could not
-     * find, and CandidCue would have "recovered" nothing.
+     * find, and Speaking Glass would have "recovered" nothing.
      */
-    use candidcue_lib::database::BootStatus;
+    use speaking_glass_lib::database::BootStatus;
 
-    let failed = BootStatus::Failed(candidcue_lib::AppError::invalid_input("corrupt"));
+    let failed = BootStatus::Failed(speaking_glass_lib::AppError::invalid_input("corrupt"));
     let ready = BootStatus::Ready;
 
     assert!(
@@ -2647,14 +2727,14 @@ fn every_registered_command_is_classified_for_recovery_mode() {
 ///     checked structurally. That is the test below this one.
 #[tokio::test]
 async fn a_support_bundle_redacts_paths_and_urls() {
-    use candidcue_lib::scripts::DataPaths;
+    use speaking_glass_lib::scripts::DataPaths;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let paths = DataPaths::new(dir.path().to_path_buf());
     std::fs::create_dir_all(paths.logs_dir()).expect("logs dir");
 
     std::fs::write(
-        paths.logs_dir().join("candidcue-rust.2026-08-12.log"),
+        paths.logs_dir().join("speaking-glass-rust.2026-08-12.log"),
         "2026-08-12T10:00:00Z INFO opened /Users/aurelia-fitzwilliam/Documents/keynote/script.md\n\
          2026-08-12T10:00:01Z INFO fetched https://models.example.com/x-asr.tar.bz2?token=SECRETVALUE\n\
          2026-08-12T10:00:02Z INFO mirror https://first.example/a?leak=EARLIERSECRET then http://second.example/b\n\
@@ -2663,10 +2743,10 @@ async fn a_support_bundle_redacts_paths_and_urls() {
     .expect("write log");
 
     let bundle = tempfile::tempdir().expect("bundle");
-    candidcue_lib::diagnostics::logging::copy_support_logs(&paths.logs_dir(), bundle.path())
+    speaking_glass_lib::diagnostics::logging::copy_support_logs(&paths.logs_dir(), bundle.path())
         .expect("copy logs");
 
-    let copied = std::fs::read_to_string(bundle.path().join("logs/candidcue-rust.2026-08-12.log"))
+    let copied = std::fs::read_to_string(bundle.path().join("logs/speaking-glass-rust.2026-08-12.log"))
         .expect("the bundle must contain the log");
 
     // Anti-vacuity: an empty or missing copy would satisfy every ban below.
@@ -2849,10 +2929,10 @@ async fn a_rollback_never_deletes_something_it_did_not_move() {
     close_fully(&h.pool, h.dir.path()).await;
 
     let quarantine = pin_generation(h.dir.path(), "test-generation");
-    fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker"))
+    fs::create_dir_all(quarantine.join("speaking-glass.sqlite3").join("blocker"))
         .expect("obstruct the database's quarantine path");
 
-    let live_db = h.dir.path().join("candidcue.sqlite3");
+    let live_db = h.dir.path().join("speaking-glass.sqlite3");
     /*
      * IDENTITY, not bytes.
      *
@@ -2920,7 +3000,7 @@ async fn a_retry_reuses_the_first_attempt_s_quarantine_generation() {
 
     // Fail the same way, twice.
     let quarantine = pin_generation(h.dir.path(), "test-generation");
-    fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker")).expect("obstruct");
+    fs::create_dir_all(quarantine.join("speaking-glass.sqlite3").join("blocker")).expect("obstruct");
 
     let _ = backup::apply_pending_restore(&h.paths).await;
     let after_first: serde_json::Value = serde_json::from_slice(
@@ -2986,12 +3066,12 @@ async fn a_restore_interrupted_mid_copy_finishes_on_the_next_launch() {
     //    handle Windows still has open — here, the pool's own close finishing
     //    on its worker thread).
     let mut journalled = vec!["scripts".to_string()];
-    candidcue_lib::util::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
+    speaking_glass_lib::util::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
     for suffix in ["", "-wal", "-shm"] {
-        let name = format!("candidcue.sqlite3{suffix}");
+        let name = format!("speaking-glass.sqlite3{suffix}");
         let from = h.dir.path().join(&name);
         if from.exists() {
-            candidcue_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate database");
+            speaking_glass_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate database");
             journalled.push(name);
         }
     }
@@ -3015,7 +3095,7 @@ async fn a_restore_interrupted_mid_copy_finishes_on_the_next_launch() {
         "finishing must retire the marker"
     );
     assert!(
-        h.dir.path().join("candidcue.sqlite3").is_file(),
+        h.dir.path().join("speaking-glass.sqlite3").is_file(),
         "the restored database must be live"
     );
 
@@ -3079,9 +3159,9 @@ async fn an_unjournalled_obstruction_is_refused_on_every_attempt() {
     // would go — so nothing but the journal can tell it apart from one.
     let quarantine = pin_generation(h.dir.path(), "test-generation");
     fs::create_dir_all(&quarantine).expect("quarantine");
-    fs::write(quarantine.join("candidcue.sqlite3"), b"not a database").expect("obstruct");
+    fs::write(quarantine.join("speaking-glass.sqlite3"), b"not a database").expect("obstruct");
 
-    let live_db = h.dir.path().join("candidcue.sqlite3");
+    let live_db = h.dir.path().join("speaking-glass.sqlite3");
     #[cfg(unix)]
     let before = {
         use std::os::unix::fs::MetadataExt;
@@ -3106,7 +3186,7 @@ async fn an_unjournalled_obstruction_is_refused_on_every_attempt() {
         // And the obstruction is still exactly what it was — not adopted, not
         // overwritten, not moved aside.
         assert_eq!(
-            fs::read(quarantine.join("candidcue.sqlite3")).expect("obstruction"),
+            fs::read(quarantine.join("speaking-glass.sqlite3")).expect("obstruction"),
             b"not a database",
         );
     }
@@ -3143,7 +3223,7 @@ async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
      * manifest, so the manifest has to agree with the damage.
      */
     let garbage = vec![0u8; 4096];
-    fs::write(export_root.join("candidcue.sqlite3"), &garbage).expect("damage the database");
+    fs::write(export_root.join("speaking-glass.sqlite3"), &garbage).expect("damage the database");
     let digest = {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -3153,7 +3233,7 @@ async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
     let manifest_path = export_root.join("manifest.json");
     let mut manifest = manifest_of(&export_root);
     for file in manifest["files"].as_array_mut().expect("files") {
-        if file["path"] == serde_json::json!("candidcue.sqlite3") {
+        if file["path"] == serde_json::json!("speaking-glass.sqlite3") {
             file["sha256"] = serde_json::json!(digest);
             file["bytes"] = serde_json::json!(garbage.len());
         }
@@ -3181,7 +3261,7 @@ async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
     );
     // And the component that WAS there is back.
     assert!(
-        h.dir.path().join("candidcue.sqlite3").is_file(),
+        h.dir.path().join("speaking-glass.sqlite3").is_file(),
         "the evacuated database must have been rolled back"
     );
 }
@@ -3215,7 +3295,7 @@ async fn a_rolled_back_component_stops_being_trusted_in_quarantine() {
     // Attempt 1 fails during the DATABASE evacuation, so the scripts tree is
     // evacuated, journalled, and then rolled back.
     let quarantine = pin_generation(h.dir.path(), "test-generation");
-    fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker")).expect("obstruct");
+    fs::create_dir_all(quarantine.join("speaking-glass.sqlite3").join("blocker")).expect("obstruct");
     assert!(backup::apply_pending_restore(&h.paths).await.is_err());
 
     let marker: serde_json::Value =
@@ -3287,10 +3367,10 @@ async fn a_resume_does_not_mistake_its_own_output_for_the_users_data() {
     // moves it (see the interrupted-copy test above for why).
     let mut journalled: Vec<String> = Vec::new();
     for suffix in ["", "-wal", "-shm"] {
-        let name = format!("candidcue.sqlite3{suffix}");
+        let name = format!("speaking-glass.sqlite3{suffix}");
         let from = h.dir.path().join(&name);
         if from.exists() {
-            candidcue_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate");
+            speaking_glass_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate");
             journalled.push(name);
         }
     }
@@ -3384,7 +3464,7 @@ async fn a_rebuild_interrupted_between_its_renames_is_finished_before_sqlite_ope
     /*
      * Three renames are not one operation.
      *
-     * A rebuild moves `candidcue.sqlite3`, then `-wal`, then `-shm`. A crash
+     * A rebuild moves `speaking-glass.sqlite3`, then `-wal`, then `-shm`. A crash
      * between the first and the second leaves a WAL live beside no database —
      * and the next launch creates a fresh database at that path, whereupon
      * SQLite finds a WAL whose header belongs to a file that no longer exists
@@ -3401,9 +3481,9 @@ async fn a_rebuild_interrupted_between_its_renames_is_finished_before_sqlite_ope
     // The state the crash leaves: the database already moved, its WAL not.
     let quarantine = dir.path().join("quarantine").join("pre-rebuild-interrupted");
     fs::create_dir_all(&quarantine).expect("generation");
-    fs::write(quarantine.join("candidcue.sqlite3"), b"the moved database").expect("moved");
-    fs::write(dir.path().join("candidcue.sqlite3-wal"), b"orphaned wal").expect("orphan wal");
-    fs::write(dir.path().join("candidcue.sqlite3-shm"), b"orphaned shm").expect("orphan shm");
+    fs::write(quarantine.join("speaking-glass.sqlite3"), b"the moved database").expect("moved");
+    fs::write(dir.path().join("speaking-glass.sqlite3-wal"), b"orphaned wal").expect("orphan wal");
+    fs::write(dir.path().join("speaking-glass.sqlite3-shm"), b"orphaned shm").expect("orphan shm");
     fs::write(
         dir.path().join("rebuild-pending.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
@@ -3414,16 +3494,16 @@ async fn a_rebuild_interrupted_between_its_renames_is_finished_before_sqlite_ope
     .expect("marker");
 
     // A launch. `init` finishes the rebuild before it opens anything.
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("init");
     pool.close().await;
 
     assert!(
-        quarantine.join("candidcue.sqlite3-wal").is_file(),
+        quarantine.join("speaking-glass.sqlite3-wal").is_file(),
         "the orphaned WAL must be kept beside the database it belongs to"
     );
-    assert!(quarantine.join("candidcue.sqlite3-shm").is_file());
+    assert!(quarantine.join("speaking-glass.sqlite3-shm").is_file());
     assert_eq!(
-        fs::read(quarantine.join("candidcue.sqlite3-wal")).expect("read"),
+        fs::read(quarantine.join("speaking-glass.sqlite3-wal")).expect("read"),
         b"orphaned wal",
         "and it must be the same bytes, not a WAL SQLite made for the new database"
     );
@@ -3433,7 +3513,7 @@ async fn a_rebuild_interrupted_between_its_renames_is_finished_before_sqlite_ope
     );
     // The database that was quarantined is untouched by any of this.
     assert_eq!(
-        fs::read(quarantine.join("candidcue.sqlite3")).expect("read"),
+        fs::read(quarantine.join("speaking-glass.sqlite3")).expect("read"),
         b"the moved database"
     );
 }
@@ -3454,7 +3534,7 @@ async fn a_pre_baseline_quarantine_interrupted_between_its_renames_is_finished_t
 
     let stem = quarantine.join("pre-1.0-baseline-20260812T000000Z.sqlite3");
     fs::write(&stem, b"the moved legacy database").expect("moved");
-    fs::write(dir.path().join("candidcue.sqlite3-wal"), b"orphaned wal").expect("orphan wal");
+    fs::write(dir.path().join("speaking-glass.sqlite3-wal"), b"orphaned wal").expect("orphan wal");
     fs::write(
         dir.path().join("rebuild-pending.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
@@ -3465,7 +3545,7 @@ async fn a_pre_baseline_quarantine_interrupted_between_its_renames_is_finished_t
     )
     .expect("marker");
 
-    let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
+    let pool = speaking_glass_lib::database::init(dir.path()).await.expect("init");
     pool.close().await;
 
     let wal = quarantine.join("pre-1.0-baseline-20260812T000000Z.sqlite3-wal");
@@ -3531,7 +3611,7 @@ async fn creating_a_script_commits_every_directory_it_makes() {
     let created = repo::create_script(&h.pool, &h.paths, create_input("Chain", "# Chain"))
         .await
         .expect("create");
-    let id = candidcue_lib::scripts::ScriptId::parse(&created.id).expect("id");
+    let id = speaking_glass_lib::scripts::ScriptId::parse(&created.id).expect("id");
     assert!(h.paths.canonical_file(&id).is_file());
     assert!(h.paths.assets_dir(&id).is_dir());
     assert!(h.paths.revisions_dir(&id).is_dir());

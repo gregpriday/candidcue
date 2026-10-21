@@ -66,7 +66,7 @@ export const MIN_FONT_SIZE_PX = 24;
 /**
  * The ceiling on the size slider, given the size it is currently showing.
  *
- * 320px covers every panel CandidCue knows about at its rated distance — a
+ * 320px covers every panel Speaking Glass knows about at its rated distance — a
  * Prompter XL at 4.6m wants about 234 — and the advanced per-rig override goes
  * to 512 for the rigs that are stranger than that. The ceiling FOLLOWS a larger
  * stored value up to that same 512 rather than clamping it, because a slider

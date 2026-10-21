@@ -1,6 +1,6 @@
 # Security Policy
 
-If you think you have found a security vulnerability in CandidCue, please report
+If you think you have found a security vulnerability in Speaking Glass, please report
 it privately through GitHub:
 <https://github.com/gregpriday/candidcue/security/advisories/new>, or email
 [greg@siteorigin.com](mailto:greg@siteorigin.com). Please don't open a public
@@ -9,7 +9,7 @@ publicly.
 
 ## Supported versions
 
-CandidCue has one rolling release line, and security fixes land in the latest
+Speaking Glass has one rolling release line, and security fixes land in the latest
 release. There is no long-term support branch and no back-porting to older
 builds.
 
@@ -19,7 +19,7 @@ hold up the report.
 
 ## Scope
 
-CandidCue is a local desktop application. You write a script, it displays on a
+Speaking Glass is a local desktop application. You write a script, it displays on a
 second screen, and an on-device speech recogniser follows you as you read.
 Recognition and alignment both run on your machine. There is no account, no
 runtime API key, no analytics or crash-reporting client, and no backend of ours
@@ -34,17 +34,17 @@ whether a newer build exists — automatically unless the user turns it off, and
 on request — and an update the user chooses to install is downloaded from the
 same host and verified against a minisign public key compiled into the app
 before it is installed. Both disclose ordinary HTTPS request metadata to the
-host being contacted, including your IP address and a CandidCue User-Agent.
+host being contacted, including your IP address and a Speaking Glass User-Agent.
 Neither sends us your scripts or your audio. `docs/network-inventory.md` is the
 full inventory and the source of truth for every claim in this section. If you
-find CandidCue transmitting user content with no clear user action behind it,
+find Speaking Glass transmitting user content with no clear user action behind it,
 that is a bug and we want to hear about it.
 
 ### In scope
 
 Examples rather than an exhaustive list:
 
-- The CandidCue macOS application, its DMG, and first-party release artifacts.
+- The Speaking Glass macOS application, its DMG, and first-party release artifacts.
 - Parsing, sanitising, storing and rendering scripts, Markdown and imported
   assets.
 - The boundary between the webview and Rust: command authorisation, and the
@@ -61,10 +61,10 @@ Examples rather than an exhaustive list:
 - The speech model supply and loading path: archive and per-file digest
   verification, catalogue-limited extraction, staged installation,
   install-marker checks, resolution, and ONNX loading and inference.
-- Unintended file reads, writes or overwrites through CandidCue, including path
+- Unintended file reads, writes or overwrites through Speaking Glass, including path
   traversal and unsafe import, export or support-bundle handling.
 - Disclosure or modification of locally stored scripts, settings, session
-  records or database contents caused by a flaw in CandidCue.
+  records or database contents caused by a flaw in Speaking Glass.
 - Unauthorised microphone activation, audio capture or retention, and any
   transmission of audio, scripts or other user content that nobody asked for.
 
@@ -75,12 +75,12 @@ Examples rather than an exhaustive list:
 - Anything that needs an already-compromised machine, or root or administrator
   control.
 - Findings that only demonstrate access another process running as the same
-  macOS user already has, without exploiting CandidCue or crossing one of its
+  macOS user already has, without exploiting Speaking Glass or crossing one of its
   boundaries.
 - Local denial of service and resource exhaustion with no effect on
   confidentiality, integrity or privilege boundaries.
 - Vulnerabilities in third-party dependencies or services, unless the way
-  CandidCue ships or uses them makes the issue exploitable here.
+  Speaking Glass ships or uses them makes the issue exploitable here.
 - Volume, destructive or availability testing against distribution
   infrastructure.
 
@@ -90,7 +90,7 @@ Open a private advisory or email
 [greg@siteorigin.com](mailto:greg@siteorigin.com), and include what you can:
 
 - What the impact is, in a sentence or two.
-- The CandidCue version and the macOS version you saw it on.
+- The Speaking Glass version and the macOS version you saw it on.
 - What an attacker would need first, and a realistic scenario for using it.
 - Steps to reproduce, or a minimal proof of concept.
 - Logs or screenshots where they help. Redact scripts, recordings, database

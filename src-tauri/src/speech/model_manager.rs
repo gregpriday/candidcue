@@ -155,7 +155,7 @@ pub fn entry_for(model_id: &str) -> Result<&'static ModelEntry, AppError> {
         AppError::structured(
             "STT_MODEL_UNKNOWN",
             ErrorCategory::Validation,
-            "That speech model is not one this version of CandidCue knows about.",
+            "That speech model is not one this version of Speaking Glass knows about.",
             false,
         )
         .with_log(format!("unknown model id {model_id:?}"))
@@ -261,7 +261,7 @@ impl SpeechModelManager {
             return Err(AppError::structured(
                 "STT_MODEL_UNSUPPORTED",
                 ErrorCategory::Validation,
-                "This version of CandidCue cannot run that model yet.",
+                "This version of Speaking Glass cannot run that model yet.",
                 false,
             ));
         }

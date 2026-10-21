@@ -44,7 +44,7 @@ const ipc = vi.hoisted(() => {
         transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
         language: 'en',
       },
-      commands: { wakePhrase: 'CandidCue', wakeMode: 'strict' },
+      commands: { wakePhrase: 'Speaking Glass', wakeMode: 'strict' },
       // Owned, so neither optical migration runs underneath these cases.
       optical: { migrated: true, profiles: {}, activeRig: {}, panelMirror: {} },
     },

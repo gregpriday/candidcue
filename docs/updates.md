@@ -1,6 +1,6 @@
-# How CandidCue updates
+# How Speaking Glass updates
 
-CandidCue finds, downloads, verifies and installs its own updates, from the
+Speaking Glass finds, downloads, verifies and installs its own updates, from the
 project's update host, through `tauri-plugin-updater`. The user decides when an
 update is installed, and it is never installed during a take.
 
@@ -23,7 +23,7 @@ and architecture:
 https://updates.speakingglass.com/releases/<channel>-<os>-<arch>.json
 ```
 
-with `User-Agent: CandidCue/<version>`, `Accept: application/json` and, as any
+with `User-Agent: SpeakingGlass/<version>`, `Accept: application/json` and, as any
 request does, the user's IP address. No body, no cookie, no identifier.
 
 **It shows a notice, and waits.** When a newer version is found, a quiet card in
@@ -31,7 +31,7 @@ the bottom corner of the document window offers **Install and Restart** or
 **Later**. It is not a native dialog and it is not in the toast stack, because
 both can be drawn over the glass. **Later** hides it for that version until the
 next launch; choosing **Check for Updates…** again shows it again. A manual
-check that finds nothing says "CandidCue is up to date (<version>)", and one
+check that finds nothing says "Speaking Glass is up to date (<version>)", and one
 that fails says why in plain language. An automatic check that fails says
 nothing and runs again at the next tick.
 
@@ -50,7 +50,7 @@ restart, so the handshake an ordinary quit starts could not hold it.
   asks for an administrator password.
 - **Windows**: the plugin writes the new installer, runs the handshake in its
   `on_before_exit` hook, and hands over to the NSIS installer in `passive`
-  mode (a progress bar and no questions), which reopens CandidCue when it is
+  mode (a progress bar and no questions), which reopens Speaking Glass when it is
   done. The install call does not return.
 - **Linux**: an AppImage is replaced in place, the handshake runs, and the app
   restarts. See below for `.deb`.
@@ -150,7 +150,7 @@ off is a promise about the network kept by the code that owns the network.
 
 `updater::install_support` decides whether this copy can install over itself.
 When it cannot, the notice offers **Download**, which opens
-`https://candidcue.com` (`open_web_destination("download")`, the same named path
+`https://speakingglass.com` (`open_web_destination("download")`, the same named path
 Help › Download Latest Version uses) instead of **Install and Restart**:
 
 - **Linux `.deb` (and `.rpm`).** The plugin can install a `.deb` — with
@@ -168,13 +168,13 @@ Help › Download Latest Version uses) instead of **Install and Restart**:
 ## Turning it off
 
 **Settings › Data, privacy & updates › Check for updates automatically.** Off,
-CandidCue contacts the update host only when the user chooses Help › Check for
+Speaking Glass contacts the update host only when the user chooses Help › Check for
 Updates…. The setting is Rust-owned (`general.checkForUpdates`), so a cleared
 browser store cannot turn it back on.
 
 ## Updating by hand
 
-Download the new build from <https://candidcue.com> and replace the app.
+Download the new build from <https://speakingglass.com> and replace the app.
 Scripts, revisions, assets, settings, calibrations, the database and the
 installed speech model all live in the application data directory, not in the
 bundle, so replacing the app — by hand or through the updater — touches none of

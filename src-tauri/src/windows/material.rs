@@ -20,7 +20,7 @@
 //! ---------------------------------------------------------------------------
 //! The material is decided once, at startup, and handed to every webview in an
 //! initialization script — a global the page reads synchronously while it
-//! mounts (`window.__CANDIDCUE_WINDOW_MATERIAL__`). An IPC round trip would
+//! mounts (`window.__SPEAKING_GLASS_WINDOW_MATERIAL__`). An IPC round trip would
 //! resolve after the first frame, and that frame would show the rail opaque and
 //! then clear. Only the windows in [`MATERIAL_WINDOWS`] are given the material
 //! itself; the others read the global and ignore it.
@@ -47,7 +47,7 @@
 //! and gives it back ([`resume`]) once the window is the desk again.
 //!
 //! The escape hatch, for comparison and for anybody whose GPU disagrees with
-//! the effect: `CANDIDCUE_WINDOW_MATERIAL=none`.
+//! the effect: `SPEAKING_GLASS_WINDOW_MATERIAL=none`.
 
 use std::sync::OnceLock;
 
@@ -64,7 +64,7 @@ use super::CONTROL_LABEL;
 pub const MATERIAL_WINDOWS: [&str; 2] = [CONTROL_LABEL, PREFERENCES_LABEL];
 
 /// The environment variable that turns the material off.
-pub const OVERRIDE_ENV: &str = "CANDIDCUE_WINDOW_MATERIAL";
+pub const OVERRIDE_ENV: &str = "SPEAKING_GLASS_WINDOW_MATERIAL";
 
 
 /// A system material the page knows how to show through.
@@ -143,8 +143,8 @@ pub fn init_script(material: Option<Material>) -> String {
     // window's config and the Settings builder both ask for it there.
     let titlebar = if cfg!(target_os = "macos") { "'overlay'" } else { "null" };
     format!(
-        "window.__CANDIDCUE_WINDOW_MATERIAL__ = {value}; \
-         window.__CANDIDCUE_TITLEBAR__ = {titlebar};"
+        "window.__SPEAKING_GLASS_WINDOW_MATERIAL__ = {value}; \
+         window.__SPEAKING_GLASS_TITLEBAR__ = {titlebar};"
     )
 }
 
@@ -290,7 +290,7 @@ fn unify_titlebar<R: Runtime>(window: &Window<R>) {
             return;
         }
         let toolbar =
-            NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("candidcue.titlebar"));
+            NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("speaking-glass.titlebar"));
         ns_window.setToolbar(Some(&toolbar));
         ns_window.setToolbarStyle(NSWindowToolbarStyle::Unified);
         // The page's toolbar draws its own bottom edge, where the chrome ends.
@@ -438,19 +438,19 @@ mod tests {
     #[test]
     fn the_page_is_told_by_name_or_told_none() {
         assert!(init_script(Some(Material::Vibrancy))
-            .starts_with("window.__CANDIDCUE_WINDOW_MATERIAL__ = 'vibrancy';"));
+            .starts_with("window.__SPEAKING_GLASS_WINDOW_MATERIAL__ = 'vibrancy';"));
         assert!(init_script(Some(Material::Mica))
-            .starts_with("window.__CANDIDCUE_WINDOW_MATERIAL__ = 'mica';"));
-        assert!(init_script(None).starts_with("window.__CANDIDCUE_WINDOW_MATERIAL__ = null;"));
+            .starts_with("window.__SPEAKING_GLASS_WINDOW_MATERIAL__ = 'mica';"));
+        assert!(init_script(None).starts_with("window.__SPEAKING_GLASS_WINDOW_MATERIAL__ = null;"));
     }
 
     #[test]
     fn the_page_is_told_whether_the_titlebar_is_an_overlay() {
         let script = init_script(None);
         if cfg!(target_os = "macos") {
-            assert!(script.ends_with("window.__CANDIDCUE_TITLEBAR__ = 'overlay';"), "{script}");
+            assert!(script.ends_with("window.__SPEAKING_GLASS_TITLEBAR__ = 'overlay';"), "{script}");
         } else {
-            assert!(script.ends_with("window.__CANDIDCUE_TITLEBAR__ = null;"), "{script}");
+            assert!(script.ends_with("window.__SPEAKING_GLASS_TITLEBAR__ = null;"), "{script}");
         }
     }
 

@@ -32,8 +32,8 @@ name: Release (macOS)
 #
 # The updater signing key (`TAURI_SIGNING_PRIVATE_KEY` and its password) and
 # the R2 credentials (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-# `R2_ENDPOINT`, `CANDIDCUE_R2_BUCKET`) are shared with the other two release
-# workflows, as is the `CANDIDCUE_PUBLIC_URL` repository variable.
+# `R2_ENDPOINT`, `SPEAKING_GLASS_R2_BUCKET`) are shared with the other two release
+# workflows, as is the `SPEAKING_GLASS_PUBLIC_URL` repository variable.
 #
 # ## Read-only builds, a separate job that publishes
 #
@@ -433,7 +433,7 @@ jobs:
           # and grep refuse them under a UTF-8 locale ("illegal byte
           # sequence"). Byte semantics are what these comparisons want anyway.
           export LC_ALL=C
-          UNIVERSAL=src-tauri/target/universal-apple-darwin/release/candidcue
+          UNIVERSAL=src-tauri/target/universal-apple-darwin/release/speaking-glass
           test -f "$UNIVERSAL" || { echo "::error::no universal binary at $UNIVERSAL"; exit 1; }
           for pair in aarch64:arm64 x86_64:x86_64; do
             arch="${pair%%:*}"; slice="${pair##*:}"
@@ -449,15 +449,17 @@ jobs:
               echo "::error::$map does not declare '# Arch: $slice'"
               exit 1
             fi
-            thin="src-tauri/target/$arch-apple-darwin/release/candidcue"
+            thin="src-tauri/target/$arch-apple-darwin/release/speaking-glass"
             test -f "$thin" || { echo "::error::no linked binary at $thin"; exit 1; }
             # ld64 also records what it was linking, which binds the map to
-            # THIS program rather than a plausible neighbour.
+            # THIS program rather than a plausible neighbour. Cargo links it as
+            # `deps/speaking_glass-<hash>` (an underscore: a crate name cannot
+            # hold a hyphen) and only then copies it out as `speaking-glass`.
             linked="$(sed -n 's/^# Path: *//p' "$map" | head -1)"
             case "$(basename "${linked:-}")" in
-              candidcue*) ;;
+              speaking_glass-*|speaking-glass) ;;
               *)
-                echo "::error::$map was written linking '${linked:-nothing}', which is not CandidCue"
+                echo "::error::$map was written linking '${linked:-nothing}', which is not Speaking Glass"
                 exit 1
                 ;;
             esac
@@ -505,12 +507,12 @@ jobs:
       # contributes no object files — so a shared sherpa-onnx or eSpeak would
       # pass everything above. This is the narrow last word on that.
       #
-      # The executable is `candidcue`, lowercase — the Cargo bin name. Read it
+      # The executable is `speaking-glass`, lowercase — the Cargo bin name. Read it
       # from the bundle rather than assuming.
       - name: The packaged executable dynamically links no speech synthesis
         run: |
           set -euo pipefail
-          APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"
           EXE="$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
           otool -L "$APP/Contents/MacOS/$EXE" | tee "$RUNNER_TEMP/otool.txt"
           if grep -Eiq 'espeak|piper|sherpa|libttspico|festival' "$RUNNER_TEMP/otool.txt"; then
@@ -523,7 +525,7 @@ jobs:
       - name: Inspect the signed bundle
         run: |
           node scripts/verify-signed-bundle.mjs \
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"
 
       # What a browser downloads and what the updater installs are two more
       # artifacts, and each is asked directly. The DMG must carry its own
@@ -541,9 +543,9 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
           rm -rf "$RUNNER_TEMP/payload" && mkdir -p "$RUNNER_TEMP/payload"
           tar -xzf "$BUNDLE"/macos/*.app.tar.gz -C "$RUNNER_TEMP/payload"
-          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/payload/CandidCue.app"
-          xcrun stapler validate "$RUNNER_TEMP/payload/CandidCue.app"
-          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/payload/CandidCue.app"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/payload/Speaking Glass.app"
+          xcrun stapler validate "$RUNNER_TEMP/payload/Speaking Glass.app"
+          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/payload/Speaking Glass.app"
 
       # The bundle opens and stays open. Nothing here can hear a voice or see
       # the glass, but an app that dies at launch on a clean machine dies here
@@ -552,18 +554,18 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"
           EXE="$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
           "$APP/Contents/MacOS/$EXE" > "$RUNNER_TEMP/smoke.log" 2>&1 &
           pid=$!
           sleep 25
           if ! kill -0 "$pid" 2>/dev/null; then
-            echo "::error::CandidCue exited within 25 s of launch"
+            echo "::error::Speaking Glass exited within 25 s of launch"
             cat "$RUNNER_TEMP/smoke.log"
             exit 1
           fi
           kill "$pid" || true
-          echo "CandidCue stayed up for 25 s"
+          echo "Speaking Glass stayed up for 25 s"
 
       - name: Record what the release is made of
         run: node scripts/verify-supply-chain.mjs all
@@ -585,7 +587,7 @@ jobs:
       # `shasum -a 256` runs inside the staging step and writes SHA256SUMS.
       - name: Stage the release
         env:
-          CANDIDCUE_PUBLIC_URL: ${{ vars.CANDIDCUE_PUBLIC_URL }}
+          SPEAKING_GLASS_PUBLIC_URL: ${{ vars.SPEAKING_GLASS_PUBLIC_URL }}
         run: |
           set -euo pipefail
           TAG="v$(node scripts/version.mjs print)"
@@ -597,7 +599,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: candidcue-release-macos
+          name: speaking-glass-release-macos
           path: |
             stage/
             sbom/
@@ -607,9 +609,9 @@ jobs:
 
       # What the publish job will download, downloaded and checked here, so
       # a dry run proves the handover and not only the upload.
-      - uses: ./.github/actions/receive-candidcue
+      - uses: ./.github/actions/receive-speaking-glass
         with:
-          artifact_name: candidcue-release-macos
+          artifact_name: speaking-glass-release-macos
           path: handover-check
 
   # ------------------------------------------------------------------
@@ -626,7 +628,7 @@ jobs:
     # passing the monotonic gate against the same live feed would otherwise
     # race, and the older could land last.
     concurrency:
-      group: publish-candidcue-macos
+      group: publish-speaking-glass-macos
       cancel-in-progress: false
     # A stable tag can be made to wait for a human; a prerelease flows. See the
     # header — neither environment has to exist for this to run.
@@ -640,13 +642,13 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - uses: ./.github/actions/publish-candidcue
+      - uses: ./.github/actions/publish-speaking-glass
         with:
-          artifact_name: candidcue-release-macos
+          artifact_name: speaking-glass-release-macos
           extra_assets: 'sbom/* provenance/*'
-          public_url: ${{ vars.CANDIDCUE_PUBLIC_URL }}
+          public_url: ${{ vars.SPEAKING_GLASS_PUBLIC_URL }}
           r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           r2_endpoint: ${{ secrets.R2_ENDPOINT }}
-          r2_bucket: ${{ secrets.CANDIDCUE_R2_BUCKET }}
+          r2_bucket: ${{ secrets.SPEAKING_GLASS_R2_BUCKET }}
           github_token: ${{ github.token }}

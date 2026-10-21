@@ -41,7 +41,7 @@ let sequence = 0;
 export function initAudioTrace(): void {
   try {
     enabled =
-      localStorage.getItem('candidcue.trace.audio') === '1' ||
+      localStorage.getItem('speaking-glass.trace.audio') === '1' ||
       Boolean(import.meta.env?.DEV);
   } catch {
     enabled = Boolean(import.meta.env?.DEV);

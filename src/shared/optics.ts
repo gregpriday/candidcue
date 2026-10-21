@@ -98,7 +98,7 @@ export type AngularPreset = keyof typeof ANGULAR_PRESET_ARCMIN;
 export const ANGULAR_SOFT_FLOOR_ARCMIN = 18;
 
 /**
- * The absolute refusal point. Between the soft floor and here, CandidCue warns;
+ * The absolute refusal point. Between the soft floor and here, Speaking Glass warns;
  * below here it declines to call the profile usable at all.
  */
 export const ANGULAR_HARD_FLOOR_ARCMIN = 16;
@@ -292,7 +292,7 @@ export function inchesToMm(inches: number): number {
  * This is the number the operating system will not tell us. `PhysicalSize` from
  * the window layer is device PIXELS, not millimetres, so the physical scale has
  * to come from a hardware table, a diagonal the user typed, or a ruler held
- * against the glass. Everything angular in CandidCue rests on it.
+ * against the glass. Everything angular in Speaking Glass rests on it.
  *
  * The width and height passed here must be in the same coordinate space the
  * stage lays out in — CSS pixels — so that a scaled display resolves correctly.
@@ -443,7 +443,7 @@ export function arcminutesForFontSizePx(fontSizePx: number, context: AngularCont
  * The same size expressed in the other convention: degrees of x-height.
  *
  * Read-only. Offered so a reader who thinks in DIN 1450 / critical-print-size
- * terms can check our ladder against theirs without CandidCue having to hold
+ * terms can check our ladder against theirs without Speaking Glass having to hold
  * two sources of truth for one physical quantity.
  */
 export function xHeightDegreesForCapArcminutes(arcmin: number, metrics: FontMetrics): number | null {
@@ -597,7 +597,7 @@ export interface HardwareFitInput {
 
 /** The fit verdict's advice for an uncalibrated rig, by name (see optical-resolve's warnings). */
 export const UNCALIBRATED_FIT_ADVICE =
-  'This rig has not been calibrated, so CandidCue cannot say how large the text will look. Run the display calibration to size it by distance.';
+  'This rig has not been calibrated, so Speaking Glass cannot say how large the text will look. Run the display calibration to size it by distance.';
 
 /**
  * Can this panel, at this distance, deliver both the requested type size and a
@@ -659,7 +659,7 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
       arcminutes: null,
       achievableCharacters: null,
       columnCh: null,
-      advice: 'CandidCue could not resolve a text size for this display.',
+      advice: 'Speaking Glass could not resolve a text size for this display.',
     };
   }
 
@@ -739,8 +739,8 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
     columnCh: chForCharacters(Math.max(1, charactersAtFloor), metrics),
     advice:
       input.readingContext === 'reader'
-        ? 'This window is too small to read a script in. Make it wider — CandidCue cannot make it comfortable at this size.'
-        : 'This display is too small for the distance you are standing at. Move closer, or use a larger prompter — CandidCue cannot make this comfortable to read.',
+        ? 'This window is too small to read a script in. Make it wider — Speaking Glass cannot make it comfortable at this size.'
+        : 'This display is too small for the distance you are standing at. Move closer, or use a larger prompter — Speaking Glass cannot make this comfortable to read.',
   };
 }
 

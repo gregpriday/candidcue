@@ -211,7 +211,7 @@
     <!--
       THE ANSWER, ABOVE THE EVIDENCE (CCUX-006).
 
-      Nothing here judges the delivery, and it must stay that way: CandidCue can
+      Nothing here judges the delivery, and it must stay that way: Speaking Glass can
       report whether it heard and whether it followed, and nothing in it
       analyses how the take went. Praise would be an invented measurement.
     -->
@@ -414,7 +414,7 @@
      * fell through to the fallback and rendered in the brand accent — the same
      * warm terracotta the mode pill and the primary button use. The app's way
      * of saying "this take did not work" was indistinguishable from its way of
-     * saying "this is CandidCue". `--danger` is the real token and is defined
+     * saying "this is Speaking Glass". `--danger` is the real token and is defined
      * in both themes.
      */
     color: var(--danger);

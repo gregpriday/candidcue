@@ -17,7 +17,7 @@
  *   stapler validate                    is the notarisation ticket attached?
  *
  * Usage:
- *   node scripts/verify-signed-bundle.mjs path/to/CandidCue.app [--unsigned]
+ *   node scripts/verify-signed-bundle.mjs "path/to/Speaking Glass.app" [--unsigned]
  *
  * `--unsigned` runs the checks that do not need a signature — layout, Info.plist,
  * architectures, no model weights — and SAYS which it skipped. That is for CI,
@@ -36,7 +36,7 @@ const bundle = process.argv[2];
 const unsignedOnly = process.argv.includes('--unsigned');
 
 if (!bundle) {
-  console.error('Usage: node scripts/verify-signed-bundle.mjs <CandidCue.app> [--unsigned]');
+  console.error('Usage: node scripts/verify-signed-bundle.mjs <Speaking Glass.app> [--unsigned]');
   process.exit(1);
 }
 if (!existsSync(bundle) || !statSync(bundle).isDirectory()) {
@@ -103,8 +103,8 @@ if (!existsSync(plist)) {
 /*
  * The executable is named by Info.plist, not by the product.
  *
- * This used to be `Contents/MacOS/CandidCue`, and there is no such file: the
- * Mach-O carries the CARGO BIN name, which is `candidcue`, while `CandidCue` is
+ * This used to be `Contents/MacOS/Speaking Glass`, and there is no such file: the
+ * Mach-O carries the CARGO BIN name, which is `speaking-glass`, while `Speaking Glass` is
  * only the bundle's display name. Every release would have reported "the bundle
  * has no executable" and stopped — a gate failing on its own spelling. Reading
  * CFBundleExecutable is also the only version that survives a rename of either.
@@ -125,7 +125,7 @@ if (!bundleExecutableName) {
       `file to run: ${executableLookup.output.trim() || 'the key is absent or empty'}`,
   );
 }
-const executable = join(bundle, 'Contents/MacOS', bundleExecutableName || 'CandidCue');
+const executable = join(bundle, 'Contents/MacOS', bundleExecutableName || 'Speaking Glass');
 if (bundleExecutableName && existsSync(executable)) {
   passed.push(`executable: Contents/MacOS/${bundleExecutableName}`);
   const { ok, output } = tool('lipo', ['-archs', executable]);

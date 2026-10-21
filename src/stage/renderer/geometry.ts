@@ -8,7 +8,7 @@
  * Every number in here used to be a fraction of the viewport: a band 4% of the
  * height on each side, 38/55 `vh` of column padding, a 16 `vh` fade, and a
  * `<= 700px` breakpoint that switched all of them to a second set. On the two
- * panels CandidCue actually runs on that produced two different instruments. A
+ * panels Speaking Glass actually runs on that produced two different instruments. A
  * 4% half-band is 24px against an ~85px line on a 1024x600 Prompter — barely a
  * quarter of a line, so the display corrects constantly — and 43px against the
  * same line on a 1920x1080 panel, so it corrects half as often. Same setting,

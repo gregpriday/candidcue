@@ -39,8 +39,8 @@ you are measuring, and a moving one cannot be measured.
 
 ```bash
 # From a fresh clone, not from the tree you have been working in.
-git clone https://github.com/gregpriday/candidcue candidcue-release-check
-cd candidcue-release-check
+git clone https://github.com/gregpriday/candidcue speaking-glass-release-check
+cd speaking-glass-release-check
 git switch develop         # what is about to be released; main has not moved yet
 
 git lfs install && git lfs pull
@@ -95,11 +95,17 @@ disagree. The tag is checked against the same value in CI, before anything is
 built, because a `v1.0.0` tag on a `1.0.0-rc.2` source tree produces a signed,
 notarised artifact whose About box contradicts its own download page.
 
-**Release identity is frozen.** `com.candidcue.app` is the permanent bundle
+**Release identity is frozen.** `com.speakingglass.app` is the permanent bundle
 identifier. Changing it after a tester has installed an RC makes the next build
 a different application to macOS: new microphone permission, new data
 directory, no continuity. If it ever has to change, that is a migration with a
 plan, not a config edit.
+
+It has changed once, before anything was released: the app was CandidCue, with
+`com.candidcue.app`, until October 2026. `src-tauri/src/legacy_data.rs` is that
+migration. On the first launch it copies the old data folder into place, and an
+export or a `.candidcue` bundle from before the rename still restores and
+imports.
 
 ## 3. Write the release notes before you build
 
@@ -158,7 +164,7 @@ history and the next release merges cleanly. Leave out `--delete-branch`, which
 would delete `develop`.
 
 ```bash
-gh pr create --base main --head develop --title "Release 1.0.0-rc.2" --body "CandidCue 1.0.0-rc.2"
+gh pr create --base main --head develop --title "Release 1.0.0-rc.2" --body "Speaking Glass 1.0.0-rc.2"
 gh pr merge <number> --merge   # once CI is green on the pull request
 ```
 
@@ -169,7 +175,7 @@ git fetch origin
 git switch -C main origin/main # the release merge, and nothing after it
 pnpm version:tag v1.0.0-rc.2   # the tag must name the version the artifact reports
 pnpm notes:check v1.0.0-rc.2   # CHANGELOG.md must describe it
-git tag -s v1.0.0-rc.2 -m "CandidCue 1.0.0-rc.2"
+git tag -s v1.0.0-rc.2 -m "Speaking Glass 1.0.0-rc.2"
 git show v1.0.0-rc.2        # right commit? signed?
 git push origin v1.0.0-rc.2
 ```
@@ -185,11 +191,11 @@ The gates refuse a tag whose commit is not on `main`.
 
 ### What publishing does
 
-Each OS's `publish` job runs `.github/actions/publish-candidcue`, in this
+Each OS's `publish` job runs `.github/actions/publish-speaking-glass`, in this
 order, and stops at the first failure:
 
 1. Receives the build job's artifact and checks every file against its
-   `SHA256SUMS` (`.github/actions/receive-candidcue`, which the build job
+   `SHA256SUMS` (`.github/actions/receive-speaking-glass`, which the build job
    also runs on its own upload, so a dry run proves this handover too).
 2. Refuses a version older than what that OS's update feed already serves.
    The same version is allowed through, so a re-run can finish a publish
@@ -233,9 +239,9 @@ button; prereleases go through `release-prerelease` and flow.
 produced — the same file a user would get — and interrogate it.
 
 ```bash
-APP="/Volumes/CandidCue/CandidCue.app"      # or /Applications/CandidCue.app
-DMG="CandidCue_1.0.0-rc.2_universal.dmg"
-# `candidcue`, lowercase — the Cargo bin name. `CandidCue` is the product name
+APP="/Volumes/Speaking Glass/Speaking Glass.app"      # or /Applications/Speaking Glass.app
+DMG="SpeakingGlass_1.0.0-rc.2_universal.dmg"
+# `speaking-glass`, lowercase — the Cargo bin name. `Speaking Glass` is the product name
 # and is not what lives in MacOS/. Read it rather than typing it:
 BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
 ```
@@ -251,7 +257,7 @@ xcrun stapler validate "$DMG"
 ```
 
 Expect a Developer ID Application identity, the right Team ID,
-`com.candidcue.app`, the hardened runtime, a valid ticket, no ad-hoc signature
+`com.speakingglass.app`, the hardened runtime, a valid ticket, no ad-hoc signature
 and no unsigned nested code.
 
 **Entitlements** — compare the signed output against
@@ -366,7 +372,7 @@ The procedure:
    each affected `releases/latest-<target>-<arch>.json` (and the download
    page's `releases/latest-<os>.json`) back at the previous good version — the
    previous release's feed files are in its GitHub Actions artifact
-   (`candidcue-release-<os>`, under `stage/feed/`) — and upload them with the
+   (`speaking-glass-release-<os>`, under `stage/feed/`) — and upload them with the
    same `no-cache` header the workflow uses:
    ```bash
    wrangler r2 object put speaking-glass/releases/latest-darwin-aarch64.json \
@@ -384,7 +390,7 @@ The procedure:
    ```
    Delete the *assets* only if leaving them installable is itself the harm:
    ```bash
-   gh release delete-asset v1.0.0-rc.2 CandidCue_1.0.0-rc.2_universal.dmg
+   gh release delete-asset v1.0.0-rc.2 SpeakingGlass_1.0.0-rc.2_universal.dmg
    ```
 3. **Leave the tag.** The tag is what ties the artifact to a commit; removing it
    destroys the provenance of a build people are already running.
@@ -433,7 +439,7 @@ core journey.
 
 ## 11. Support, for the first cohort
 
-Ask for: the CandidCue version, the macOS version, the Mac model, the
+Ask for: the Speaking Glass version, the macOS version, the Mac model, the
 microphone, the display arrangement, the rig, what they expected, what
 happened, how to reproduce it, how often, whether a restart helps, and a
 support bundle **only with explicit consent**.

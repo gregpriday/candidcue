@@ -35,7 +35,7 @@ async function expectSettingsOpenedAt(page: Page, section: string): Promise<void
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const raw = localStorage.getItem('candidcue.workspace.v1');
+        const raw = localStorage.getItem('speaking-glass.workspace.v1');
         return raw === null
           ? null
           : (JSON.parse(raw) as { settingsSection?: string }).settingsSection;
@@ -73,8 +73,8 @@ async function expectSettingsOpenedAt(page: Page, section: string): Promise<void
  *     so a fix-link must leave the welcomed flag alone.
  */
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
-const WELCOMED_KEY = 'candidcue.welcomed.v1';
+const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
+const WELCOMED_KEY = 'speaking-glass.welcomed.v1';
 
 /** The prompter panel in the shim's fixed display fixtures. */
 const PROMPTER_DISPLAY = 'Teleprompter Display';
@@ -128,7 +128,7 @@ test('a first launch reports the microphone as setup, not as a fault, and resolv
   // this row used to name while Present filled the desk monitor (#302).
   await expect(pill(displayRow(page))).toHaveText('Automatic');
   await expect(pill(displayRow(page))).toHaveClass(hasToken('neutral'));
-  await expect(displayRow(page)).toContainText(`Takes open on ${DESK_DISPLAY}, where the CandidCue window is.`);
+  await expect(displayRow(page)).toContainText(`Takes open on ${DESK_DISPLAY}, where the Speaking Glass window is.`);
   await expect(displayRow(page)).not.toContainText(PROMPTER_DISPLAY);
   await expect(displayRow(page)).not.toHaveClass(hasToken('attention'));
 
@@ -325,7 +325,7 @@ test('a pinned display that is not connected warns and names where the take will
   // Named, not merely flagged: Present falls back to the monitor this window
   // is on, so that is where the prompt would actually appear — not the
   // external display this row used to name (#302).
-  await expect(row).toContainText(`takes open on ${DESK_DISPLAY}, where the CandidCue window is`);
+  await expect(row).toContainText(`takes open on ${DESK_DISPLAY}, where the Speaking Glass window is`);
   await expect(row).not.toContainText(PROMPTER_DISPLAY);
 
   await row.getByRole('button', { name: 'Fix display' }).click();
@@ -348,7 +348,7 @@ test('the display row follows the window when it is dragged to another panel', a
   await installTauriShim(page, { windowDisplay: 'dsp-e2e-builtin' });
   await page.goto('/control.html');
 
-  await expect(displayRow(page)).toContainText(`Takes open on ${DESK_DISPLAY}, where the CandidCue window is.`);
+  await expect(displayRow(page)).toContainText(`Takes open on ${DESK_DISPLAY}, where the Speaking Glass window is.`);
 
   await page.evaluate(() => window.__E2E__.setWindowDisplay('dsp-e2e-prompter'));
   // Re-sent until it lands: the event is only heard once the row's listener
@@ -356,7 +356,7 @@ test('the display row follows the window when it is dragged to another panel', a
   await expect(async () => {
     await page.evaluate(() => window.__E2E__.emit('app://device-or-display-change', null));
     await expect(displayRow(page)).toContainText(
-      `Takes open on ${PROMPTER_DISPLAY}, where the CandidCue window is.`,
+      `Takes open on ${PROMPTER_DISPLAY}, where the Speaking Glass window is.`,
       { timeout: 1000 },
     );
   }).toPass();
@@ -427,7 +427,7 @@ test('a rejecting display enumeration leaves welcome usable and still dismissibl
  * Rust answers `Ok([])` whenever `available_monitors()` succeeds and finds no
  * panel, and the row has to treat that as "cannot say" rather than as a normal
  * list. Without this test, deleting the empty-list half of that branch renders
- * "Automatic — Takes open on the display the CandidCue window is on" about a machine that
+ * "Automatic — Takes open on the display the Speaking Glass window is on" about a machine that
  * reported no displays at all, and every other spec here stays green.
  */
 test('a successful but empty enumeration is reported as unknown, not as automatic', async ({

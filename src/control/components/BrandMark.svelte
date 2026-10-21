@@ -1,5 +1,5 @@
 <!--
-  The CandidCue mark, in the page.
+  The Speaking Glass mark, in the page.
 
   The app icon's mark: a pane of teleprompter glass in perspective, the line
   being read, and the two cue triangles the stage draws beside that line,
@@ -15,7 +15,7 @@
   with the theme is no longer the app's icon. The tile matches the small icon
   drawings' flat fill (`sizes/icon-32.svg`), which a unit test holds it to.
 
-  Decorative wherever it appears: the word "CandidCue" always sits beside it,
+  Decorative wherever it appears: the word "Speaking Glass" always sits beside it,
   so it is hidden from assistive technology rather than given a second name.
 -->
 <script lang="ts">

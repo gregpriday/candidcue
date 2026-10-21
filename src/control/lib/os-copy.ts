@@ -32,9 +32,9 @@
  *     an administrator.
  *   - There is no TCC-style cache to clear by relaunching. A microphone Windows
  *     allows that still will not open is in use or unplugged, and the honest
- *     advice is to look at it, not to reopen CandidCue.
+ *     advice is to look at it, not to reopen Speaking Glass.
  *   - The app is called Settings, and this column says WINDOWS Settings,
- *     because CandidCue has a Settings window of its own and "Open Settings"
+ *     because Speaking Glass has a Settings window of its own and "Open Settings"
  *     beside it would read as that.
  *   - "this PC" is Windows' own name for the machine (File Explorer's This PC,
  *     Settings' Rename this PC).
@@ -62,7 +62,7 @@ export interface OsCopy {
   defaultInput: string;
   /** Ending the application, at the start of a sentence: "Quit and reopen…". */
   quit: string;
-  /** The same verb mid-sentence: "…when you quit and reopen CandidCue." */
+  /** The same verb mid-sentence: "…when you quit and reopen Speaking Glass." */
   quitLower: string;
   /** Recovery: the window would not close, so say the platform's other way out. */
   quitFailed: string;
@@ -130,7 +130,7 @@ const MACOS: OsCopy = {
   defaultInput: "your Mac's default input",
   quit: 'Quit',
   quitLower: 'quit',
-  quitFailed: 'CandidCue didn’t quit. Choose CandidCue › Quit CandidCue, or press ⌘Q.',
+  quitFailed: 'Speaking Glass didn’t quit. Choose Speaking Glass › Quit Speaking Glass, or press ⌘Q.',
   revealInFileManager: 'Reveal in Finder',
   revealScriptFailed: 'Couldn’t reveal this script in Finder.',
   windowFocusFailed: 'That window could not be brought forward. Switch to it from the Dock or the taskbar.',
@@ -145,36 +145,36 @@ const MACOS: OsCopy = {
   micRequestPending: 'Answer the macOS prompt to continue.',
   micRestrictedTitle: 'Microphone access is managed on this Mac',
   micRestrictedText:
-    'Screen Time or a device management profile is blocking the microphone, so the setting may not be yours to change. Ask whoever manages this Mac to allow CandidCue.',
-  micAllowedText: 'CandidCue is allowed in System Settings.',
-  micAllowedButRefusedTitle: 'Quit and reopen CandidCue',
+    'Screen Time or a device management profile is blocking the microphone, so the setting may not be yours to change. Ask whoever manages this Mac to allow Speaking Glass.',
+  micAllowedText: 'Speaking Glass is allowed in System Settings.',
+  micAllowedButRefusedTitle: 'Quit and reopen Speaking Glass',
   micAllowedButRefusedText:
-    'System Settings allows CandidCue, but macOS has not handed this window the microphone yet. It will once CandidCue restarts.',
-  micAllowedButRefusedAnnouncement: 'Quit and reopen CandidCue to use the microphone.',
-  micDeniedText: 'macOS will not ask again. Turn on CandidCue in System Settings, then choose Try again.',
-  micDeniedRetryText: 'If it is already on there, quit and reopen CandidCue.',
+    'System Settings allows Speaking Glass, but macOS has not handed this window the microphone yet. It will once Speaking Glass restarts.',
+  micAllowedButRefusedAnnouncement: 'Quit and reopen Speaking Glass to use the microphone.',
+  micDeniedText: 'macOS will not ask again. Turn on Speaking Glass in System Settings, then choose Try again.',
+  micDeniedRetryText: 'If it is already on there, quit and reopen Speaking Glass.',
 
   micRecoveryNote:
-    'The switch is in Privacy & Security → Microphone. If CandidCue is already on there, quit and reopen CandidCue.',
+    'The switch is in Privacy & Security → Microphone. If Speaking Glass is already on there, quit and reopen Speaking Glass.',
   micRefusedToast:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. ' +
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. ' +
     'Allow it in System Settings, then choose Try again in the take controls.',
-  micRefusedStatusDetail: 'Allow CandidCue in System Settings, then choose Try again.',
-  micRefusedOutcomeDetail: 'This Mac did not allow CandidCue to use the microphone, so it could not follow your voice.',
+  micRefusedStatusDetail: 'Allow Speaking Glass in System Settings, then choose Try again.',
+  micRefusedOutcomeDetail: 'This Mac did not allow Speaking Glass to use the microphone, so it could not follow your voice.',
   micRefusedOutcomeSuggestion:
-    'Allow CandidCue in System Settings → Privacy & Security → Microphone before the next take.',
+    'Allow Speaking Glass in System Settings → Privacy & Security → Microphone before the next take.',
   micPermissionDeniedError:
-    'CandidCue is not allowed to use the microphone. Allow it in System Settings → Privacy & Security → Microphone, then try again.',
+    'Speaking Glass is not allowed to use the microphone. Allow it in System Settings → Privacy & Security → Microphone, then try again.',
 
   micDeniedFinding:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen CandidCue.',
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen Speaking Glass.',
   micRestrictedFinding:
     'Microphone access is restricted on this Mac, by Screen Time or a device management profile, so this take cannot follow your voice.',
   micPromptFinding:
-    'CandidCue has not been allowed to use the microphone yet. Allow it now, so your Mac asks here rather than over the prompter.',
+    'Speaking Glass has not been allowed to use the microphone yet. Allow it now, so your Mac asks here rather than over the prompter.',
   micPromptAnnouncement: 'Waiting for your answer to the macOS microphone prompt.',
   micPromptWaiting: 'Waiting for macOS…',
-  micPromptNote: 'Answer the macOS prompt to continue. CandidCue checks again as soon as you do.',
+  micPromptNote: 'Answer the macOS prompt to continue. Speaking Glass checks again as soon as you do.',
 };
 
 /*
@@ -184,14 +184,14 @@ const MACOS: OsCopy = {
  * question" rather than of an answer the user is waiting to give.
  */
 const PROMPT_FINDING_WITHOUT_A_PROMPT =
-  'CandidCue has not been allowed to use the microphone yet. Allow it now, so any question about it comes here rather than over the prompter.';
+  'Speaking Glass has not been allowed to use the microphone yet. Allow it now, so any question about it comes here rather than over the prompter.';
 
 const WINDOWS: OsCopy = {
   thisDevice: 'this PC',
   defaultInput: "your PC's default input",
   quit: 'Exit',
   quitLower: 'exit',
-  quitFailed: 'CandidCue didn’t close. Choose File › Exit, or press Alt+F4.',
+  quitFailed: 'Speaking Glass didn’t close. Choose File › Exit, or press Alt+F4.',
   revealInFileManager: 'Show in File Explorer',
   revealScriptFailed: 'Couldn’t show this script in File Explorer.',
   windowFocusFailed: 'That window could not be brought forward. Switch to it from the taskbar.',
@@ -221,24 +221,24 @@ const WINDOWS: OsCopy = {
   micRecoveryNote:
     'The switches are in Privacy & security → Microphone. If both are already on, check the microphone in System → Sound.',
   micRefusedToast:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. ' +
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. ' +
     'Allow apps to use the microphone in Windows Settings, then choose Try again in the take controls.',
   micRefusedStatusDetail: 'Allow apps to use the microphone in Windows Settings, then choose Try again.',
   micRefusedOutcomeDetail:
-    'Windows did not allow CandidCue to use the microphone, so it could not follow your voice.',
+    'Windows did not allow Speaking Glass to use the microphone, so it could not follow your voice.',
   micRefusedOutcomeSuggestion:
     'Allow apps to use the microphone in Windows Settings → Privacy & security → Microphone before the next take.',
   micPermissionDeniedError:
-    'CandidCue is not allowed to use the microphone. Allow apps to use it in Windows Settings → Privacy & security → Microphone, then try again.',
+    'Speaking Glass is not allowed to use the microphone. Allow apps to use it in Windows Settings → Privacy & security → Microphone, then try again.',
 
   micDeniedFinding:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. In Windows Settings → Privacy & security → Microphone, turn on “Let apps access your microphone” and “Let desktop apps access your microphone”, then try again.',
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. In Windows Settings → Privacy & security → Microphone, turn on “Let apps access your microphone” and “Let desktop apps access your microphone”, then try again.',
   micRestrictedFinding:
     'Microphone access is off for this whole PC, by its device-wide switch or a policy, so this take cannot follow your voice.',
   micPromptFinding: PROMPT_FINDING_WITHOUT_A_PROMPT,
   micPromptAnnouncement: 'Opening the microphone.',
   micPromptWaiting: 'Opening the microphone…',
-  micPromptNote: 'CandidCue checks again as soon as it opens.',
+  micPromptNote: 'Speaking Glass checks again as soon as it opens.',
 };
 
 const LINUX: OsCopy = {
@@ -246,53 +246,53 @@ const LINUX: OsCopy = {
   defaultInput: "your computer's default input",
   quit: 'Exit',
   quitLower: 'exit',
-  quitFailed: 'CandidCue didn’t close. Choose File › Exit, or close its window.',
+  quitFailed: 'Speaking Glass didn’t close. Choose File › Exit, or close its window.',
   revealInFileManager: 'Show in File Manager',
   revealScriptFailed: 'Couldn’t show this script in the file manager.',
   windowFocusFailed: 'That window could not be brought forward. Switch to it from the Dock or the taskbar.',
 
   openMicrophoneSettings: 'Open system settings',
   openMicrophoneSettingsFailed:
-    'Your system settings could not be opened. Open them yourself and allow CandidCue to use the microphone.',
+    'Your system settings could not be opened. Open them yourself and allow Speaking Glass to use the microphone.',
   microphoneSettingsPath: null,
 
   micFollowsSystemInput: 'Follows the input chosen in your system settings.',
   micAskIntro: 'Voice following needs the microphone.',
-  micRequestPending: 'If your system asks, allow CandidCue to use the microphone.',
+  micRequestPending: 'If your system asks, allow Speaking Glass to use the microphone.',
   micRestrictedTitle: 'Microphone access is managed on this computer',
   micRestrictedText:
-    'A system policy is blocking the microphone, so the setting may not be yours to change. Ask whoever manages this computer to allow CandidCue.',
-  micAllowedText: 'Your system allows CandidCue to use the microphone.',
+    'A system policy is blocking the microphone, so the setting may not be yours to change. Ask whoever manages this computer to allow Speaking Glass.',
+  micAllowedText: 'Your system allows Speaking Glass to use the microphone.',
   micAllowedButRefusedTitle: 'The microphone could not be opened',
   micAllowedButRefusedText:
-    'Your system allows CandidCue to use the microphone, but it did not open. Another app may be using it, or it may be unplugged. Check your sound settings, then try again.',
+    'Your system allows Speaking Glass to use the microphone, but it did not open. Another app may be using it, or it may be unplugged. Check your sound settings, then try again.',
   micAllowedButRefusedAnnouncement: 'The microphone could not be opened. Check your sound settings, then try again.',
   micDeniedText:
-    'CandidCue is not allowed to use the microphone. Allow it in your system settings, then choose Try again.',
+    'Speaking Glass is not allowed to use the microphone. Allow it in your system settings, then choose Try again.',
   micDeniedRetryText:
     'If it is already allowed, another app may be using the microphone, or it may be unplugged.',
 
   micRecoveryNote:
-    'If CandidCue is already allowed, check that the microphone is connected and not in use by another app.',
+    'If Speaking Glass is already allowed, check that the microphone is connected and not in use by another app.',
   micRefusedToast:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. ' +
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. ' +
     'Allow it in your system settings, then choose Try again in the take controls.',
-  micRefusedStatusDetail: 'Allow CandidCue in your system settings, then choose Try again.',
+  micRefusedStatusDetail: 'Allow Speaking Glass in your system settings, then choose Try again.',
   micRefusedOutcomeDetail:
-    'This computer did not allow CandidCue to use the microphone, so it could not follow your voice.',
+    'This computer did not allow Speaking Glass to use the microphone, so it could not follow your voice.',
   micRefusedOutcomeSuggestion:
-    'Allow CandidCue to use the microphone in your system settings before the next take.',
+    'Allow Speaking Glass to use the microphone in your system settings before the next take.',
   micPermissionDeniedError:
-    'CandidCue is not allowed to use the microphone. Allow it in your system settings, then try again.',
+    'Speaking Glass is not allowed to use the microphone. Allow it in your system settings, then try again.',
 
   micDeniedFinding:
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in your system settings, then try again.',
+    'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. Allow it in your system settings, then try again.',
   micRestrictedFinding:
     'Microphone access is restricted on this computer by a system policy, so this take cannot follow your voice.',
   micPromptFinding: PROMPT_FINDING_WITHOUT_A_PROMPT,
   micPromptAnnouncement: 'Waiting for the microphone.',
   micPromptWaiting: 'Waiting…',
-  micPromptNote: 'If your system asks, allow the microphone. CandidCue checks again as soon as it can.',
+  micPromptNote: 'If your system asks, allow the microphone. Speaking Glass checks again as soon as it can.',
 };
 
 const OS_COPY: Record<Platform, OsCopy> = { macos: MACOS, windows: WINDOWS, linux: LINUX };

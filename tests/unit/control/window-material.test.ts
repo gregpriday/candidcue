@@ -19,19 +19,19 @@ const root = () => ({ dataset: {} as Record<string, string | undefined> }) as un
 
 describe('the material Rust reports', () => {
   it('names the two materials the page has rules for', () => {
-    expect(windowMaterial({ __CANDIDCUE_WINDOW_MATERIAL__: 'vibrancy' })).toBe('vibrancy');
-    expect(windowMaterial({ __CANDIDCUE_WINDOW_MATERIAL__: 'mica' })).toBe('mica');
+    expect(windowMaterial({ __SPEAKING_GLASS_WINDOW_MATERIAL__: 'vibrancy' })).toBe('vibrancy');
+    expect(windowMaterial({ __SPEAKING_GLASS_WINDOW_MATERIAL__: 'mica' })).toBe('mica');
   });
 
   it('reads anything else — none, a plain browser, a name it does not know — as the opaque desk', () => {
-    expect(windowMaterial({ __CANDIDCUE_WINDOW_MATERIAL__: null })).toBeNull();
+    expect(windowMaterial({ __SPEAKING_GLASS_WINDOW_MATERIAL__: null })).toBeNull();
     expect(windowMaterial({})).toBeNull();
-    expect(windowMaterial({ __CANDIDCUE_WINDOW_MATERIAL__: 'acrylic' })).toBeNull();
+    expect(windowMaterial({ __SPEAKING_GLASS_WINDOW_MATERIAL__: 'acrylic' })).toBeNull();
   });
 
   it('knows the titlebar is an overlay only when told', () => {
-    expect(windowTitlebar({ __CANDIDCUE_TITLEBAR__: 'overlay' })).toBe('overlay');
-    expect(windowTitlebar({ __CANDIDCUE_TITLEBAR__: null })).toBeNull();
+    expect(windowTitlebar({ __SPEAKING_GLASS_TITLEBAR__: 'overlay' })).toBe('overlay');
+    expect(windowTitlebar({ __SPEAKING_GLASS_TITLEBAR__: null })).toBeNull();
     expect(windowTitlebar({})).toBeNull();
   });
 });

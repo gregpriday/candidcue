@@ -3,7 +3,7 @@
  *
  * Three things were untrue at once, and all three read as reassurance:
  *
- *  - "CandidCue checks for software updates." It did not: `check_for_update`
+ *  - "Speaking Glass checks for software updates." It did not: `check_for_update`
  *    and `install_update` returned NOT_IMPLEMENTED behind a button. It does
  *    now (docs/updates.md, #191), so the rule has turned round — the section
  *    must say exactly what the check is (which host, when, what it sends), how
@@ -75,7 +75,7 @@ const settingsSource = readFileSync(
  * comment anywhere in a Svelte file, so it goes everywhere. `/* *\/` and `//`
  * are comments only inside the `<script>` block; in markup they are ordinary
  * text, and stripping them there would delete rendered copy — so a paragraph
- * reading `// CandidCue checks for updates daily.` would become invisible to
+ * reading `// Speaking Glass checks for updates daily.` would become invisible to
  * every ban below. Narrowing JS-comment removal to the script region closes
  * that. The `renders comment-shaped copy` test at the bottom guards it.
  */
@@ -126,7 +126,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
 
   it('describes the update check rather than hiding or overstating it', () => {
     /*
-     * The section used to be held to "CandidCue never checks for updates".
+     * The section used to be held to "Speaking Glass never checks for updates".
      * That became false the day the updater shipped (#191), and a privacy
      * screen that kept saying it would be the worst kind of wrong: reassuring.
      * So the rule is now positive. The section must NAME the host a check
@@ -161,7 +161,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
 
   it('says when the network is used, update checks included', () => {
     const network = privacySection.match(
-      /When CandidCue uses the network<\/h3>\s*<p class="privacy-body">([^<]*)/,
+      /When Speaking Glass uses the network<\/h3>\s*<p class="privacy-body">([^<]*)/,
     );
     expect(network, 'the network paragraph could not be located').not.toBeNull();
     const text = network?.[1] ?? '';
@@ -170,11 +170,11 @@ describe('#180 the privacy section describes what the app actually does', () => 
     expect(text, 'and an exclusive claim must not survive beside it').not.toMatch(/^\s*Only\b/);
   });
 
-  it('does not invent a CandidCue server to be private from', () => {
-    // The claim "your data is not sent to CandidCue servers" is technically
-    // true and completely hollow: there are no CandidCue servers. Reassurance
+  it('does not invent a Speaking Glass server to be private from', () => {
+    // The claim "your data is not sent to Speaking Glass servers" is technically
+    // true and completely hollow: there are no Speaking Glass servers. Reassurance
     // about a thing that does not exist is not a privacy disclosure.
-    expect(privacySection).not.toMatch(/CandidCue servers/i);
+    expect(privacySection).not.toMatch(/Speaking Glass servers/i);
   });
 
   it('discloses the request the app really does make', () => {
@@ -273,7 +273,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
   it('still says what is kept on this device, and that audio is not', () => {
     /*
      * Removing a control is not permission to say less. The section has to
-     * name what CandidCue really keeps locally — scripts, their saved
+     * name what Speaking Glass really keeps locally — scripts, their saved
      * versions, settings, the session history Editor reads "start where the
      * last take ended" from — and still make the one claim about audio that
      * the retention row's hint used to make in passing.

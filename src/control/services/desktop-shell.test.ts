@@ -43,14 +43,14 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
 describe('composeWindowTitle', () => {
   it('names the open script, document first', () => {
     // The task switcher truncates from the RIGHT, so the document has to come
-    // before the product or a long title leaves "CandidCue" and nothing useful.
+    // before the product or a long title leaves "Speaking Glass" and nothing useful.
     expect(
       composeWindowTitle({
         routeName: 'editor',
         scriptTitle: 'Launch keynote',
         sessionActive: false,
       }),
-    ).toBe('Launch keynote — CandidCue');
+    ).toBe('Launch keynote — Speaking Glass');
   });
 
   it('names the take while one is running', () => {
@@ -69,24 +69,24 @@ describe('composeWindowTitle', () => {
         libraryView,
         sessionActive: false,
       });
-    expect(at('all')).toBe('Library — CandidCue');
-    expect(at('recent')).toBe('Recent — CandidCue');
-    expect(at('trash')).toBe('Trash — CandidCue');
+    expect(at('all')).toBe('Library — Speaking Glass');
+    expect(at('recent')).toBe('Recent — Speaking Glass');
+    expect(at('trash')).toBe('Trash — Speaking Glass');
   });
 
   it('falls back to the product name with no script open', () => {
     expect(
       composeWindowTitle({ routeName: 'editor', scriptTitle: null, sessionActive: false }),
-    ).toBe('CandidCue');
+    ).toBe('Speaking Glass');
     expect(composeWindowTitle({ routeName: 'nonsense', scriptTitle: null, sessionActive: false })).toBe(
-      'CandidCue',
+      'Speaking Glass',
     );
   });
 
   it('uses the platform-standard Settings title', () => {
     expect(
       composeWindowTitle({ routeName: 'settings', scriptTitle: null, sessionActive: false }),
-    ).toBe('CandidCue Settings');
+    ).toBe('Speaking Glass Settings');
   });
 });
 
@@ -136,7 +136,7 @@ describe('pushing state outside a Tauri runtime', () => {
     // and it is what keeps browser dev and the E2E shim working.
     return Promise.all([
       pushMenuState(context()),
-      pushWindowTitle('Anything — CandidCue', false),
+      pushWindowTitle('Anything — Speaking Glass', false),
     ]).then(() => {
       expect(calls).toEqual([]);
     });

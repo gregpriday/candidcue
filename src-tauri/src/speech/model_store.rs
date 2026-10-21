@@ -16,7 +16,7 @@
 //! ---------------------------------------------------------------------------
 //! THE SEAL, AND WHY EXISTENCE IS NOT ENOUGH
 //! ---------------------------------------------------------------------------
-//! A model directory is preferred only when it carries `.candidcue-model.json`
+//! A model directory is preferred only when it carries `.speaking-glass-model.json`
 //! naming the archive digest this build's catalogue expects. Nothing else
 //! counts — not "the files are there", not "the rename succeeded".
 //!
@@ -53,7 +53,7 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogue::{ModelEntry, ATTRIBUTION_FILE};
 
-/// Serialises every test that reads or writes `CANDIDCUE_MODELS_DIR`.
+/// Serialises every test that reads or writes `SPEAKING_GLASS_MODELS_DIR`.
 ///
 /// At module scope rather than inside `mod tests` because `model_download`'s
 /// tests call `resolve` too, and a lock private to this file's test module
@@ -70,7 +70,7 @@ pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Marks a model directory as installed AND proven loadable.
-pub const SEAL_FILE: &str = ".candidcue-model.json";
+pub const SEAL_FILE: &str = ".speaking-glass-model.json";
 
 /// Bumped when the seal's shape changes. An unreadable or older seal is not an
 /// error — it is simply not a seal, so the directory is re-installed.
@@ -125,7 +125,7 @@ pub enum ModelSource {
     Downloaded,
     /// A Tauri resource. Stock builds ship none; a custom build may.
     Bundled,
-    /// `CANDIDCUE_MODELS_DIR`, a development override.
+    /// `SPEAKING_GLASS_MODELS_DIR`, a development override.
     Override,
 }
 
@@ -288,7 +288,7 @@ pub fn damaged_download(app_data_dir: &Path, model: &ModelEntry) -> Option<Strin
 
 /// The development override, if one is set and usable.
 ///
-/// `CANDIDCUE_MODELS_DIR` is the same variable `scripts/fetch-stt-model.sh`
+/// `SPEAKING_GLASS_MODELS_DIR` is the same variable `scripts/fetch-stt-model.sh`
 /// already honours, pointing at the same layout. It exists because emptying
 /// `bundle.resources` also stopped `tauri dev` from seeing a model fetched into
 /// the source tree — Tauri only stages resources a build declares — and a
@@ -303,7 +303,7 @@ pub fn damaged_download(app_data_dir: &Path, model: &ModelEntry) -> Option<Strin
 /// still shape-checked and its graphs walked, so a stale, half-extracted or
 /// damaged directory is skipped rather than loaded.
 fn override_dir(model: &ModelEntry) -> Option<PathBuf> {
-    let root = std::env::var_os("CANDIDCUE_MODELS_DIR")?;
+    let root = std::env::var_os("SPEAKING_GLASS_MODELS_DIR")?;
     let dir = model.install_path(Path::new(&root));
     is_usable(&dir, model, false).then_some(dir)
 }
@@ -311,7 +311,7 @@ fn override_dir(model: &ModelEntry) -> Option<PathBuf> {
 /// Find this model, preferring what this machine downloaded.
 ///
 /// Order is deliberate:
-///   1. `CANDIDCUE_MODELS_DIR` — a developer saying explicitly where to look.
+///   1. `SPEAKING_GLASS_MODELS_DIR` — a developer saying explicitly where to look.
 ///   2. The download in app data, sealed. What a user's machine actually has.
 ///   3. A bundled resource, if this build shipped one. Stock builds do not.
 ///
@@ -327,7 +327,7 @@ pub fn resolve(
         tracing::info!(
             model = %model.id,
             dir = %dir.display(),
-            "using CANDIDCUE_MODELS_DIR override for the speech model"
+            "using SPEAKING_GLASS_MODELS_DIR override for the speech model"
         );
         return Some(ResolvedModel {
             dir,
@@ -660,7 +660,7 @@ mod tests {
     use super::*;
     use crate::speech::catalogue;
 
-    /// Sets `CANDIDCUE_MODELS_DIR` and puts back whatever was there before.
+    /// Sets `SPEAKING_GLASS_MODELS_DIR` and puts back whatever was there before.
     ///
     /// Restoring on DROP rather than at the end of the test body: a panic
     /// between set and unset would otherwise leave the variable set for the
@@ -673,8 +673,8 @@ mod tests {
 
     impl EnvOverride {
         fn set(value: &Path) -> Self {
-            let previous = std::env::var_os("CANDIDCUE_MODELS_DIR");
-            std::env::set_var("CANDIDCUE_MODELS_DIR", value);
+            let previous = std::env::var_os("SPEAKING_GLASS_MODELS_DIR");
+            std::env::set_var("SPEAKING_GLASS_MODELS_DIR", value);
             Self { previous }
         }
     }
@@ -682,8 +682,8 @@ mod tests {
     impl Drop for EnvOverride {
         fn drop(&mut self) {
             match self.previous.take() {
-                Some(value) => std::env::set_var("CANDIDCUE_MODELS_DIR", value),
-                None => std::env::remove_var("CANDIDCUE_MODELS_DIR"),
+                Some(value) => std::env::set_var("SPEAKING_GLASS_MODELS_DIR", value),
+                None => std::env::remove_var("SPEAKING_GLASS_MODELS_DIR"),
             }
         }
     }

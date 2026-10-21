@@ -32,7 +32,7 @@ afterAll(() => {
 });
 
 function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'candidcue-advisories-'));
+  const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-advisories-'));
   workspaces.push(dir);
   return dir;
 }

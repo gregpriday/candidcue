@@ -86,7 +86,7 @@ const READ_START_MS = 1000;
 const READ_MS_PER_CHAR = 55;
 /**
  * A notice that needs longer than this to read is not a receipt any more; it
- * is instructions ("Quit and reopen CandidCue to apply it — nothing has
+ * is instructions ("Quit and reopen Speaking Glass to apply it — nothing has
  * changed yet"), and instructions that vanish on a timer are WCAG 2.2.1's
  * failure exactly. Past it, a notice stays until it is dismissed.
  */
@@ -117,7 +117,7 @@ export function toastLifetimeMs(
    * During a take a notice that stays is one more card over the script, and
    * the presenter is a metre from the desk; there, a notice gets its reading
    * time and goes. Elsewhere a long one stays, and so does an informational
-   * one that explains itself — "CandidCue imports Markdown and plain text.
+   * one that explains itself — "Speaking Glass imports Markdown and plain text.
    * notes.docx and 2 more were not imported." is the only place that list
    * exists. A short success stays timed: its result is on screen already.
    */

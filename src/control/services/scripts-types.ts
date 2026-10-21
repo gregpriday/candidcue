@@ -74,7 +74,7 @@ export interface ImportResult {
 
 /**
  * Twin of Rust `ExportRequest`. `format` must be one of the three strings the
- * Rust matcher accepts — `candidcue` is the file EXTENSION, not a format name.
+ * Rust matcher accepts — `speakingglass` is the file EXTENSION, not a format name.
  *
  * As with imports there is no destination: Rust runs the save dialog and writes
  * the file in one operation. The old shape let the webview name any absolute

@@ -31,6 +31,7 @@
  * unrecognised falls back to the default rather than being kept.
  */
 import { get, writable, type Readable } from 'svelte/store';
+import { adoptLegacyValue } from '../lib/legacy-storage';
 
 /*
  * NOT shared between windows, and not watched for `storage` events.
@@ -54,7 +55,7 @@ import { get, writable, type Readable } from 'svelte/store';
  * fields THIS window changed, merged over whatever is stored at the moment it
  * lands — see `writeNow`. The in-memory copy is still never refreshed from it.
  */
-const STORAGE_KEY = 'candidcue.workspace.v1';
+const STORAGE_KEY = 'speaking-glass.workspace.v1';
 
 /** Which panes each route can show, and the range each may be dragged to. */
 export const PANE_LIMITS = {
@@ -262,6 +263,7 @@ function load(): WorkspaceState {
   try {
     const store = storage();
     if (store === null) return { ...DEFAULT_WORKSPACE };
+    adoptLegacyValue(store, STORAGE_KEY);
     return parseWorkspace(store.getItem(STORAGE_KEY));
   } catch {
     // A `localStorage` that throws on read is a webview with storage disabled

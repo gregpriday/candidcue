@@ -149,8 +149,8 @@
   /** The fallback, named — or described, when the OS could not name it. */
   const windowPanel = $derived(
     windowDisplay === null
-      ? 'the display the CandidCue window is on'
-      : `${displayName(windowDisplay)}, where the CandidCue window is`,
+      ? 'the display the Speaking Glass window is on'
+      : `${displayName(windowDisplay)}, where the Speaking Glass window is`,
   );
 
   interface RowState {
@@ -172,7 +172,7 @@
           // cleared when the grant is revoked in System Settings or when the
           // device is unplugged, so it cannot support a claim about right now.
           // A status capsule reads as current state, so "Access allowed" was
-          // the same overclaim as "CandidCue can hear you" in the more
+          // the same overclaim as "Speaking Glass can hear you" in the more
           // prominent of the two places — and both would have been the
           // confident wrong answer in exactly the cases somebody most needs a
           // true one.
@@ -335,13 +335,13 @@
       };
     }
     // A failed enumeration and an empty one are one state on this screen: both
-    // mean CandidCue cannot say which panel the prompt will open on, and the
+    // mean Speaking Glass cannot say which panel the prompt will open on, and the
     // fix for both is the same screen.
     if (probe.kind === 'failed' || connectedDisplays.length === 0) {
       return {
         tone: 'neutral',
         pill: 'Couldn’t check',
-        detail: 'CandidCue could not list the connected displays. Takes still open.',
+        detail: 'Speaking Glass could not list the connected displays. Takes still open.',
         emphasis: 'quiet',
         action: 'Choose display',
       };
@@ -442,7 +442,7 @@
         <!-- The one place in the window the mark appears: the sidebar gave
              its tile up (it read as a microphone button), and the app icon is
              what carries the identity everywhere else. -->
-        <p class="wordmark"><BrandMark size={22} /><span>CandidCue</span></p>
+        <p class="wordmark"><BrandMark size={22} /><span>Speaking Glass</span></p>
         <h1 id="welcome-heading" class="heading">Speak naturally. Keep your place.</h1>
         <!-- The website's lede: what it is, in ink, then how, quieter. -->
         <p class="body">
@@ -598,7 +598,7 @@
 
       <footer class="setup-footer">
         <button type="button" class="link quiet" data-focus="control" onclick={openPrivacy}>
-          How CandidCue handles your voice
+          How Speaking Glass handles your voice
         </button>
       </footer>
     </section>

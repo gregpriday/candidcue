@@ -155,7 +155,7 @@ pub async fn restore_all_data<R: tauri::Runtime>(
     boot.require_ready()?;
     let Some(export_root) = crate::dialogs::pick_destination_folder(
         &app,
-        "Choose the CandidCue export folder to restore from",
+        "Choose the Speaking Glass export folder to restore from",
     )
     .await?
     else {
@@ -355,7 +355,7 @@ pub async fn export_support_bundle<R: tauri::Runtime>(
         ));
     }
     let bundle_dir = dest_root.join(format!(
-        "CandidCue-support-{}",
+        "SpeakingGlass-support-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     ));
     fs::create_dir_all(&bundle_dir)?;
@@ -467,7 +467,7 @@ pub async fn log_client_diagnostic(
         .take(32)
         .collect();
     let line: String = line.chars().take(MAX_LINE).collect();
-    tracing::warn!(target: "candidcue::client", scope = %scope, "{line}");
+    tracing::warn!(target: "speaking_glass::client", scope = %scope, "{line}");
 
     // This command owns sanitising and formatting; the file — its size cap,
     // its serialising lock, and the startup rotation that has to interleave

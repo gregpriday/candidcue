@@ -49,8 +49,8 @@ foreign vitest/chai here and produced bogus "Invalid Chai property" failures.
 argument and the whole suite runs. Name the spec to the Playwright binary as
 above.
 
-**In a worktree, always set `CANDIDCUE_E2E_PORT` to a free port** (for example
-`CANDIDCUE_E2E_PORT=5300 ./node_modules/.bin/playwright test ...`). Outside CI
+**In a worktree, always set `SPEAKING_GLASS_E2E_PORT` to a free port** (for example
+`SPEAKING_GLASS_E2E_PORT=5300 ./node_modules/.bin/playwright test ...`). Outside CI
 Playwright reuses any dev server already listening on its port, and the default
 is 1420, so with another checkout's server running there the suite silently
 tests that checkout's code instead of yours.
@@ -150,10 +150,10 @@ would starve every other command for the length of a take.
 The model is **not in git and not in the installer**. Users install it from
 **Settings › Speech**, which verifies the archive digest, extracts only
 catalogue-named members and seals the result. `model_store::resolve` then looks
-in a deliberate order: `CANDIDCUE_MODELS_DIR`, then that sealed download in
+in a deliberate order: `SPEAKING_GLASS_MODELS_DIR`, then that sealed download in
 `$APPDATA/models/`, then a bundled resource stock builds do not have.
 `pnpm models:fetch` only fills the source tree — **nothing reads that directory**
-unless you export `CANDIDCUE_MODELS_DIR` at it, so a dev build otherwise takes
+unless you export `SPEAKING_GLASS_MODELS_DIR` at it, so a dev build otherwise takes
 the same in-app download a user does. `LocalSttConfig::validate` names the
 missing file rather than letting the C library return a bare null.
 
@@ -231,7 +231,7 @@ Two separate things, both in `src/styles/tokens.css`:
 - **Window material** (`windows/material.rs`, `WINDOW MATERIAL`): vibrancy on
   a Mac, Mica on Windows 11 22H2+ (checked DWM call), none on Linux, older
   Windows or with
-  `CANDIDCUE_WINDOW_MATERIAL=none`. Rust tells the page in an init script
+  `SPEAKING_GLASS_WINDOW_MATERIAL=none`. Rust tells the page in an init script
   (`lib/window-material.ts` → `data-window-material`) and the page clears the
   canvas only while a rail is drawn (`data-material-rail`): titlebar, toolbar
   band and rail are glass, the document area below the toolbar is paper. A
@@ -458,6 +458,17 @@ Wayland, or on two real monitors. What is different there:
 
 ## Gotchas
 
+- **The app was called CandidCue until 2026-10-21** (bundle id
+  `com.candidcue.app`). `src-tauri/src/legacy_data.rs` copies that data folder
+  into place before the builder (a read-only `VACUUM INTO` snapshot of the
+  database, then the logs and model seals renamed inside the copy), under an
+  OS file lock the process then holds; a copied folder carries
+  `.candidcue-folder-copied`, and an unmarked one is retried next launch. A
+  `candidcue.sqlite3` export and a `.candidcue` bundle still restore and import. The old name survives on purpose in a few places: the SQL
+  migrations (sqlx checksums them, so never edit one), the bench corpora and
+  their fixture scripts (the recorded audio says "CandidCue"), `docs/archive/`,
+  lexical test fixtures where the word is just a token, and the GitHub repo URL
+  `gregpriday/candidcue`, which has not been renamed.
 - `vite.config.ts` pins `decode-named-character-reference` to its non-DOM build.
   Without it the compiler worker throws `document is not defined` in dev and no
   script can be opened at all (production was unaffected, which hid it). The

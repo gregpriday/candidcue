@@ -14,7 +14,11 @@ use sqlx::SqlitePool;
 use crate::errors::AppError;
 
 /// Spec §47.1 data-directory layout.
-pub const DB_FILE_NAME: &str = "candidcue.sqlite3";
+pub const DB_FILE_NAME: &str = "speaking-glass.sqlite3";
+/// The database's name before the app was renamed Speaking Glass. The data
+/// folder is migrated on first launch (`legacy_data`), and an export written
+/// before then still names its copy this way.
+pub const LEGACY_DB_FILE_NAME: &str = "candidcue.sqlite3";
 
 /// Managed Tauri state wrapping the pool. Typed repositories (spec §44.3)
 /// hang off this as they are implemented.
@@ -76,8 +80,8 @@ impl BootStatus {
             BootStatus::Failed(_) => Err(AppError::structured(
                 "DATABASE_UNAVAILABLE",
                 crate::errors::ErrorCategory::Storage,
-                "CandidCue is in recovery mode because its database did not open, so this \
-                 action is unavailable. Recover the database and reopen CandidCue.",
+                "Speaking Glass is in recovery mode because its database did not open, so this \
+                 action is unavailable. Recover the database and reopen Speaking Glass.",
                 true,
             )),
         }
@@ -93,7 +97,7 @@ impl BootStatus {
         match self {
             BootStatus::Failed(_) => Ok(()),
             BootStatus::Ready => Err(AppError::invalid_input(
-                "CandidCue's database is working, so there is nothing to recover. This action \
+                "Speaking Glass's database is working, so there is nothing to recover. This action \
                  is only available when the app has failed to start.",
             )),
         }
@@ -142,7 +146,7 @@ pub fn corrupt_database_error(detail: &str) -> AppError {
     AppError::structured(
         "DATABASE_CORRUPT",
         crate::errors::ErrorCategory::Storage,
-        "CandidCue's database failed its integrity check and was not modified. \
+        "Speaking Glass's database failed its integrity check and was not modified. \
          Your script files are unaffected.",
         true,
     )
@@ -409,7 +413,7 @@ async fn vacuum_and_truncate_wal(pool: &SqlitePool) -> Result<(), AppError> {
 /// every pre-1.0 database from opening, with an error about checksums that
 /// says nothing a user could act on.
 ///
-/// CandidCue has never been publicly released, so there is no beta-user
+/// Speaking Glass has never been publicly released, so there is no beta-user
 /// database to migrate forward. What there IS, on any machine that ran a dev
 /// build, is a database whose scripts are also sitting on disk as Markdown —
 /// and those files, not the database, are the authority for script content
@@ -507,7 +511,7 @@ async fn quarantine_pre_baseline_database(
         serde_json::to_vec_pretty(&serde_json::json!({
             "quarantinedAt": crate::util::now_iso(),
             "appVersion": env!("CARGO_PKG_VERSION"),
-            "reason": "database predates the CandidCue 1.0 schema baseline",
+            "reason": "database predates the Speaking Glass 1.0 schema baseline",
             "appliedMigrations": applied,
             "recovered": "scripts, revisions and assets are rebuilt from the canonical Markdown files",
             "notRecovered": ["session history", "take history", "retained transcripts"],
@@ -550,14 +554,14 @@ async fn pending_migrations(
         .collect())
 }
 
-/// The one failure that stops CandidCue starting on purpose.
+/// The one failure that stops Speaking Glass starting on purpose.
 fn backup_required_error(detail: &AppError) -> AppError {
     AppError::structured(
         "DATABASE_BACKUP_REQUIRED",
         crate::errors::ErrorCategory::Storage,
-        "CandidCue needs to upgrade its database, but could not first save a backup of it, \
+        "Speaking Glass needs to upgrade its database, but could not first save a backup of it, \
          so it has not made any changes. This is usually a full disk or a permissions \
-         problem in CandidCue's data folder. Your script files are unaffected.",
+         problem in Speaking Glass's data folder. Your script files are unaffected.",
         true,
     )
     .with_action(crate::errors::RecoveryAction::RevealFolder)
@@ -669,7 +673,7 @@ async fn verify_backup(path: &Path) -> Result<(), AppError> {
         return Err(AppError::structured(
             "DATABASE_BACKUP_REQUIRED",
             crate::errors::ErrorCategory::Storage,
-            "CandidCue could not verify the database backup it just wrote.",
+            "Speaking Glass could not verify the database backup it just wrote.",
             true,
         )
         .with_log(format!("backup quick_check: {check}")));

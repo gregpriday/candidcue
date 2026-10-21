@@ -14,7 +14,7 @@ import { installTauriShim, type ShimScriptSeed } from './fixtures/tauri-shim';
  * file is written, so a capture that did not reach its state fails instead of
  * saving a plausible picture of the wrong panel.
  *
- *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5311 \
+ *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5311 \
  *     ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *     tests/e2e/browser/design-appearance-sheet.spec.ts
  *
@@ -74,7 +74,7 @@ const ELGATO = {
   topologyHash: 'top-e2e',
 };
 
-/** A panel CandidCue cannot size: no model match and no EDID millimetres. */
+/** A panel Speaking Glass cannot size: no model match and no EDID millimetres. */
 const UNKNOWN_PANEL = {
   id: 'display-1',
   name: 'HDMI Capture Monitor',
@@ -134,7 +134,7 @@ interface Fixture {
 /** Runs after the Tauri shim, so it wraps the shim's `invoke` rather than replacing it. */
 function stubs(config: { displays: unknown[] | null; overlay: Record<string, unknown> | null }): void {
   if (config.overlay) {
-    localStorage.setItem('candidcue.settings-overlay.v1', JSON.stringify(config.overlay));
+    localStorage.setItem('speaking-glass.settings-overlay.v1', JSON.stringify(config.overlay));
   }
   const internals = (window as unknown as {
     __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> };

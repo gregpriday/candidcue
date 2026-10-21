@@ -72,7 +72,7 @@ describe('script command IPC payloads match the Rust DTOs', () => {
     expect(payloadFor('export_script')).toEqual(fixture.export_script_markdown);
   });
 
-  it('export_script uses the Rust format name "bundle", not "candidcue"', async () => {
+  it('export_script uses the Rust format name "bundle", not "speakingglass"', async () => {
     await scripts.exportScript(scriptId, {
       format: 'bundle',
       includeAssets: true,

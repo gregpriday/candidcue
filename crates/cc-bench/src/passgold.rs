@@ -3,7 +3,7 @@
 //! The existing evaluator asks one question — "where is the reader?" — and
 //! answers it with `GoldTimeline::position_at`. That is the right reference for
 //! exactly one of the things this system does, and the wrong one for most of
-//! them, because CandidCue has at least three separate notions of position and
+//! them, because Speaking Glass has at least three separate notions of position and
 //! they diverge in normal use:
 //!
 //! * **the spoken frontier** `g_s(t)` — the last word finished acoustically.

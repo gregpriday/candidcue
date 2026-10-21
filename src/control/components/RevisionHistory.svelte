@@ -1,7 +1,7 @@
 <!--
   Revision browser (spec §21.4).
 
-  CandidCue has been writing revision snapshots since the scripts repo landed —
+  Speaking Glass has been writing revision snapshots since the scripts repo landed —
   on the first save, on the 5-minute cadence, before a session, when the file
   changes outside the app — and until now nothing could read one back. This is
   the reader: list, preview, restore.
@@ -181,7 +181,7 @@
         err instanceof BackendUnavailableError
           ? {
               title: 'Revision history needs the desktop app',
-              body: 'Revisions are kept by the CandidCue desktop app, so there are none to show here.',
+              body: 'Revisions are kept by the Speaking Glass desktop app, so there are none to show here.',
               retry: false,
             }
           : { title: 'Revision history could not be loaded', body: describeError(err), retry: true };
@@ -400,9 +400,9 @@
   const REASON_NOTES: Record<string, string> = {
     initial: 'The first saved version of this script.',
     autosave_interval: 'Saved automatically while you were editing.',
-    external_change: 'The text found after the file was edited outside CandidCue.',
+    external_change: 'The text found after the file was edited outside Speaking Glass.',
     external_change_preserved:
-      'An edit made outside CandidCue, kept when a save from the editor clashed with it.',
+      'An edit made outside Speaking Glass, kept when a save from the editor clashed with it.',
     before_restore: 'Your text just before an earlier restore replaced it.',
     pre_session: 'Saved as a session started.',
     import: 'The script as it was imported.',
@@ -498,7 +498,7 @@
     <div class="browser centred" data-state="empty">
       <EmptyState
         title="No revisions yet"
-        body="CandidCue keeps a revision the first time a script is saved, every five minutes or so while you edit, and just before every session. They will be listed here."
+        body="Speaking Glass keeps a revision the first time a script is saved, every five minutes or so while you edit, and just before every session. They will be listed here."
       />
     </div>
   {:else}

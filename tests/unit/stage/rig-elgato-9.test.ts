@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * WHY THIS RIG GETS ITS OWN SUITE
  * ---------------------------------------------------------------------------
- * 1024 x 600 is the tightest hardware CandidCue supports and it is the panel
+ * 1024 x 600 is the tightest hardware Speaking Glass supports and it is the panel
  * the product is actually used on. Every generic guarantee in the optical layer
  * — five to seven visible lines, a usable reading measure, a comfortable
  * angular size — is easy to satisfy on a 1080p panel and genuinely hard here.

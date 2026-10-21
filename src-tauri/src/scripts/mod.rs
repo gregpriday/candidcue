@@ -307,7 +307,7 @@ pub struct ScriptDocument {
      * configuration in Settings. No `selected_display_profile_id` either: it
      * pointed into `display_profiles`, and both went in migration 0004.
      */
-    /// True when the canonical file changed outside CandidCue and the file
+    /// True when the canonical file changed outside Speaking Glass and the file
     /// content (authority, spec §48.1) was adopted during this read.
     pub externally_changed: bool,
 }

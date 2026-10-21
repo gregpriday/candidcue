@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>CandidCue uses the microphone while voice tracking or a microphone test is active so it can transcribe your speech and follow your script.</string>
+  <string>Speaking Glass uses the microphone while voice tracking or a microphone test is active so it can transcribe your speech and follow your script.</string>
 </dict>
 </plist>

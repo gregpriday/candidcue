@@ -6,7 +6,7 @@
  * carries ONNX Runtime, kaldi, KISS FFT, sentencepiece, PortAudio,
  * piper-phonemize and eSpeak NG, on at least four licences, and the archive
  * ships no licence metadata of its own. One of them — eSpeak NG — is copyleft,
- * which is a question about what CandidCue legally IS rather than a notices
+ * which is a question about what Speaking Glass legally IS rather than a notices
  * chore. `sbom/native-components.json` records each with a `reviewed` flag,
  * and this refuses while any of them is not `true`.
  *

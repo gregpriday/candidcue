@@ -14,7 +14,7 @@ import { installTauriShim, type ShimScriptSeed } from './fixtures/tauri-shim';
  * size. A state is checked on screen BEFORE its file is written, so a capture
  * that did not reach its state fails instead of saving a plausible wrong frame.
  *
- *   DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5311 \
+ *   DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5311 \
  *     ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *     tests/e2e/browser/design-take-controls.spec.ts --project=chromium
  */

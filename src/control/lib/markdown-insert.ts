@@ -1,7 +1,7 @@
 /**
  * Editor insert controls (spec §13.6). Every action inserts plain Markdown
- * or CandidCue's documented directive syntax (spec §23) so documents remain
- * readable outside CandidCue.
+ * or Speaking Glass's documented directive syntax (spec §23) so documents remain
+ * readable outside Speaking Glass.
  */
 import { ensureSyntaxTree } from '@codemirror/language';
 import type { EditorState, Line } from '@codemirror/state';

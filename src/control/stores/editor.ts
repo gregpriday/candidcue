@@ -294,7 +294,7 @@ async function performSave(scriptId: string, s: EditorState): Promise<void> {
     /*
      * F.8 external-change conflict.
      *
-     * Rust signals a file that changed outside CandidCue as an ERROR
+     * Rust signals a file that changed outside Speaking Glass as an ERROR
      * (`SCRIPT_CONFLICT`), not as a `SaveResult.status` — its SaveResult has no
      * status field at all. The `status === 'conflict'` branch above is
      * satisfied only by the mock backend, so against the real backend the

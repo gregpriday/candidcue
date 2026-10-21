@@ -82,7 +82,7 @@ use super::{sleep, sleep::SleepHolder, CONTROL_LABEL};
 /// whether a hood crops the glass, and in where the reading band belongs — all
 /// of which the optical model reads from the rig profile rather than from here.
 /// What THIS module owns is the four window facts: chrome, layering, geometry
-/// and the minimum size. See `docs/CandidCue_Reader_Mode_Specification.md`.
+/// and the minimum size. See `docs/SpeakingGlass_Reader_Mode_Specification.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresentMode {
@@ -655,7 +655,7 @@ fn control_window<R: Runtime>(app: &AppHandle<R>) -> Result<WebviewWindow<R>, Ap
 ///
 /// Not the `#[from] tauri::Error` conversion, which every `?` in this file
 /// would otherwise reach for. That produces `AppError::Window`, whose code is
-/// `STAGE_OPEN_FAILED`, whose copy is "CandidCue could not open the stage
+/// `STAGE_OPEN_FAILED`, whose copy is "Speaking Glass could not open the stage
 /// window on that display. Choose another display, then try again." Single-
 /// window presentation opens no stage window and consults no display picker, so
 /// that message sends the operator to a setting that cannot help them for a
@@ -668,7 +668,7 @@ fn presentation_failed(detail: impl std::fmt::Display) -> AppError {
     AppError::structured(
         "PRESENTATION_FAILED",
         crate::errors::ErrorCategory::Window,
-        "CandidCue could not turn this window into the teleprompter. The window \
+        "Speaking Glass could not turn this window into the teleprompter. The window \
          has been left as it was — try Present again.",
         true,
     )

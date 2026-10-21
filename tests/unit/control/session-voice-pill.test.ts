@@ -931,7 +931,7 @@ describe('a refused microphone', () => {
     expect(s.micState).toBe('live');
     expect(s.connection).toBe('connected');
     expect(notice()).toBeUndefined();
-    expect(said('CandidCue can use the microphone now.')).toBe(1);
+    expect(said('Speaking Glass can use the microphone now.')).toBe(1);
   });
 
   it('hands a retry that finds no device to the input picker', async () => {

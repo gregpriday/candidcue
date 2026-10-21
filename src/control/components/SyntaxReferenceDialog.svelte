@@ -1,5 +1,5 @@
 <!--
-  The script syntax reference (#305): every construct CandidCue adds to
+  The script syntax reference (#305): every construct Speaking Glass adds to
   Markdown, what it looks like on the glass and what following does with it.
 
   Rendered from `SYNTAX_REFERENCE` and nothing else. That table's examples are

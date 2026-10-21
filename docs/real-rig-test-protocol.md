@@ -40,7 +40,7 @@ A case has three outcomes: **pass**, **fail** (file an issue, link it), and
 
 | | |
 |---|---|
-| CandidCue version | |
+| Speaking Glass version | |
 | macOS version | |
 | Mac | |
 | Microphone | |

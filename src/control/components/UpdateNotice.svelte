@@ -1,5 +1,5 @@
 <!--
-  "A newer CandidCue is available" — quiet, non-modal, in the document window
+  "A newer Speaking Glass is available" — quiet, non-modal, in the document window
   only (docs/updates.md, #191).
 
   NOT A NATIVE DIALOG, AND NOT IN THE TOAST STACK. A native dialog takes focus
@@ -38,10 +38,10 @@
 {#if !hidden && notice.kind !== 'hidden'}
   <section class="update-notice" aria-labelledby={titleId} data-testid="update-notice">
     {#if notice.kind === 'available'}
-      <h2 class="title" id={titleId}>CandidCue {notice.version} is available</h2>
+      <h2 class="title" id={titleId}>Speaking Glass {notice.version} is available</h2>
       {#if notice.canInstall}
         <p class="body">
-          You have {notice.currentVersion}. Installing restarts CandidCue; your scripts and settings
+          You have {notice.currentVersion}. Installing restarts Speaking Glass; your scripts and settings
           stay as they are.
         </p>
         <div class="actions">
@@ -50,8 +50,8 @@
         </div>
       {:else}
         <p class="body">
-          You have {notice.currentVersion}. This copy of CandidCue cannot update itself, so download
-          the new version from candidcue.com.
+          You have {notice.currentVersion}. This copy of Speaking Glass cannot update itself, so download
+          the new version from speakingglass.com.
         </p>
         <div class="actions">
           <Button size="sm" variant="ghost" onclick={onlater}>Later</Button>
@@ -59,7 +59,7 @@
         </div>
       {/if}
     {:else if notice.kind === 'downloading'}
-      <h2 class="title" id={titleId}>Downloading CandidCue {notice.version}</h2>
+      <h2 class="title" id={titleId}>Downloading Speaking Glass {notice.version}</h2>
       <p class="body" role="status">
         {percent === null ? 'Starting the download…' : `${percent}% downloaded`}
       </p>
@@ -71,16 +71,16 @@
         aria-valuetext={percent === null ? 'Starting' : `${percent} percent`}
       ></progress>
     {:else if notice.kind === 'installing'}
-      <h2 class="title" id={titleId}>Installing CandidCue {notice.version}</h2>
+      <h2 class="title" id={titleId}>Installing Speaking Glass {notice.version}</h2>
       <p class="body" role="status">
-        The download passed its signature check. CandidCue will close and reopen when it is done.
+        The download passed its signature check. Speaking Glass will close and reopen when it is done.
       </p>
       <progress class="bar" max="1" aria-label="Installing the update"></progress>
     {:else if notice.kind === 'restarting'}
-      <h2 class="title" id={titleId}>Restarting CandidCue</h2>
-      <p class="body" role="status">CandidCue {notice.version} is installed and opening now.</p>
+      <h2 class="title" id={titleId}>Restarting Speaking Glass</h2>
+      <p class="body" role="status">Speaking Glass {notice.version} is installed and opening now.</p>
     {:else if notice.kind === 'failed'}
-      <h2 class="title" id={titleId}>CandidCue {notice.version} was not installed</h2>
+      <h2 class="title" id={titleId}>Speaking Glass {notice.version} was not installed</h2>
       <p class="body" role="alert">{notice.message}</p>
       <div class="actions">
         <Button size="sm" variant="ghost" onclick={onlater}>Close</Button>

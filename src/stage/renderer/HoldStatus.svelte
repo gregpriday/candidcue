@@ -71,7 +71,7 @@
     /**
      * The stage's resolved reduced-motion preference — the app's own setting
      * OR the system's. The media query below only knows the second, and a
-     * presenter who turned motion off in CandidCue should not still get a fade.
+     * presenter who turned motion off in Speaking Glass should not still get a fade.
      */
     reducedMotion?: boolean;
     /**

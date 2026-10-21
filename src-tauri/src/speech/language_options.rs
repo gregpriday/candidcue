@@ -3,7 +3,7 @@
 //! ---------------------------------------------------------------------------
 //! THREE LISTS, ONE ANSWER
 //! ---------------------------------------------------------------------------
-//! "Which languages can CandidCue follow?" is not a question any single table
+//! "Which languages can Speaking Glass follow?" is not a question any single table
 //! in this repository answers, and the three that contribute all mean different
 //! things:
 //!
@@ -22,7 +22,7 @@
 //!
 //! A language is offerable only where all three agree, and the conjunction is
 //! computed HERE so that no screen has to restate it. Today it selects exactly
-//! one pair — `x-asr-480ms` × `en`, so CandidCue 1.0 follows English and
+//! one pair — `x-asr-480ms` × `en`, so Speaking Glass 1.0 follows English and
 //! nothing else. Chinese fails the third list even though the recogniser
 //! transcribes it; French, German and Spanish fail both the second and the
 //! third, because the engine has no profile for them, no recogniser this build

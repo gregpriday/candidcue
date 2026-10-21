@@ -75,7 +75,7 @@ export const createAnalyserGraph: AnalysisGraphFactory = (stream) => {
    * hardware) it is this one that loses. The Settings screen has been printing
    * the contradiction all along, one line above the other:
    *
-   *     No signal — CandidCue cannot hear this microphone.
+   *     No signal — Speaking Glass cannot hear this microphone.
    *     Transcription is working.   "This is a test of the transcription."
    *
    * That silence reached the §28.6 dead-input detector, which held following

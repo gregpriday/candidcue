@@ -56,7 +56,7 @@ impl MicrophonePermission {
     }
 
     /// Windows' privacy settings for a DESKTOP application, which is what
-    /// CandidCue is to Windows.
+    /// Speaking Glass is to Windows.
     ///
     /// There is no "never asked": Windows does not prompt desktop apps one by
     /// one, so the answer is always one of three. Each `Value` is the string
@@ -70,7 +70,7 @@ impl MicrophonePermission {
     ///     — restricted, for the same reason.
     ///   - `user`: "Let apps access your microphone", the user's master switch.
     ///   - `desktop_apps`: "Let desktop apps access your microphone", the one
-    ///     that actually names CandidCue. Either of these two off is a refusal
+    ///     that actually names Speaking Glass. Either of these two off is a refusal
     ///     the user made and can undo — denied.
     pub fn from_windows_consent(
         policy_denies: bool,
@@ -114,7 +114,7 @@ pub const fn microphone_settings_url() -> Option<&'static str> {
 ///
 /// Under `tauri dev` the answer is the TERMINAL's, because macOS attributes the
 /// microphone to the responsible process. So is `getUserMedia`'s, so the two
-/// still agree; only a packaged build reports CandidCue's own entry.
+/// still agree; only a packaged build reports Speaking Glass's own entry.
 #[tauri::command]
 pub async fn get_microphone_permission() -> Result<MicrophonePermission, AppError> {
     #[cfg(target_os = "macos")]

@@ -643,7 +643,7 @@ export function readerOpticalProfile(
  * find, and the reason is stated there: "a rig has to be chosen before it is
  * used, because adopting a stale arrangement is how the stage ends up sized for a
  * distance the presenter is no longer standing at." Every word of that is about
- * a physical arrangement that CandidCue cannot see — a hood, a mirror, where the
+ * a physical arrangement that Speaking Glass cannot see — a hood, a mirror, where the
  * camera ended up, how far back the presenter stands.
  *
  * A reading window has none of those. It is a person at their own screen, and the
@@ -1213,7 +1213,7 @@ export interface RestoreResult {
   scriptsInExport?: number;
   /** When the export being restored was taken. */
   createdAt?: string;
-  /** The CandidCue version that wrote it. */
+  /** The Speaking Glass version that wrote it. */
   appVersion?: string;
   restartRequired?: boolean;
 }

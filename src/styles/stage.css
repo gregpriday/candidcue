@@ -1,5 +1,5 @@
 /* ============================================================================
-   CandidCue stage palette (spec §11.3) — layered on top of the studio tokens.
+   Speaking Glass stage palette (spec §11.3) — layered on top of the studio tokens.
 
    The stage window's document sets no data-theme attribute, so it inherits
    the dark studio defaults from tokens.css; these variables define the

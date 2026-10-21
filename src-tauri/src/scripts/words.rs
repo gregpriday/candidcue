@@ -963,7 +963,7 @@ fn match_emphasis(items: &mut [Inline]) {
                         return opener_left == closer_left;
                     }
                     let odd = opener.can_close || can_open;
-                    !(odd && closer_left % 3 != 0 && (opener_left + closer_left) % 3 == 0)
+                    !(odd && !closer_left.is_multiple_of(3) && (opener_left + closer_left).is_multiple_of(3))
                 });
                 let Some(position) = found.map(|p| p + floor) else {
                     bottom.insert(key, openers.len());
@@ -1914,14 +1914,14 @@ mod tests {
 
     #[test]
     fn excludes_code_headings_and_silent_containers() {
-        let source = "# Title\n\nHello world from CandidCue.\n\n```rust\nlet x = 1;\n```\n\n:::silent\nsmile now\n:::\n\nSecond paragraph here.\n";
-        assert_eq!(plain(source), "Hello world from CandidCue. Second paragraph here.");
-        assert_eq!(words(source), 7);
+        let source = "# Title\n\nHello world from Speaking Glass.\n\n```rust\nlet x = 1;\n```\n\n:::silent\nsmile now\n:::\n\nSecond paragraph here.\n";
+        assert_eq!(plain(source), "Hello world from Speaking Glass. Second paragraph here.");
+        assert_eq!(words(source), 8);
     }
 
     #[test]
     fn an_unknown_container_is_readable_source_and_spoken() {
-        // `:::cue` is not a CandidCue container. The compiler leaves it on the
+        // `:::cue` is not a Speaking Glass container. The compiler leaves it on the
         // glass as written, and what is on the glass is read.
         let source = ":::cue\nsmile now\n:::\n";
         assert_eq!(plain(source), ":::cue smile now :::");

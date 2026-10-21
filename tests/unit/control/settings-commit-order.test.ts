@@ -111,7 +111,7 @@ const RUST_DOCUMENT = {
       delayProfile: 'low',
     },
     commands: {
-      wakePhrase: 'CandidCue',
+      wakePhrase: 'Speaking Glass',
       wakeMode: 'strict',
     },
   },

@@ -1497,7 +1497,7 @@ describe('#287 — time the presenter set following aside is not charged to foll
       // The issue measured 0.31 here, and "Following needed help".
       expect(summary.followingShare).toBeCloseTo(1, 2);
       const outcome = resolveTakeOutcome(summary);
-      expect(outcome.headline).toBe('CandidCue stayed with you');
+      expect(outcome.headline).toBe('Speaking Glass stayed with you');
       expect(outcome.health).toBe('steady');
     },
   );
@@ -1517,7 +1517,7 @@ describe('#287 — time the presenter set following aside is not charged to foll
     expect(summary.followingTime.autoScrollSeconds).toBeCloseTo(60, 1);
     expect(summary.followingTime.onSeconds).toBeCloseTo(0, 1);
     const outcome = resolveTakeOutcome(summary);
-    // It was "CandidCue heard you, but did not track", with a support bundle.
+    // It was "Speaking Glass heard you, but did not track", with a support bundle.
     expect(outcome.headline).toBe('This take used auto-scroll');
     expect(outcome.suggestion).toBeNull();
   });

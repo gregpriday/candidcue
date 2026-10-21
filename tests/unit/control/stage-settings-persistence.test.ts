@@ -74,7 +74,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 });
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
 const settings = await import('../../../src/control/services/settings');
 
 function seedOverlay(stage: Record<string, unknown>): void {

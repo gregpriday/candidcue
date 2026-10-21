@@ -1,5 +1,5 @@
 <!--
-  The audio display — whether CandidCue is picking up what the presenter says.
+  The audio display — whether Speaking Glass is picking up what the presenter says.
 
   ---------------------------------------------------------------------------
   IT IS OPERATOR CHROME NOW, AND THAT IS A CHANGE OF ADDRESS

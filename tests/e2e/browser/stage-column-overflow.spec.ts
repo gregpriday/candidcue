@@ -34,7 +34,7 @@ import { watchPageErrors } from './fixtures/page-errors';
  */
 
 const LONG_WORD = 'Pneumonoultramicroscopicsilicovolcanoconiosis';
-const LONG_URL = 'candidcue.example.com/documentation/getting-started/installation-guide';
+const LONG_URL = 'speakingglass.example.com/documentation/getting-started/installation-guide';
 const LIST_WORD = 'Antidisestablishmentarianism';
 const CODE_WORD = 'configurationRegistryFactoryProviderInstance';
 const INLINE_CUE = 'look straight at camera and smile before continuing';

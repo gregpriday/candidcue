@@ -8,7 +8,7 @@
 //! scripts tree, and return `{ path, scriptsCopied, warnings }`. The frontend
 //! adapter then discarded the count AND the warnings and returned only the
 //! path — so Settings displayed **"Export ready"** whenever a directory came
-//! back. A folder named `CandidCue-export-…` could therefore contain no
+//! back. A folder named `SpeakingGlass-export-…` could therefore contain no
 //! database at all, and nothing anywhere said so.
 //!
 //! There was also no way to get any of it back in. "Export all data" that
@@ -89,7 +89,10 @@ pub mod salvage;
 pub const EXPORT_SCHEMA_VERSION: u32 = 1;
 
 const MANIFEST_NAME: &str = "manifest.json";
-const DATABASE_NAME: &str = "candidcue.sqlite3";
+const DATABASE_NAME: &str = crate::database::DB_FILE_NAME;
+/// What the database was called inside an export written before the app was
+/// renamed Speaking Glass. Read, never written: such an export still restores.
+const LEGACY_DATABASE_NAME: &str = crate::database::LEGACY_DB_FILE_NAME;
 const SETTINGS_NAME: &str = "settings.json";
 const SCRIPTS_DIR: &str = "scripts";
 
@@ -166,7 +169,7 @@ pub async fn export_all_data(
     dest_root: &Path,
 ) -> Result<DataExportResult, AppError> {
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
-    let staging = dest_root.join(format!(".CandidCue-export-{stamp}.partial"));
+    let staging = dest_root.join(format!(".SpeakingGlass-export-{stamp}.partial"));
 
     /*
      * The destination must not be inside what is being copied.
@@ -218,7 +221,7 @@ pub async fn export_all_data(
         files: files.clone(),
         warnings: warnings.clone(),
         excluded: vec![
-            "Speech model files. They are downloaded in CandidCue (Settings › Speech), \
+            "Speech model files. They are downloaded in Speaking Glass (Settings › Speech), \
              carry their own third-party licence, and are not your data."
                 .to_string(),
             "Application logs and diagnostics. Use Export support bundle for those."
@@ -242,9 +245,9 @@ pub async fn export_all_data(
 
     // 5. Give it its real name, which encodes the answer.
     let final_name = if complete {
-        format!("CandidCue-export-{stamp}")
+        format!("SpeakingGlass-export-{stamp}")
     } else {
-        format!("CandidCue-export-{stamp}-INCOMPLETE")
+        format!("SpeakingGlass-export-{stamp}-INCOMPLETE")
     };
     let final_path = dest_root.join(final_name);
     /*
@@ -564,7 +567,7 @@ fn write_json_durably<T: Serialize>(marker: &Path, value: &T) -> Result<(), AppE
 /// That is wrong while the application is running, and wrong in a way tests
 /// hide.
 ///
-/// The pool is open on `candidcue.sqlite3`. On Unix a rename does not
+/// The pool is open on `speaking-glass.sqlite3`. On Unix a rename does not
 /// invalidate an open file descriptor, so every existing connection keeps
 /// writing to the quarantined inode — and SQLite happily recreates `-wal` and
 /// `-shm` beside the file that replaced it, producing a database whose journal
@@ -686,7 +689,7 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             "RESTORE_FAILED",
             crate::errors::ErrorCategory::Storage,
             format!(
-                "CandidCue tried to restore from {} on {} launches and could not finish. \
+                "Speaking Glass tried to restore from {} on {} launches and could not finish. \
                  It has stopped trying; your previous data is in the quarantine folder.",
                 pending.export_path, MAX_RESTORE_ATTEMPTS
             ),
@@ -706,6 +709,9 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
         ));
     }
     verify_export_contents(&export_root, &manifest)?;
+    // Checked present by `verify_export_contents`; it lands under today's name.
+    let exported_database = exported_database_name(&manifest)
+        .ok_or_else(|| AppError::Internal("a verified export names no database".into()))?;
 
     /*
      * ONE quarantine generation per restore, named in the marker.
@@ -797,7 +803,7 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             std::fs::create_dir_all(&live_scripts)?;
         }
         sync_dir(parent_of(&live_scripts))?;
-        std::fs::copy(export_root.join(DATABASE_NAME), &live_database)?;
+        std::fs::copy(export_root.join(exported_database), &live_database)?;
         /*
          * Durable before it is called a success.
          *
@@ -1011,12 +1017,12 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
                  * there is no copy left behind, and telling the user to look
                  * for one sends them to an empty folder.
                  */
-                "The restore did not finish, so CandidCue put your previous data back \
+                "The restore did not finish, so Speaking Glass put your previous data back \
                  where it was. Nothing was lost."
                     .to_string()
             } else {
                 format!(
-                    "The restore did not finish, and CandidCue could not fully put your \
+                    "The restore did not finish, and Speaking Glass could not fully put your \
                      previous data back either. What it could not move is still at {} — \
                      nothing was deleted.",
                     previous.display()
@@ -1148,7 +1154,7 @@ fn evacuate_component(
                 "RESTORE_FAILED",
                 crate::errors::ErrorCategory::Storage,
                 format!(
-                    "CandidCue could not set your previous data aside: something it does not \
+                    "Speaking Glass could not set your previous data aside: something it does not \
                      recognise is already at {}. Nothing was changed.",
                     to.display()
                 ),
@@ -1308,7 +1314,7 @@ fn read_and_validate_manifest(export_root: &Path) -> Result<ExportManifest, AppE
     let manifest_path = export_root.join(MANIFEST_NAME);
     if !manifest_path.exists() {
         return Err(AppError::invalid_input(
-            "That folder is not a CandidCue export — it has no manifest.json.",
+            "That folder is not a Speaking Glass export — it has no manifest.json.",
         ));
     }
     let raw = std::fs::read(&manifest_path)?;
@@ -1317,8 +1323,8 @@ fn read_and_validate_manifest(export_root: &Path) -> Result<ExportManifest, AppE
 
     if manifest.export_schema_version > EXPORT_SCHEMA_VERSION {
         return Err(AppError::invalid_input(format!(
-            "That export was written by a newer version of CandidCue (export format {}, this \
-             build understands {}). Update CandidCue and try again.",
+            "That export was written by a newer version of Speaking Glass (export format {}, this \
+             build understands {}). Update Speaking Glass and try again.",
             manifest.export_schema_version, EXPORT_SCHEMA_VERSION
         )));
     }
@@ -1339,6 +1345,14 @@ fn read_and_validate_manifest(export_root: &Path) -> Result<ExportManifest, AppE
 /// but `settings.json` would let an unchecksummed database and any number of
 /// extra script files through, which is the shape of a hostile or damaged
 /// export rather than a hypothetical.
+/// The name the database carries in this export: today's, or the one an
+/// export from before the rename used.
+fn exported_database_name(manifest: &ExportManifest) -> Option<&'static str> {
+    [DATABASE_NAME, LEGACY_DATABASE_NAME]
+        .into_iter()
+        .find(|name| manifest.files.iter().any(|file| file.path == *name))
+}
+
 fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Result<(), AppError> {
     if manifest.files.is_empty() {
         return Err(AppError::invalid_input(
@@ -1352,7 +1366,7 @@ fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Resu
 
     // The database is what a restore is FOR. An export without one is not
     // something to put back over live data whatever its manifest claims.
-    if !manifest.files.iter().any(|file| file.path == DATABASE_NAME) {
+    if exported_database_name(manifest).is_none() {
         return Err(AppError::invalid_input(
             "That export's manifest does not list a database, so it cannot be restored.",
         ));
@@ -1388,7 +1402,7 @@ fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Resu
         let meta = std::fs::symlink_metadata(&candidate)?;
         if meta.file_type().is_symlink() {
             return Err(AppError::unsafe_path(format!(
-                "That export contains a symbolic link ({}), which CandidCue will not restore.",
+                "That export contains a symbolic link ({}), which Speaking Glass will not restore.",
                 file.path
             )));
         }
@@ -1429,7 +1443,7 @@ const PENDING_REBUILD: &str = "rebuild-pending.json";
 struct PendingRebuild {
     quarantine: String,
     /// Where the database itself was going, when it is not simply the
-    /// quarantine directory's own `candidcue.sqlite3`. The pre-1.0 quarantine
+    /// quarantine directory's own `speaking-glass.sqlite3`. The pre-1.0 quarantine
     /// names the file after the baseline it predates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stem: Option<String>,
@@ -1439,7 +1453,7 @@ struct PendingRebuild {
 ///
 /// ## The window this closes
 ///
-/// A rebuild moves `candidcue.sqlite3`, then `-wal`, then `-shm`. Three
+/// A rebuild moves `speaking-glass.sqlite3`, then `-wal`, then `-shm`. Three
 /// renames, and a crash between the first and the second leaves the WAL live
 /// next to no database. The next launch creates a fresh database at that path,
 /// SQLite finds a WAL whose header belongs to a file that is no longer there,
@@ -1473,7 +1487,7 @@ pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
     };
     let quarantine = PathBuf::from(&pending.quarantine);
     std::fs::create_dir_all(&quarantine)?;
-    // The rebuild moves into `<generation>/candidcue.sqlite3`; the pre-1.0
+    // The rebuild moves into `<generation>/speaking-glass.sqlite3`; the pre-1.0
     // quarantine names the file after the baseline it predates. The marker
     // records which, so the leftovers join the set they belong to.
     let stem = pending
@@ -1606,15 +1620,15 @@ pub async fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppErr
 
     std::fs::write(
         quarantine.join("README.txt"),
-        "This is the CandidCue database as it was immediately before a rebuild.\n\
+        "This is the Speaking Glass database as it was immediately before a rebuild.\n\
          \n\
-         CandidCue builds a new index from the folders in `scripts/` the next time\n\
+         Speaking Glass builds a new index from the folders in `scripts/` the next time\n\
          it opens: each script's text, and the saved versions and images that are\n\
          intact. Script names, Trash and per-script reading settings are read out\n\
          of this database where it can still be read; a script it cannot name is\n\
          named after its own first line. Session history is NOT reconstructed by\n\
          a rebuild — if you need it, this file is where it still is. An older\n\
-         version of CandidCue that kept take history or saved transcripts may\n\
+         version of Speaking Glass that kept take history or saved transcripts may\n\
          have left those here too; this version no longer reads them.\n\
          \n\
          Nothing deletes this folder automatically.\n",
@@ -1692,7 +1706,7 @@ pub async fn rescue_scripts_to(paths: &DataPaths, target: &Path) -> Result<Rescu
     };
 
     let mut readme = String::from(
-        "These are your CandidCue scripts, copied out of CandidCue's data folder.\n\
+        "These are your Speaking Glass scripts, copied out of Speaking Glass's data folder.\n\
          \n\
          Each folder is one script: script.md is its text, assets/ holds its\n\
          images and revisions/ its saved versions. The folders are named by ID,\n\
@@ -1703,7 +1717,7 @@ pub async fn rescue_scripts_to(paths: &DataPaths, target: &Path) -> Result<Rescu
         readme.push_str(&format!("{title}{trash}\n    {folder}/script.md\n\n"));
     }
     // Never over a file the copy itself brought along.
-    let names_file = ["README.txt", "CandidCue script names.txt"]
+    let names_file = ["README.txt", "Speaking Glass script names.txt"]
         .into_iter()
         .find(|name| !target.join(name).exists());
     let names_file = names_file.and_then(|name| match std::fs::write(target.join(name), &readme) {
@@ -1801,7 +1815,7 @@ pub fn reject_nested_destination(source: &Path, destination: &Path) -> Result<()
 
     if destination.starts_with(&source) || source.starts_with(&destination) {
         return Err(AppError::unsafe_path(format!(
-            "Choose a folder outside CandidCue's data. Copying {} into {} would copy the \
+            "Choose a folder outside Speaking Glass's data. Copying {} into {} would copy the \
              destination into itself.",
             source.display(),
             destination.display()

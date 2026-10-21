@@ -468,8 +468,8 @@ function resolveMismatch(
   if (target.reason === 'pin-missing' && pinnedRig !== null && input.displays.length > 0) {
     const where =
       landing === null
-        ? 'the display the CandidCue window is on'
-        : `${displayName(landing)}, where the CandidCue window is`;
+        ? 'the display the Speaking Glass window is on'
+        : `${displayName(landing)}, where the Speaking Glass window is`;
     return {
       title: `The prompter display you chose is not connected, so this take will open on ${where}.`,
       detail: `${rigLabel(pinnedRig)} is calibrated for the display you chose, so this take will size its text from the panel it lands on rather than from measured optics.`,

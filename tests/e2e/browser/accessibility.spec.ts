@@ -42,7 +42,7 @@ test('the conflict dialog traps focus and returns it to the opener on Escape', a
   await page.keyboard.press('End');
   await page.keyboard.type(' colliding edit');
 
-  const trigger = page.getByRole('button', { name: /Changed outside CandidCue/ });
+  const trigger = page.getByRole('button', { name: /Changed outside Speaking Glass/ });
   await expect(trigger).toBeVisible();
 
   // Keyboard-operate the trigger (focus + Enter), not a mouse click.

@@ -5,7 +5,7 @@
  * WHY DISCOVERY IS SEPARATE FROM CALIBRATION
  * ---------------------------------------------------------------------------
  * Calibration is what a person does standing at their rig. Discovery is what
- * CandidCue should have already done before they got there.
+ * Speaking Glass should have already done before they got there.
  *
  * Almost everything the optical model needs is knowable from the display the
  * stage is about to open on: which panel it is, how physically large that panel
@@ -300,7 +300,7 @@ export interface DiscoveredProfile {
 }
 
 /**
- * Build the best profile CandidCue can produce for a display on its own.
+ * Build the best profile Speaking Glass can produce for a display on its own.
  *
  * The result is immediately usable — a take started right now would be sized
  * from a real physical scale and a plausible distance rather than from a 64px

@@ -1,4 +1,4 @@
-//! The pages CandidCue is allowed to open, by name.
+//! The pages Speaking Glass is allowed to open, by name.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY A NAME AND NOT A URL
@@ -20,14 +20,14 @@
 //! TWO SITES, BOTH COMPILE-TIME CONSTANTS
 //! ---------------------------------------------------------------------------
 //! `REPOSITORY_URL` is where the project's source, issues and release notes
-//! live; `WEBSITE_URL` is where CandidCue is downloaded from. Every destination
+//! live; `WEBSITE_URL` is where Speaking Glass is downloaded from. Every destination
 //! is a fixed page of one of the two, and those two constants are the only
 //! places the application names either. If one moves, it changes here — and in
 //! `docs/network-inventory.md`, which tells a reader where the Help menu sends
 //! them.
 //!
 //! Nothing here reaches the network. `open_url` hands the string to macOS, which
-//! launches the user's browser; CandidCue makes no request of its own
+//! launches the user's browser; Speaking Glass makes no request of its own
 //! (`docs/network-inventory.md`).
 
 /// Where the project lives: its public repository.
@@ -37,13 +37,13 @@
 /// different host or a different repository.
 pub const REPOSITORY_URL: &str = "https://github.com/gregpriday/candidcue";
 
-/// Where CandidCue is downloaded from: the project's website.
+/// Where Speaking Glass is downloaded from: the project's website.
 ///
 /// Releases are published to the project's own update host, not to GitHub's
 /// release pages, and this is the page that links them. It is also where the
 /// update notice sends a copy that cannot replace itself (a Linux package
 /// install, for one — see `updater::install_support`).
-pub const WEBSITE_URL: &str = "https://candidcue.com";
+pub const WEBSITE_URL: &str = "https://speakingglass.com";
 
 /// Which of the two sites a destination is a page of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +78,7 @@ impl Site {
 /// name, so renaming the default branch does not break the link.
 ///
 /// `download` is the website, which is where builds are published; the
-/// repository's release pages are not where a user downloads CandidCue from.
+/// repository's release pages are not where a user downloads Speaking Glass from.
 /// Help › Download Latest Version opens it, and so does the update notice's
 /// Download button on a copy that cannot install an update itself.
 ///
@@ -139,7 +139,7 @@ mod tests {
             ("guide", "https://github.com/gregpriday/candidcue/blob/HEAD/README.md"),
             ("support", "https://github.com/gregpriday/candidcue/issues/new"),
             ("release-notes", "https://github.com/gregpriday/candidcue/releases"),
-            ("download", "https://candidcue.com"),
+            ("download", "https://speakingglass.com"),
         ];
         for (name, url) in expected {
             assert_eq!(url_for(name).as_deref(), Some(url), "{name}");

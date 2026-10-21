@@ -30,7 +30,7 @@ const BLACK = 'rgb(0, 0, 0)';
 /** Paper saved in Settings, before the app reads its overlay. */
 async function seedPaper(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const key = 'candidcue.settings-overlay.v1';
+    const key = 'speaking-glass.settings-overlay.v1';
     const overlay = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, unknown>;
     const teleprompter = (overlay['teleprompter'] ?? {}) as Record<string, unknown>;
     overlay['teleprompter'] = { ...teleprompter, readerTheme: 'paper' };
@@ -222,7 +222,7 @@ test('Reading appearance switches the field live, Escape puts it back, and Done 
   const savedTheme = () =>
     page.evaluate(() => {
       const overlay = JSON.parse(
-        localStorage.getItem('candidcue.settings-overlay.v1') ?? '{}',
+        localStorage.getItem('speaking-glass.settings-overlay.v1') ?? '{}',
       ) as { teleprompter?: { readerTheme?: unknown } };
       return overlay.teleprompter?.readerTheme ?? null;
     });

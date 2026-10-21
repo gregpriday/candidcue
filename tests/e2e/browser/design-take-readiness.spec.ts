@@ -6,7 +6,7 @@
  * and writes a screenshot of each, for a design review to look at. It never
  * runs in the normal suite:
  *
- *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out CANDIDCUE_E2E_PORT=5315 \
+ *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out SPEAKING_GLASS_E2E_PORT=5315 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-take-readiness.spec.ts
  *
@@ -229,7 +229,7 @@ async function openSheet(page: Page, scenario: Scenario): Promise<void> {
   if (scenario.mic.pinnedMissing) {
     await page.addInitScript(() => {
       localStorage.setItem(
-        'candidcue.settings-overlay.v1',
+        'speaking-glass.settings-overlay.v1',
         JSON.stringify({
           audio: {
             followSystemDefault: false,

@@ -315,7 +315,7 @@ async function adoptOpticalFromOverlay(): Promise<void> {
     settingsService.forgetOverlayOptical();
   } catch (err) {
     showToast(
-      'CandidCue could not move your saved teleprompter calibrations into permanent ' +
+      'Speaking Glass could not move your saved teleprompter calibrations into permanent ' +
         `storage, so they are still only in this window's local data. ${describeError(err)}`,
       'danger',
     );
@@ -487,7 +487,7 @@ async function sendPatchBatch(batch: QueuedPatch[]): Promise<void> {
     const overlayFailure = settingsService.overlayStorageFailure();
     if (overlayFailure !== null) {
       showToast(
-        'That setting was saved, but CandidCue could not store this window’s local ' +
+        'That setting was saved, but Speaking Glass could not store this window’s local ' +
           `preferences, so some of them will reset next launch. ${overlayFailure}`,
         'danger',
       );

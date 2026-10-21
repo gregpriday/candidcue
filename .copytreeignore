@@ -1,6 +1,6 @@
 # CopyTree Ignore File
 #
-# Tuned for exporting CandidCue as AI context: ship the code that IS the
+# Tuned for exporting Speaking Glass as AI context: ship the code that IS the
 # product, drop everything else. What survives is src/, src-tauri/src/, the
 # shipped crates (cc-align, cc-stt), the schema and capability files that
 # define real runtime behaviour, and the build config that wires them up.

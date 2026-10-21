@@ -46,7 +46,7 @@ describe('osCopy', () => {
       defaultInput: "your Mac's default input",
       quit: 'Quit',
       quitLower: 'quit',
-      quitFailed: 'CandidCue didn’t quit. Choose CandidCue › Quit CandidCue, or press ⌘Q.',
+      quitFailed: 'Speaking Glass didn’t quit. Choose Speaking Glass › Quit Speaking Glass, or press ⌘Q.',
       revealInFileManager: 'Reveal in Finder',
       revealScriptFailed: 'Couldn’t reveal this script in Finder.',
       windowFocusFailed:
@@ -60,35 +60,35 @@ describe('osCopy', () => {
       micRequestPending: 'Answer the macOS prompt to continue.',
       micRestrictedTitle: 'Microphone access is managed on this Mac',
       micRestrictedText:
-        'Screen Time or a device management profile is blocking the microphone, so the setting may not be yours to change. Ask whoever manages this Mac to allow CandidCue.',
-      micAllowedText: 'CandidCue is allowed in System Settings.',
-      micAllowedButRefusedTitle: 'Quit and reopen CandidCue',
+        'Screen Time or a device management profile is blocking the microphone, so the setting may not be yours to change. Ask whoever manages this Mac to allow Speaking Glass.',
+      micAllowedText: 'Speaking Glass is allowed in System Settings.',
+      micAllowedButRefusedTitle: 'Quit and reopen Speaking Glass',
       micAllowedButRefusedText:
-        'System Settings allows CandidCue, but macOS has not handed this window the microphone yet. It will once CandidCue restarts.',
-      micAllowedButRefusedAnnouncement: 'Quit and reopen CandidCue to use the microphone.',
+        'System Settings allows Speaking Glass, but macOS has not handed this window the microphone yet. It will once Speaking Glass restarts.',
+      micAllowedButRefusedAnnouncement: 'Quit and reopen Speaking Glass to use the microphone.',
       micDeniedText:
-        'macOS will not ask again. Turn on CandidCue in System Settings, then choose Try again.',
-      micDeniedRetryText: 'If it is already on there, quit and reopen CandidCue.',
+        'macOS will not ask again. Turn on Speaking Glass in System Settings, then choose Try again.',
+      micDeniedRetryText: 'If it is already on there, quit and reopen Speaking Glass.',
       micRecoveryNote:
-        'The switch is in Privacy & Security → Microphone. If CandidCue is already on there, quit and reopen CandidCue.',
+        'The switch is in Privacy & Security → Microphone. If Speaking Glass is already on there, quit and reopen Speaking Glass.',
       micRefusedToast:
-        'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings, then choose Try again in the take controls.',
-      micRefusedStatusDetail: 'Allow CandidCue in System Settings, then choose Try again.',
+        'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings, then choose Try again in the take controls.',
+      micRefusedStatusDetail: 'Allow Speaking Glass in System Settings, then choose Try again.',
       micRefusedOutcomeDetail:
-        'This Mac did not allow CandidCue to use the microphone, so it could not follow your voice.',
+        'This Mac did not allow Speaking Glass to use the microphone, so it could not follow your voice.',
       micRefusedOutcomeSuggestion:
-        'Allow CandidCue in System Settings → Privacy & Security → Microphone before the next take.',
+        'Allow Speaking Glass in System Settings → Privacy & Security → Microphone before the next take.',
       micPermissionDeniedError:
-        'CandidCue is not allowed to use the microphone. Allow it in System Settings → Privacy & Security → Microphone, then try again.',
+        'Speaking Glass is not allowed to use the microphone. Allow it in System Settings → Privacy & Security → Microphone, then try again.',
       micDeniedFinding:
-        'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen CandidCue.',
+        'Speaking Glass is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen Speaking Glass.',
       micRestrictedFinding:
         'Microphone access is restricted on this Mac, by Screen Time or a device management profile, so this take cannot follow your voice.',
       micPromptFinding:
-        'CandidCue has not been allowed to use the microphone yet. Allow it now, so your Mac asks here rather than over the prompter.',
+        'Speaking Glass has not been allowed to use the microphone yet. Allow it now, so your Mac asks here rather than over the prompter.',
       micPromptAnnouncement: 'Waiting for your answer to the macOS microphone prompt.',
       micPromptWaiting: 'Waiting for macOS…',
-      micPromptNote: 'Answer the macOS prompt to continue. CandidCue checks again as soon as you do.',
+      micPromptNote: 'Answer the macOS prompt to continue. Speaking Glass checks again as soon as you do.',
     });
   });
 
@@ -132,7 +132,7 @@ describe('osCopy', () => {
       }
     });
 
-    it('calls the app Windows Settings, so it cannot be read as CandidCue’s own', () => {
+    it('calls the app Windows Settings, so it cannot be read as Speaking Glass’s own', () => {
       for (const [field, text] of sentences(windows)) {
         expect(text, field).not.toMatch(/(?<!Windows )\bSettings\b/);
       }
@@ -187,7 +187,7 @@ describe('osCopy', () => {
       expect(menu).toContain(`"${osCopy(platform).revealInFileManager}"`);
       expect(scriptActionLabels(platform).reveal).toBe(osCopy(platform).revealInFileManager);
     }
-    expect(menu).toContain('PredefinedMenuItem::quit(app, Some("Quit CandidCue"))');
+    expect(menu).toContain('PredefinedMenuItem::quit(app, Some("Quit Speaking Glass"))');
     expect(menu).toContain(`PredefinedMenuItem::quit(app, Some("${osCopy('windows').quit}"))`);
     // GTK has no predefined Quit, so Linux's File › Exit is an item of its own.
     expect(menu).toContain(`MenuItem::with_id(app, LINUX_EXIT_ID, "${osCopy('linux').quit}"`);
@@ -219,13 +219,13 @@ describe('error copy that names the operating system', () => {
         osCopy('windows').micPermissionDeniedError,
       );
       expect(copyForErrorCode('WINDOW_CLOSE_FAILED')).toBe(
-        'The window could not be closed. Exit CandidCue instead.',
+        'The window could not be closed. Exit Speaking Glass instead.',
       );
       expect(copyForErrorCode('WINDOW_FOCUS_FAILED')).toBe(osCopy('windows').windowFocusFailed);
     });
     expect(copyForErrorCode('MIC_PERMISSION_DENIED')).toBe(osCopy('macos').micPermissionDeniedError);
     expect(copyForErrorCode('WINDOW_CLOSE_FAILED')).toBe(
-      'The window could not be closed. Quit CandidCue instead.',
+      'The window could not be closed. Quit Speaking Glass instead.',
     );
   });
 });

@@ -12,7 +12,7 @@
 //! handshake hanging off that event is asserted nowhere automated. Tauri's own
 //! source is the evidence that `close()` raises it and `destroy()` does not.
 
-use candidcue_lib::commands;
+use speaking_glass_lib::commands;
 use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -45,14 +45,14 @@ fn harness() -> Harness {
         .expect("mock app builds");
     let control = WebviewWindowBuilder::new(
         &app,
-        candidcue_lib::windows::CONTROL_LABEL,
+        speaking_glass_lib::windows::CONTROL_LABEL,
         tauri::WebviewUrl::App("control.html".into()),
     )
     .build()
     .expect("mock control webview");
     let preferences = WebviewWindowBuilder::new(
         &app,
-        candidcue_lib::windows::preferences::PREFERENCES_LABEL,
+        speaking_glass_lib::windows::preferences::PREFERENCES_LABEL,
         tauri::WebviewUrl::App("preferences.html".into()),
     )
     .build()

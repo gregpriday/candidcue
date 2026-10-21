@@ -1,5 +1,5 @@
 /**
- * The script syntax reference: every construct CandidCue adds to Markdown, with
+ * The script syntax reference: every construct Speaking Glass adds to Markdown, with
  * one example each and what it does on the glass and to following (#305).
  *
  * ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         cases: [
           {
             what: 'an outer silent block wins over what is inside it',
-            source: ':::silent\nIntro notes.\n\n:::literal-command\nThanks for trying CandidCue.\n:::\n:::',
+            source: ':::silent\nIntro notes.\n\n:::literal-command\nThanks for trying Speaking Glass.\n:::\n:::',
             spoken: [],
             diagnostics: [],
           },
@@ -448,21 +448,21 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
       {
         id: 'literal-command',
         title: 'Wake phrase read aloud',
-        example: ':::literal-command\nThanks for trying CandidCue.\n:::',
+        example: ':::literal-command\nThanks for trying Speaking Glass.\n:::',
         glass: 'Shown like any other text.',
         following:
-          'Read as normal, and the editor stops warning that CandidCue is the wake phrase.',
+          'Read as normal, and the editor stops warning that Speaking Glass is the wake phrase.',
         keywords: ['wake word', 'command', 'read aloud', 'brand', 'product name'],
         expect: {
-          spoken: ['thanks', 'for', 'trying', 'candidcue'],
-          shown: 'Thanks for trying CandidCue.',
+          spoken: ['thanks', 'for', 'trying', 'speaking', 'glass'],
+          shown: 'Thanks for trying Speaking Glass.',
           diagnostics: [],
         },
         cases: [
           {
             what: 'the same sentence outside the block warns',
             problem: 'The same sentence outside the block.',
-            source: 'Thanks for trying CandidCue.',
+            source: 'Thanks for trying Speaking Glass.',
             diagnostics: ['command_collision'],
             blocking: false,
           },

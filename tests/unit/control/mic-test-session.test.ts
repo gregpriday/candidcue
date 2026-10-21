@@ -130,7 +130,7 @@ describe('the session closes itself when it is forgotten', () => {
     await h.session.start('mic-1');
 
     vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1000);
-    h.events.onPartial('CandidCue is');
+    h.events.onPartial('Speaking Glass is');
     vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1000);
     // Without the reset this would already be past the deadline.
     expect(h.dispose).not.toHaveBeenCalled();
@@ -185,13 +185,13 @@ describe('the session closes itself when it is forgotten', () => {
      */
     const h = harness();
     await h.session.start('mic-1');
-    h.events.onFinal('CandidCue is following my voice.');
+    h.events.onFinal('Speaking Glass is following my voice.');
 
     expect(h.dispose, 'the live session must be closed by the answer').toHaveBeenCalledOnce();
     expect(vi.getTimerCount(), 'and it must leave no deadline behind').toBe(0);
     // The user still sees what was heard, and why it stopped.
     expect(h.last().state).toBe('success');
-    expect(h.last().final).toBe('CandidCue is following my voice.');
+    expect(h.last().final).toBe('Speaking Glass is following my voice.');
     expect(h.last().stoppedReason).toBe('answered');
   });
 

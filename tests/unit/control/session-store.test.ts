@@ -87,7 +87,7 @@ describe('live session store', () => {
     pauseListening();
     expect(get(session).paused).toBe('listening');
     expect(get(liveStatusLabel)).toBe('Paused — the script stays where it is');
-    expect(get(liveStatusLabel)).not.toContain('CandidCue');
+    expect(get(liveStatusLabel)).not.toContain('Speaking Glass');
 
     hardPause();
     expect(get(liveStatusLabel)).toBe('Paused');
@@ -101,9 +101,9 @@ describe('live session store', () => {
     expect(get(session).paused).toBe('listening');
     expect(get(session).micState).toBe('live'); // still connected & listening
     expect(get(liveStatusLabel)).toContain('still listening');
-    // No wake phrase: nothing in the app answers "CandidCue, resume", so the
+    // No wake phrase: nothing in the app answers "Speaking Glass, resume", so the
     // label must not tell a presenter to say it.
-    expect(get(liveStatusLabel)).not.toContain('CandidCue');
+    expect(get(liveStatusLabel)).not.toContain('Speaking Glass');
 
     resumeSession();
     expect(get(session).paused).toBe('none');

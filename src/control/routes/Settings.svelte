@@ -258,7 +258,7 @@
       id: 'privacy',
       label: 'Data, privacy & updates',
       keywords:
-        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when candidcue uses the network / network / download / updates / check for updates automatically / automatic update check / update check / install update / new version / updates.speakingglass.com / version / about / diagnostics / refresh / candidcue version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
+        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when speaking glass uses the network / network / download / updates / check for updates automatically / automatic update check / update check / install update / new version / updates.speakingglass.com / version / about / diagnostics / refresh / speaking glass version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
     },
   ];
 
@@ -601,7 +601,7 @@
         available: false,
         loaded: false,
         model: 'unknown',
-        detail: 'CandidCue could not ask the backend about the speech model.',
+        detail: 'Speaking Glass could not ask the backend about the speech model.',
       };
     }
   }
@@ -692,7 +692,7 @@
   );
   /**
    * What "Automatic" resolves to right now, named on the tile: the panel the
-   * CandidCue window is on. Taken from the list so the tile can carry the
+   * Speaking Glass window is on. Taken from the list so the tile can carry the
    * number Identify puts on it.
    */
   const automaticDisplay = $derived.by(() => {
@@ -733,8 +733,8 @@
   /** Where the take falls back to, named — or described, when the OS could not name it. */
   const windowPanel = $derived(
     windowDisplay === null
-      ? 'the display the CandidCue window is on'
-      : `${displayName(windowDisplay)}, where the CandidCue window is`,
+      ? 'the display the Speaking Glass window is on'
+      : `${displayName(windowDisplay)}, where the Speaking Glass window is`,
   );
 
   /* --------------------------------------------- the live teleprompter view */
@@ -864,7 +864,7 @@
     } catch (err) {
       if (epoch === previewEpoch) {
         stagePreview = null;
-        stagePreviewError = `CandidCue could not show the preview on that display. ${describeError(err)}`;
+        stagePreviewError = `Speaking Glass could not show the preview on that display. ${describeError(err)}`;
       }
     } finally {
       stagePreviewBusy = false;
@@ -1024,7 +1024,7 @@
       if (request !== displaysRequest) return;
       displays = [];
       windowDisplay = null;
-      displaysError = `CandidCue could not list the connected displays. ${describeError(err)}`;
+      displaysError = `Speaking Glass could not list the connected displays. ${describeError(err)}`;
     } finally {
       if (request === displaysRequest) {
         displaysLoading = false;
@@ -1151,7 +1151,7 @@
       }, 4000);
     } catch (err) {
       // F.15 "Stage did not open" — stated inline, next to the action.
-      displaysError = `CandidCue could not create the prompt window on this display. ${describeError(err)}`;
+      displaysError = `Speaking Glass could not create the prompt window on this display. ${describeError(err)}`;
     } finally {
       stageTesting = false;
     }
@@ -1166,7 +1166,7 @@
    * TWO PROFILES, AND THE DIFFERENCE MATTERS
    * ------------------------------------------------------------------------
    * `appliedRig` is what a take actually uses: a rig somebody stored AND chose
-   * for this panel. `discovered` is what CandidCue can work out on its own —
+   * for this panel. `discovered` is what Speaking Glass can work out on its own —
    * the panel model from the display name, the physical scale from that model,
    * a plausible distance for that hardware — and it is a PROPOSAL, not a rig.
    *
@@ -1879,7 +1879,7 @@
     },
   );
   /** What the test asks for — said in the row, and spoken while it listens. */
-  const MIC_TEST_SENTENCE = 'CandidCue is following my voice.';
+  const MIC_TEST_SENTENCE = 'Speaking Glass is following my voice.';
   /** What the well under the verdict holds: words, a next step, or room for them. */
   const micTestWords = $derived.by((): { kind: 'final' | 'partial' | 'message' | 'empty'; text: string } => {
     if (micTestErrorText) return { kind: 'message', text: micTestErrorText };
@@ -2032,7 +2032,7 @@
    * another application, and they come back having flipped the switch — or
    * not. A refusal shows the remedy even to somebody who has never pressed a
    * button here. A grant while the refusal is showing changes what it says,
-   * but does not clear it: the OS allowing CandidCue is not the same as this
+   * but does not clear it: the OS allowing Speaking Glass is not the same as this
    * running webview being given the microphone, and only Try again — a real
    * request — can tell the two apart. Passive throughout: nothing here opens a
    * device.
@@ -2379,7 +2379,7 @@
       // refusal answers 'denied' (#303); a missing or busy device lands here,
       // described as what it is rather than as blocked access.
       micPermission = 'unknown';
-      micError = `CandidCue could not open the microphone. ${describeError(err)}`;
+      micError = `Speaking Glass could not open the microphone. ${describeError(err)}`;
     } finally {
       micRequesting = false;
     }
@@ -2400,7 +2400,7 @@
       diagnostics = null;
       diagnosticsError =
         err instanceof BackendUnavailableError
-          ? 'Diagnostics need the CandidCue desktop app.'
+          ? 'Diagnostics need the Speaking Glass desktop app.'
           : describeError(err);
     } finally {
       diagnosticsLoading = false;
@@ -2528,7 +2528,7 @@
       showToast(
         `Ready to restore ${result.scriptsInExport} scripts from the export taken on ` +
           `${result.createdAt?.slice(0, 10) ?? 'an earlier date'}. ` +
-          `${os.quit} and reopen CandidCue to apply it — nothing has changed yet.`,
+          `${os.quit} and reopen Speaking Glass to apply it — nothing has changed yet.`,
         'success',
       );
     } catch (err) {
@@ -2759,7 +2759,7 @@
           <!-- A compile switch, not a stage one: it changes what counts as a
                spoken token, so it is read when a take compiles the script. -->
           <!-- Named for what the PRESENTER does. "Read headings aloud" read as
-               CandidCue speaking them. -->
+               Speaking Glass speaking them. -->
           <Toggle
             checked={$settings.general.readHeadings}
             label="Follow headings as spoken lines"
@@ -2770,7 +2770,7 @@
       {:else if section === 'speech'}
         <Section
           title="Speech language"
-          description="The language CandidCue listens in. Each one is a large download, fetched once; after that, speech is transcribed on this computer with no account or key."
+          description="The language Speaking Glass listens in. Each one is a large download, fetched once; after that, speech is transcribed on this computer with no account or key."
         >
           <!--
             The pill answers "can a take follow me right now?", which needs both
@@ -2877,7 +2877,7 @@
         {/snippet}
         <Section
           title="Microphone"
-          description="Choose the input your takes listen to, check its level, then check that CandidCue understands you. The input meter listens while this page is open."
+          description="Choose the input your takes listen to, check its level, then check that Speaking Glass understands you. The input meter listens while this page is open."
         >
           <!-- Mounted for as long as the section is, so a notice that arrives
                is spoken into a region that was already there (the cards and
@@ -2897,7 +2897,7 @@
               <div class="mic-access" data-search-row>
                 <span class="mic-access-icon"><Icon name="mic" size={18} /></span>
                 <div class="mic-access-body">
-                  <p class="mic-access-title">Let CandidCue hear you</p>
+                  <p class="mic-access-title">Let Speaking Glass hear you</p>
                   <p class="mic-access-text">
                     {micRequesting ? os.micRequestPending : os.micAskIntro}
                   </p>
@@ -3092,7 +3092,7 @@
           <p class="mic-privacy" data-search-row>
             <span class="mic-privacy-icon"><Icon name="info" size={14} /></span>
             <span>
-              Speech is transcribed on {os.thisDevice} and never recorded, saved or uploaded. CandidCue
+              Speech is transcribed on {os.thisDevice} and never recorded, saved or uploaded. Speaking Glass
               uses the microphone during a test or a take, and while the input meter is on screen —
               which measures loudness and nothing else.
             </span>
@@ -3106,9 +3106,9 @@
           What this section controls (#302).
 
           The pinned panel is where a prompter take opens: Present moves the
-          CandidCue window onto it (`windows/present.rs`). With Automatic, or
+          Speaking Glass window onto it (`windows/present.rs`). With Automatic, or
           with the pinned panel unplugged, the take fills whichever monitor the
-          CandidCue window is on instead. That is the rule `takeDisplay`
+          Speaking Glass window is on instead. That is the rule `takeDisplay`
           states, and every sentence here comes from it — this copy once
           described a rule Present had stopped following, and the Automatic
           tile named an external display the take never opened on.
@@ -3143,11 +3143,11 @@
               <span class="monitor-name">Automatic</span>
               <!-- Automatic is not a panel, so it carries no number of its
                    own; it names the number of the one it resolves to, which
-                   is wherever the CandidCue window is. -->
+                   is wherever the Speaking Glass window is. -->
               <span class="monitor-meta">
                 {automaticDisplay
                   ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? `\u00a0·\u00a0${unbroken(automaticDisplay.name)}` : ''}`
-                  : 'The display the CandidCue window is on'}
+                  : 'The display the Speaking Glass window is on'}
               </span>
             </button>
             {#each displays as display (display.fingerprint)}
@@ -3198,7 +3198,7 @@
             <!-- Said here rather than discovered at Present: the fingerprint
                  is panel identity, so a display that is unplugged simply stops
                  matching. Both fallbacks are named, because they differ — the
-                 take goes where the CandidCue window is, previews prefer an
+                 take goes where the Speaking Glass window is, previews prefer an
                  external display. A notice in the house warning shape, not a
                  bold red paragraph: nothing failed, a panel is unplugged. -->
             <div class="notice" role="alert" data-search-row>
@@ -3356,7 +3356,7 @@
           number below it is a consequence of that rather than a preference.
 
           Everything here is optional and everything is reversible: the panel
-          opens showing what CandidCue worked out on its own, every derived
+          opens showing what Speaking Glass worked out on its own, every derived
           value can be pinned, and every pinned value says so and offers its way
           back to automatic.
         -->
@@ -3473,8 +3473,8 @@
                 {#if automaticRig === null}
                   <strong>Using the {$settings.teleprompter.fontSizePx} px fallback.</strong>
                   {discovered.identification.confidence === 'unknown'
-                    ? 'CandidCue does not recognise this panel and it does not report its size'
-                    : `CandidCue recognised ${discovered.identification.label} but cannot assume its size`},
+                    ? 'Speaking Glass does not recognise this panel and it does not report its size'
+                    : `Speaking Glass recognised ${discovered.identification.label} but cannot assume its size`},
                   so it cannot size text by distance until you calibrate it.
                 {:else}
                   <strong>Sized automatically</strong> for {discovered.identification.label}, assuming
@@ -3622,7 +3622,7 @@
                 format={(v) => `${v}%`}
                 spoken={(v) => `${v}% toward larger text`}
                 description={appliedRig === null
-                  ? 'Shared by every display CandidCue sizes automatically. A calibrated rig carries its own.'
+                  ? 'Shared by every display Speaking Glass sizes automatically. A calibrated rig carries its own.'
                   : undefined}
                 onchange={(value) =>
                   void (appliedRig
@@ -3939,7 +3939,7 @@
             layout="row"
             label="Default font family"
             description={$settings.teleprompter.fontFamilyId === 'high-legibility'
-              ? 'Bundled with CandidCue, and drawn to keep I, l and 1 — and 0 and O — apart at a distance.'
+              ? 'Bundled with Speaking Glass, and drawn to keep I, l and 1 — and 0 and O — apart at a distance.'
               : 'Atkinson Hyperlegible is bundled and drawn for reading at a distance.'}
             value={$settings.teleprompter.fontFamilyId}
             options={[
@@ -4041,14 +4041,14 @@
               <p class="geometry-note-text" id={GEOMETRY_NOTE_ID}>
                 <strong>Size, line height, column width and reading band come from {geometryOwner.label}</strong
                 > on {effectiveDisplay?.name ?? 'this display'}. These four are only the fallback for a
-                display CandidCue cannot size.
+                display Speaking Glass cannot size.
               </p>
               <button type="button" class="inline-link" onclick={() => void openGeometryOwner()}>
                 {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open prompter displays'}
               </button>
             {:else}
               <p class="geometry-note-text" id={GEOMETRY_NOTE_ID}>
-                <strong>These four are the fallback</strong> for a display CandidCue can neither
+                <strong>These four are the fallback</strong> for a display Speaking Glass can neither
                 recognise nor measure. With the preview running, drag Reading band position until the
                 marks at the sides of the stage sit over your camera lens — or calibrate the display
                 for a crosshair that does it for you.
@@ -4059,7 +4059,7 @@
             The ceiling was 160px, which is not a taste limit — it was short of
             what the product's own hardware needs. A Prompter XL at its rated
             4.6 m wants roughly 234px for a comfortable angular size, so this
-            control could not reach a legible size on a rig CandidCue ships
+            control could not reach a legible size on a rig Speaking Glass ships
             knowledge of, and the operator had no way to tell that the slider
             had run out rather than the display.
           -->
@@ -4238,7 +4238,7 @@
             </p>
           </div>
           <div class="privacy" data-search-row>
-            <h3 class="privacy-head">When CandidCue uses the network</h3>
+            <h3 class="privacy-head">When Speaking Glass uses the network</h3>
             <p class="privacy-body">
               When you download a speech language, from Welcome or Speech settings, and when it
               checks updates.speakingglass.com for a newer version (Updates, below). Neither carries
@@ -4264,7 +4264,7 @@
             <Toggle
               checked={$settings.general.checkForUpdates}
               label="Check for updates automatically"
-              description="Shortly after CandidCue opens, then every six hours while it runs. An update is installed only when you choose, never during a take."
+              description="Shortly after Speaking Glass opens, then every six hours while it runs. An update is installed only when you choose, never during a take."
               onchange={(value) => void patchSettings('general', { checkForUpdates: value })}
             />
             <p class="privacy-body" data-testid="update-policy">
@@ -4276,7 +4276,7 @@
         <!-- §44.11 / §47.10 diagnostics: the facts a support request needs. -->
         <Section
           title="Diagnostics"
-          description="What CandidCue knows about this installation. Useful when something is not working and you need to report it."
+          description="What Speaking Glass knows about this installation. Useful when something is not working and you need to report it."
         >
           {#snippet actions()}
             <Button size="sm" disabled={diagnosticsLoading} onclick={() => void loadDiagnostics()}>

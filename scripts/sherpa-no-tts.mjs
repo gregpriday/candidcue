@@ -7,7 +7,7 @@
  *
  * `sherpa-onnx-sys` 1.13.4 links a FIXED list of static archives, and three of
  * them are the text-to-speech front end: `espeak-ng` and `ucd` are
- * GPL-3.0-or-later, and `piper_phonemize` calls eSpeak NG. CandidCue only
+ * GPL-3.0-or-later, and `piper_phonemize` calls eSpeak NG. Speaking Glass only
  * recognises speech, and on macOS ld64 dead-strips every eSpeak NG and ucd-tools
  * object it loads (`verify-no-copyleft-objects.mjs` measures that from the
  * linker map). MSVC does not: it keeps the C++ static initialisers of the
@@ -76,7 +76,7 @@
  *
  * There is no `-no-tts` archive for linux-aarch64, and while win-arm64 has
  * one, `sherpa-onnx-sys` has no Windows arm64 target at all; so this covers the
- * two targets CandidCue builds outside macOS, both x64.
+ * two targets Speaking Glass builds outside macOS, both x64.
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -158,7 +158,7 @@ export const TARGETS = {
   },
 };
 
-export const STAMP = 'candidcue-no-tts.json';
+export const STAMP = 'speaking-glass-no-tts.json';
 const ATTEMPTS = 4;
 
 const log = (line) => process.stderr.write(`${line}\n`);

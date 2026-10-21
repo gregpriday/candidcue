@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * THE DEFECT THIS FILE EXISTS FOR
  * ---------------------------------------------------------------------------
- * CandidCue taps one microphone twice. `PcmCapture` encodes the frames the
+ * Speaking Glass taps one microphone twice. `PcmCapture` encodes the frames the
  * recogniser actually transcribes. A separate `MicrophoneMonitor` — an
  * AnalyserNode graph —
  * drives the level meter and the §28.6 dead-input detector.
@@ -13,7 +13,7 @@
  * reports pure silence while the PCM tap carries perfectly transcribable
  * speech. The Settings screen shows both answers at once, one above the other:
  *
- *     No signal — CandidCue cannot hear this microphone.
+ *     No signal — Speaking Glass cannot hear this microphone.
  *     Transcription is working.       "This is a test of the transcription."
  *
  * In Settings that costs nothing, because the transcription test reads the PCM

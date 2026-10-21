@@ -773,7 +773,7 @@ pub fn open_stage<R: Runtime>(
     // scale factor; the physical values are re-asserted below, where they are
     // unambiguous.
     let window = WebviewWindowBuilder::new(app, STAGE_LABEL, WebviewUrl::App("stage.html".into()))
-        .title("CandidCue Stage")
+        .title("Speaking Glass Stage")
         .decorations(false)
         .resizable(false)
         .maximizable(false)
@@ -1782,7 +1782,7 @@ mod tests {
         for required in [
             "$APPDATA/scripts/*/script.md",
             "$APPDATA/scripts/*/revisions/**",
-            "$APPDATA/candidcue.sqlite3*",
+            "$APPDATA/speaking-glass.sqlite3*",
         ] {
             assert!(
                 deny.contains(&required),

@@ -1,5 +1,5 @@
 /**
- * The words CandidCue uses for a take, in one place (CCUX-002).
+ * The words Speaking Glass uses for a take, in one place (CCUX-002).
  *
  * ---------------------------------------------------------------------------
  * WHY A MODULE RATHER THAN A STYLE NOTE
@@ -74,8 +74,8 @@ export const MOVEMENT_LABELS: Record<MovementMode, string> = {
  * microphone is NOT closing.
  */
 export const MOVEMENT_DETAIL: Record<MovementMode, string> = {
-  follow: 'The text moves when CandidCue is sure it has found your place.',
-  hold: 'The text stays where it is. The take keeps running and CandidCue keeps listening.',
+  follow: 'The text moves when Speaking Glass is sure it has found your place.',
+  hold: 'The text stays where it is. The take keeps running and Speaking Glass keeps listening.',
   roll: 'The text moves at a set pace regardless of what you say.',
   manual: 'The text moves only when you move it.',
 };

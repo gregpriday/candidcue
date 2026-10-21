@@ -20,20 +20,20 @@
 //! Windows resolves app data through the Known Folder API, which no
 //! environment variable redirects. There the app is given an identifier of its
 //! own for this run, so its app-data directory is a fresh one under the real
-//! `AppData\Roaming` — never CandidCue's — and the test removes it after.
+//! `AppData\Roaming` — never Speaking Glass's — and the test removes it after.
 
 use std::io::{Seek as _, SeekFrom, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use candidcue_lib::coordinator::AppCoordinator;
-use candidcue_lib::database::{self, Database};
-use candidcue_lib::speech::catalogue::{self, ModelEntry};
-use candidcue_lib::speech::model_manager::SpeechModelManager;
-use candidcue_lib::speech::model_store;
-use candidcue_lib::speech::SpeechEngine;
-use candidcue_lib::windows::events;
-use candidcue_lib::{commands, scripts::DataPaths};
+use speaking_glass_lib::coordinator::AppCoordinator;
+use speaking_glass_lib::database::{self, Database};
+use speaking_glass_lib::speech::catalogue::{self, ModelEntry};
+use speaking_glass_lib::speech::model_manager::SpeechModelManager;
+use speaking_glass_lib::speech::model_store;
+use speaking_glass_lib::speech::SpeechEngine;
+use speaking_glass_lib::windows::events;
+use speaking_glass_lib::{commands, scripts::DataPaths};
 use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -60,7 +60,7 @@ struct Harness {
 
 /// The identifier this run's app answers to on Windows (see the module doc).
 fn windows_test_identifier() -> String {
-    format!("com.candidcue.test.damaged-model.{}", std::process::id())
+    format!("com.speakingglass.test.damaged-model.{}", std::process::id())
 }
 
 fn test_context() -> tauri::Context<MockRuntime> {
@@ -99,7 +99,7 @@ fn harness() -> Harness {
         .build(test_context())
         .expect("mock app builds");
 
-    app.manage(candidcue_lib::database::BootStatus::Ready);
+    app.manage(speaking_glass_lib::database::BootStatus::Ready);
     app.manage(Database::new(pool));
     app.manage(paths);
     app.manage(AppCoordinator::default());

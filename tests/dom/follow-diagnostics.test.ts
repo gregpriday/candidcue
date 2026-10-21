@@ -107,7 +107,7 @@ describe('Copy diagnostics', () => {
 
     expect(writeText).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(writeText.mock.calls[0]![0]);
-    expect(payload.kind).toBe('candidcue.follow-diagnostics');
+    expect(payload.kind).toBe('speaking-glass.follow-diagnostics');
     expect(payload.redacted).toBe(true);
     expect(payload.sessionId).toBe(SESSION_ID);
     expect(container.querySelector('textarea')).toBeNull();
@@ -123,7 +123,7 @@ describe('Copy diagnostics', () => {
     const field = container.querySelector('textarea')!;
     expect(field.readOnly).toBe(true);
     expect(field.getAttribute('aria-label')).toBe('Follow diagnostics export');
-    expect(JSON.parse(field.value).kind).toBe('candidcue.follow-diagnostics');
+    expect(JSON.parse(field.value).kind).toBe('speaking-glass.follow-diagnostics');
     // Focusing it selects all of it, ready for ⌘C.
     container.querySelector('details')!.open = true;
     field.focus();

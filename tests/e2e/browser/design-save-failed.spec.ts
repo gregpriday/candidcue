@@ -3,7 +3,7 @@
  * it writes screenshots for a design review and asserts nothing about
  * behaviour, so it never runs in the normal suite.
  *
- *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out CANDIDCUE_E2E_PORT=5320 \
+ *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out SPEAKING_GLASS_E2E_PORT=5320 \
  *     ./node_modules/.bin/playwright test tests/e2e/browser/design-save-failed.spec.ts
  *
  * The common shim can only make `save_script` reject outright, so this spec
@@ -121,7 +121,7 @@ const seamCount = (page: Page, key: 'saveCalls' | 'revealCalls') =>
 
 const DISK_ERROR = {
   code: 'SCRIPT_SAVE_FAILED',
-  userMessage: 'CandidCue could not write the script file.',
+  userMessage: 'Speaking Glass could not write the script file.',
 };
 const FILE_MISSING = {
   code: 'SCRIPT_FILE_MISSING',

@@ -1,4 +1,4 @@
-//! # cc-align — CandidCue speech-to-script alignment core
+//! # cc-align — Speaking Glass speech-to-script alignment core
 //!
 //! A deterministic, allocation-conscious engine that follows a known Markdown
 //! script from streaming speech-recognition output. Pure by construction: no

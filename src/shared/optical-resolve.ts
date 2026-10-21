@@ -47,7 +47,7 @@ import type {
  * Line-unit defaults
  *
  * Each of these replaces a `vh` constant or a magic pixel value that meant
- * something different on every panel CandidCue supports. They are multiples of
+ * something different on every panel Speaking Glass supports. They are multiples of
  * the MEASURED line pitch, so a display twice as tall shows twice as many lines
  * rather than the same lines at different proportions.
  * ------------------------------------------------------------------------- */

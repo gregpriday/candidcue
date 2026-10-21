@@ -176,7 +176,7 @@ async function seedTeleprompterOverlay(
   teleprompter: Record<string, unknown>,
 ): Promise<void> {
   await page.addInitScript((section) => {
-    localStorage.setItem('candidcue.settings-overlay.v1', JSON.stringify({ teleprompter: section }));
+    localStorage.setItem('speaking-glass.settings-overlay.v1', JSON.stringify({ teleprompter: section }));
   }, teleprompter);
 }
 

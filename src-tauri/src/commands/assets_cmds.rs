@@ -108,7 +108,7 @@ pub async fn open_model_licence(url: String) -> Result<(), AppError> {
     let permitted = crate::speech::catalogue::licence_urls();
     if !permitted.iter().any(|allowed| allowed == &url) {
         return Err(AppError::unsafe_path(
-            "CandidCue only opens the licence pages the speech-model catalogue names.",
+            "Speaking Glass only opens the licence pages the speech-model catalogue names.",
         )
         .with_detail("url", url));
     }

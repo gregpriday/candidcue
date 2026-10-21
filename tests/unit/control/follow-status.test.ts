@@ -16,7 +16,7 @@
  *
  *  - it read the store's broad `followingPaused` as a decision, but that flag
  *    is ALSO raised automatically on device loss, so a dead microphone reported
- *    "Text held — CandidCue is still listening": false in both halves;
+ *    "Text held — Speaking Glass is still listening": false in both halves;
  *  - it answered "Ready to follow" before looking at the microphone, and a dead
  *    microphone produces no motion frames, so the panel would have said "ready"
  *    for the entire take;
@@ -120,7 +120,7 @@ describe('followStatus', () => {
       /Allow apps to use the microphone in Windows Settings, then choose Try again\.$/,
     );
     expect(followStatus(input, 'linux').detail).toMatch(
-      /Allow CandidCue in your system settings, then choose Try again\.$/,
+      /Allow Speaking Glass in your system settings, then choose Try again\.$/,
     );
     // The line itself is not the platform's to change.
     expect(followStatus(input, 'windows').line).toBe('Microphone not allowed');
@@ -165,7 +165,7 @@ describe('followStatus', () => {
     /*
      * Device loss sets the store's broad `followingPaused` itself. Reading that
      * as a decision produced "Text held — the take is still running and
-     * CandidCue is still listening" over a microphone that had gone. Only
+     * Speaking Glass is still listening" over a microphone that had gone. Only
      * `heldByUser` may produce that sentence.
      */
     const status = followStatus(

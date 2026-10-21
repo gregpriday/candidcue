@@ -3,7 +3,7 @@
  * history). Opt-in: it writes screenshots for a design review and asserts
  * nothing about behaviour, so it never runs in the normal suite.
  *
- *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out CANDIDCUE_E2E_PORT=5316 \
+ *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out SPEAKING_GLASS_E2E_PORT=5316 \
  *     ./node_modules/.bin/playwright test tests/e2e/browser/design-revision-history.spec.ts
  *
  * The common shim answers `list_revisions` with `[]` and knows nothing about
@@ -328,7 +328,7 @@ const STATES: Array<{
       const rows = dialog(page).getByRole('listbox', { name: 'Revisions' }).getByRole('option');
       await rows.nth(16).scrollIntoViewIfNeeded();
       await rows.nth(16).click();
-      await expect(dialog(page)).toContainText('Changed outside CandidCue');
+      await expect(dialog(page)).toContainText('Changed outside Speaking Glass');
       await expect(dialog(page).getByRole('button', { name: 'Restore this version' })).toBeEnabled();
     },
   },

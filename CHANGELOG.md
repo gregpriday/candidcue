@@ -1,6 +1,6 @@
 # Changelog
 
-Release notes for CandidCue. The release workflow publishes the section
+Release notes for Speaking Glass. The release workflow publishes the section
 matching the tag it is building, so **a release with no section here does not
 ship** — see `scripts/release-notes.mjs`.
 
@@ -9,10 +9,10 @@ deciding whether to install it, not for somebody reading the diff.
 
 ## v0.1.0
 
-The first public release. CandidCue is free and open source under the MIT
+The first public release. Speaking Glass is free and open source under the MIT
 licence.
 
-CandidCue is a voice-following teleprompter. You write a script in Markdown, it
+Speaking Glass is a voice-following teleprompter. You write a script in Markdown, it
 displays on a second screen behind your camera — usually through teleprompter
 glass — and it scrolls to keep your place as you speak. Nothing on the glass is
 generated: an on-device recogniser transcribes you, and a deterministic local
@@ -53,11 +53,11 @@ engine decides where in the script you are.
 
 ### Updates
 
-CandidCue checks for updates by itself: shortly after it opens and every six
+Speaking Glass checks for updates by itself: shortly after it opens and every six
 hours while it runs. When one is available it says so in the main window and
 installs it only when you choose **Install and Restart**. It never prompts,
 downloads or restarts during a take, and never draws on the glass. Every update
-is signed, and CandidCue refuses one that does not verify against the key it
+is signed, and Speaking Glass refuses one that does not verify against the key it
 was built with. Turn the automatic check off in Settings; **Help › Check for
 Updates…** still works when you want it. On Linux, the AppImage updates itself;
 a `.deb` install is pointed at the download page instead.
@@ -68,7 +68,7 @@ a `.deb` install is pointed at the download page instead.
   calibrations and session history are in a local database. There is no cloud
   copy and no server-side recovery.
 - **No telemetry.** No analytics, no crash upload, no account and no licence
-  check. CandidCue talks to the network for two things only: downloading the
+  check. Speaking Glass talks to the network for two things only: downloading the
   speech model when you ask it to, and the update check, which sends nothing
   but the request itself (the app's version, platform and architecture) to
   `updates.speakingglass.com`.
@@ -98,5 +98,5 @@ in [SECURITY.md](https://github.com/gregpriday/candidcue/blob/main/.github/SECUR
 
 **Everything else** goes to
 [GitHub Issues](https://github.com/gregpriday/candidcue/issues). It helps to
-include the version (About CandidCue, or Settings), your operating system, your
+include the version (About Speaking Glass, or Settings), your operating system, your
 microphone and display setup, and what the prompter actually did.

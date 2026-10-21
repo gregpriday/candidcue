@@ -150,7 +150,7 @@ describe('nearestScaleStep', () => {
  * is exactly that arrangement without a DOM.
  */
 describe('two windows writing one workspace', () => {
-  const KEY = 'candidcue.workspace.v1';
+  const KEY = 'speaking-glass.workspace.v1';
 
   type WorkspaceModule = typeof import('./workspace');
 

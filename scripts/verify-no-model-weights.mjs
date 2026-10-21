@@ -8,7 +8,7 @@
  *   - **Size.** The x-asr 480 ms graphs are ~161 MB. A DMG that quietly grew by
  *     that much would be noticed; one that grew by a single stray `.onnx`
  *     during a refactor would not.
- *   - **Licensing.** The recogniser's licence is not CandidCue's licence. The
+ *   - **Licensing.** The recogniser's licence is not Speaking Glass's licence. The
  *     model is downloaded in-app with its attribution written beside it; a
  *     model inside the bundle would be redistribution under a different set of
  *     obligations, decided by accident.
@@ -146,7 +146,7 @@ const ALLOWED_BUNDLE_RESOURCES = new Map([
   ],
   [
     'LICENSE.txt',
-    "CandidCue's own MIT licence, whose notice must travel with every copy of the software",
+    "Speaking Glass's own MIT licence, whose notice must travel with every copy of the software",
   ],
 ]);
 

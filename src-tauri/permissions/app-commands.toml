@@ -1,4 +1,4 @@
-# CandidCue application-command ACL (spec §49, §50.2).
+# Speaking Glass application-command ACL (spec §49, §50.2).
 #
 # The mere existence of an app-level permission file is what switches Tauri's
 # ACL gate ON for application commands. Without it,
@@ -26,7 +26,7 @@
 
 [[permission]]
 identifier = "allow-control-commands"
-description = "Every CandidCue application command. Granted to the control and preferences windows; withheld from the stage."
+description = "Every Speaking Glass application command. Granted to the control and preferences windows; withheld from the stage."
 commands.allow = [
   "app_version",
   "list_scripts",
