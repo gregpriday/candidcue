@@ -265,7 +265,7 @@ fn copy(from: PathBuf, to: PathBuf, data_dir: &Path, identifier: &str, replace: 
         if std::fs::symlink_metadata(&staging).is_ok() {
             std::fs::remove_dir_all(&staging)?;
         }
-        crate::backup::copy_tree(&from, &staging)?;
+        copy_all_but_the_database(&from, &staging)?;
         let raw_database = snapshot_database(&from, &staging)?;
         rename_legacy_names(&staging)?;
         std::fs::write(staging.join(COPIED_MARKER), format!("{}\n", from.display()))?;
@@ -287,9 +287,40 @@ fn copy(from: PathBuf, to: PathBuf, data_dir: &Path, identifier: &str, replace: 
     }
 }
 
-/// Replace the copied database files with a consistent snapshot of the live
-/// database. `Ok(Some(reason))` when SQLite cannot read the old database at
-/// all, and the raw copy stands; an error for anything that might pass on a
+/// The database's files under their old names: the database, its WAL and its
+/// shared-memory index.
+fn legacy_database_files() -> [String; 3] {
+    ["", "-wal", "-shm"].map(|suffix| format!("{}{suffix}", crate::database::LEGACY_DB_FILE_NAME))
+}
+
+/// Everything in the old folder except the database's own files, which the
+/// snapshot below stands in for. Copying them as files would race the old
+/// build's own connection: SQLite deletes the WAL and its index when the last
+/// connection closes, so either can vanish between being listed and copied.
+fn copy_all_but_the_database(from: &Path, staging: &Path) -> std::io::Result<()> {
+    let skip = legacy_database_files();
+    std::fs::create_dir_all(staging)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if skip.iter().any(|file| name == file.as_str()) {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        let target = staging.join(&name);
+        if file_type.is_dir() {
+            crate::backup::copy_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+            crate::util::sync_file(&target).map_err(std::io::Error::other)?;
+        }
+    }
+    Ok(())
+}
+
+/// Put a consistent snapshot of the old database into the copy.
+/// `Ok(Some(reason))` when SQLite cannot read the old database at all, and its
+/// raw files are copied instead; an error for anything that might pass on a
 /// later try.
 fn snapshot_database(from: &Path, staging: &Path) -> std::io::Result<Option<String>> {
     let source = from.join(crate::database::LEGACY_DB_FILE_NAME);
@@ -331,24 +362,26 @@ fn snapshot_database(from: &Path, staging: &Path) -> std::io::Result<Option<Stri
     match snapshot {
         Ok(()) => {
             crate::util::sync_file(&target).map_err(std::io::Error::other)?;
-            // The copied originals go, every one of them: a stale WAL left to
-            // be renamed beside the snapshot would be replayed onto it.
-            for suffix in ["", "-wal", "-shm"] {
-                remove_if_present(&staging.join(format!(
-                    "{}{suffix}",
-                    crate::database::LEGACY_DB_FILE_NAME
-                )))?;
-            }
             Ok(None)
         }
         Err((err, unreadable)) => {
             // Whatever half-written snapshot there is goes first, either way.
             remove_if_present(&target)?;
-            if primary_code(&err).is_some_and(|code| unreadable.contains(&code)) {
-                Ok(Some(err.to_string()))
-            } else {
-                Err(std::io::Error::other(err))
+            if !primary_code(&err).is_some_and(|code| unreadable.contains(&code)) {
+                return Err(std::io::Error::other(err));
             }
+            // A database SQLite cannot read has no live connection to race,
+            // so its files are copied as they are. Only the database itself
+            // must be there; a WAL or index that is not is simply not copied.
+            for (index, name) in legacy_database_files().iter().enumerate() {
+                let copied = staging.join(name);
+                match std::fs::copy(from.join(name), &copied) {
+                    Ok(_) => crate::util::sync_file(&copied).map_err(std::io::Error::other)?,
+                    Err(missing) if index > 0 && missing.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(other) => return Err(other),
+                }
+            }
+            Ok(Some(err.to_string()))
         }
     }
 }
