@@ -90,9 +90,10 @@ describe('LegacyLibraryNotice', () => {
     for (const notice of [FAILED, ABANDONED]) {
       const { card, unmount } = renderNotice(notice);
       const recover = text(card, 'legacy-library-recover');
-      expect(recover).toMatch(/^To bring an old script's text into this library/);
+      expect(recover).toMatch(/^You can bring an old script's text into this library/);
       expect(recover).toContain('File › Import Markdown…');
       expect(recover).toMatch(/open scripts, then a script's folder, and choose script\.md/);
+      expect(recover).toContain('Settings › Data, privacy & updates › Restore from export…');
       // The whole-library route says what it costs.
       expect(recover).toContain('Restore from export…');
       expect(recover).toMatch(/replaces everything here/);
@@ -103,9 +104,10 @@ describe('LegacyLibraryNotice', () => {
   it('on the recovery screen, puts both ways in off until the library opens', () => {
     const { card } = renderNotice(ABANDONED, { libraryOpen: false });
     const recover = text(card, 'legacy-library-recover');
-    expect(recover).toMatch(/^Once Speaking Glass can open its library, bring/);
+    expect(recover).toMatch(/^Once Speaking Glass can open its library, you can bring/);
     // One sentence governs both: the restore is not offered as available now.
-    expect(recover.indexOf('Restore from export…')).toBeGreaterThan(recover.indexOf('Once'));
+    expect(recover.split('. ')).toHaveLength(1);
+    expect(recover).toContain('Restore from export…');
   });
 
   it('shows the folder or puts the card away, and nothing else', () => {

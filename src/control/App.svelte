@@ -173,6 +173,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
     bringToFront: () => void focusAppWindow('control'),
   });
   const updateNotice = updates.notice;
+
+  /** How long the boot waits for the CandidCue library notice (#454). */
+  const LEGACY_NOTICE_WAIT_MS = 2000;
   let stopUpdateSchedule: (() => void) | null = null;
   /**
    * Files are over the window right now (§20.2).
@@ -729,7 +732,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
           });
           return;
         }
-        const legacy = await legacyNotice;
+        /*
+         * Bounded: the notice is worth a short wait, never a launch. A reply
+         * that does not come in time is treated as no notice.
+         */
+        const legacy = await Promise.race([
+          legacyNotice,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), LEGACY_NOTICE_WAIT_MS)),
+        ]);
         if (disposed) return;
         setLegacyLibraryNotice(legacy);
 
@@ -816,15 +826,17 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
         /*
          * The CandidCue library notice is drawn by Welcome and the Library
-         * (#454). A launch that opens a script instead is pointed there once.
+         * (#454). A launch that opens a script instead is pointed there once,
+         * by a notice that goes by itself: one that stayed would follow the
+         * user into a take, and an action here would land on whichever
+         * Library view was last open, Trash included, where the card is not.
          */
         const firstRoute = get(route).name;
         if (legacy !== null && firstRoute !== 'welcome' && firstRoute !== 'library') {
           showToast(
-            'Your scripts from CandidCue are not in this library. The Library says where they are ' +
-              'and how to bring them in.',
+            'Your CandidCue scripts are not in this library: All Scripts in the Library says where they are.',
             'info',
-            { action: { label: 'Open Library', run: () => void navigate({ name: 'library', view: 'all' }) } },
+            { durationMs: 12_000 },
           );
         }
 

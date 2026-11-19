@@ -83,12 +83,12 @@
     </p>
   {/if}
   <p class="body" data-testid="legacy-library-recover">
-    {libraryOpen ? 'To bring' : 'Once Speaking Glass can open its library, bring'} an old script's
-    text into this library with File › Import Markdown…: in the old folder, open
+    {libraryOpen ? 'You can' : 'Once Speaking Glass can open its library, you can'} bring an old
+    script's text into this library with File › Import Markdown… (in the old folder, open
     <span class="name">scripts</span>, then a script's folder, and choose
-    <span class="name">script.md</span>. Or, to replace this library with the whole old one, export
-    all data from CandidCue and use Settings › Data, privacy &amp; updates › Restore from export…,
-    which replaces everything here.
+    <span class="name">script.md</span>), or replace this library with the whole old one: export all
+    data from CandidCue and use Settings › Data, privacy &amp; updates › Restore from export…, which
+    replaces everything here.
   </p>
   {#if revealError !== null}
     <p class="body" role="alert">{revealError}</p>

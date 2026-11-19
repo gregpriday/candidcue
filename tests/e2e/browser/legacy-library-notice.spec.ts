@@ -160,9 +160,23 @@ test('a launch that opens a script is pointed at the Library', async ({ page }) 
   });
   await page.goto('/control.html');
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
-  await expect(page.getByText('Your scripts from CandidCue are not in this library.')).toBeVisible();
-  await page.getByRole('button', { name: 'Open Library' }).click();
-  await expect(notice(page)).toBeVisible();
+  await expect(page.getByText(/Your CandidCue scripts are not in this library/)).toBeVisible();
+  // It points; it does not navigate, and it is no card in the editor.
+  await expect(notice(page)).toHaveCount(0);
+});
+
+test('a launch that opens a script, with nothing to say, says nothing', async ({ page }) => {
+  await installTauriShim(page, {
+    welcomed: true,
+    openTo: 'last_script',
+    seedScripts: [
+      { id: 'kept', title: 'Written here', source: '# Written here\n', lastOpenedAt: new Date().toISOString() },
+    ],
+  });
+  await page.goto('/control.html');
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+  await expect.poll(() => calls(page, 'get_legacy_library_notice')).toHaveLength(1);
+  await expect(page.getByText(/CandidCue scripts/)).toHaveCount(0);
 });
 
 test('nothing to say shows nothing', async ({ page }) => {
