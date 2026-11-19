@@ -24,6 +24,7 @@
   import { createAndOpenScript, exportScriptToFile, importMarkdown } from './lib/app-actions';
   import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
   import { openSettingsWindow } from './lib/open-settings';
+  import { perfShellReady } from './lib/perf/probe';
   import { takeStarting } from './lib/start-take';
   import {
     allowMicrophoneForTake,
@@ -804,6 +805,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
           }),
         );
         ready = true;
+        // Issue #240: a benchmark build marks this frame and runs its
+        // scenario; every other build returns at once.
+        perfShellReady();
 
         /*
          * The automatic update check: once shortly after launch, then every few
