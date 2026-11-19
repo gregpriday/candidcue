@@ -27,8 +27,8 @@ const MAX_BUNDLE_ASSET_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_BUNDLE_TOTAL_BYTES: u64 = 600 * 1024 * 1024;
 const MAX_BUNDLE_FILE_COUNT: usize = 256;
 /// How many entries of the folder beside an imported Markdown file are listed
-/// to find images the text names only by hash (#450). A name the text writes
-/// as an image is looked up directly, whatever the folder holds.
+/// to find its images (#450). Past that, names the text writes as images are
+/// looked up directly, a bounded number of times.
 const MAX_LISTED_BESIDE: usize = 4096;
 
 /// Already-authorized import parameters.
@@ -260,25 +260,37 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
             }
             folder.canonicalize().ok()
         });
-        // A name the text writes as an image is looked up directly. A bare
-        // stem — no extension the scan could read — is matched against one
-        // listing of the folder instead, so a text full of checksums costs no
-        // lookups for files that are not there. The listing is bounded; a
-        // written name never depends on it.
+        // One listing of the folder answers which names are there, so a text
+        // full of hashes costs no lookups for files that are not. Only when
+        // the listing could not be read in full is a name the text writes as
+        // an image looked up directly, and a bounded number of times.
+        let mut listing_complete = false;
         let listed: std::collections::HashSet<String> = match &canonical_folder {
             Some(_) => folder
                 .as_deref()
                 .and_then(|folder| fs::read_dir(folder).ok())
                 .map(|entries| {
-                    entries
-                        .filter_map(|entry| entry.ok())
-                        .take(MAX_LISTED_BESIDE)
-                        .filter_map(|entry| entry.file_name().into_string().ok())
-                        .collect()
+                    let mut names = std::collections::HashSet::new();
+                    listing_complete = true;
+                    for entry in entries {
+                        let Ok(entry) = entry else {
+                            listing_complete = false;
+                            continue;
+                        };
+                        if names.len() >= MAX_LISTED_BESIDE {
+                            listing_complete = false;
+                            break;
+                        }
+                        if let Ok(name) = entry.file_name().into_string() {
+                            names.insert(name);
+                        }
+                    }
+                    names
                 })
                 .unwrap_or_default(),
             None => std::collections::HashSet::new(),
         };
+        let mut unlisted_lookups = 0;
         let mut read_total: u64 = 0;
         for (stem, written) in wanted {
             // Every file the export would have copied for this stem — it
@@ -286,8 +298,14 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
             let mut brought_in: Vec<&str> = Vec::new();
             for extension in ALLOWED_BUNDLE_ASSET_EXTENSIONS {
                 let name = format!("{stem}.{extension}");
-                if !written.contains(&extension) && !listed.contains(&name) {
-                    continue;
+                if !listed.contains(&name) {
+                    if listing_complete
+                        || !written.contains(&extension)
+                        || unlisted_lookups >= MAX_BUNDLE_FILE_COUNT
+                    {
+                        continue;
+                    }
+                    unlisted_lookups += 1;
                 }
                 let (Some(folder), Some(canonical)) = (&folder, &canonical_folder) else { break };
                 if found.len() >= MAX_BUNDLE_FILE_COUNT || read_total >= MAX_BUNDLE_TOTAL_BYTES {
@@ -782,18 +800,10 @@ async fn install_bundle_assets(
     // that are nowhere.
     crate::util::create_dir_all_durable(&assets_dir)?;
 
-    // Every file is written before the transaction opens: SQLite's writer
-    // lock is taken by the first insert, and holding it across slow disk
-    // writes and flushes could time out a save running beside the import.
-    // A failure here leaves files the caller's rollback removes with the
-    // script's folder.
-    for (file_name, bytes) in assets {
-        atomic_write(&assets_dir.join(file_name), bytes)?;
-    }
-
     let mut tx = pool.begin().await?;
     for (file_name, bytes) in assets {
         let dest = assets_dir.join(file_name);
+        atomic_write(&dest, bytes)?;
         let sha = sha256_hex(bytes);
         let extension = dest
             .extension()
