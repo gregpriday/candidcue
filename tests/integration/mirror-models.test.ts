@@ -312,6 +312,22 @@ describe('the run passes only once the public URL serves the pinned bytes', () =
     ).rejects.toThrow(/bytes/);
   });
 
+  it('refuses bytes reached through a redirect down to http, as the app does', async () => {
+    const downgraded = (async () => ({
+      status: 200,
+      url: 'http://mirror.example/x',
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(ARCHIVE));
+          controller.close();
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await expect(mirror.readBack('https://mirror.example/x', ARCHIVE.length, { fetchFn: downgraded })).rejects.toThrow(
+      /not https/,
+    );
+  });
+
   it('names the timeout when a transfer stalls, not a bare abort', async () => {
     // A fetch that never answers until it is aborted, as fetch itself does.
     const stalled = ((_url: string, init: { signal: AbortSignal }) =>

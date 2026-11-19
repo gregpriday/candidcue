@@ -200,6 +200,14 @@ async function transfer(url, limit, sink, fetchFn, timeoutMs = FETCH_TIMEOUT_MS)
   const timer = setTimeout(() => controller.abort(new Error(`${url} took longer than ${timeoutMs} ms`)), timeoutMs);
   try {
     const response = await fetchFn(url, { redirect: 'follow', signal: controller.signal });
+    // fetch follows a redirect from https to http; the app's hop policy
+    // (`net::check_hop`) refuses one. Bytes the app would never accept must
+    // not pass for a working mirror.
+    const landed = response.url || url;
+    if (url.startsWith('https:') && !landed.startsWith('https:')) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`${url} redirected to ${landed}, which is not https`);
+    }
     if (response.status !== 200 || !response.body) {
       await response.body?.cancel().catch(() => {});
       return { status: response.status };
