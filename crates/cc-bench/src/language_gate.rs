@@ -50,7 +50,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::provenance::{primary_subtag, CaptureRecord, Provenance, Source, WeightCatalogue};
+use crate::provenance::{
+    is_language_tag, primary_subtag, CaptureRecord, Provenance, Source, WeightCatalogue,
+};
 use crate::suite::{ScoringTable, SuiteResult};
 use crate::tierc::TierCResult;
 
@@ -624,15 +626,19 @@ fn provenance_problems(
             problems.push(p);
         }
     };
-    if claim.is_empty() {
-        note("no language was claimed (--label is empty)".to_string());
+    if !is_language_tag(language) {
+        note(format!(
+            "{language:?} is not a language tag, so there is no claim to check \
+             the results against (--label en, en-US, fr, …)"
+        ));
     }
 
     for (tier, prov, _) in tiers {
-        if prov.revision.commit.is_none() {
+        if !prov.revision.is_reproducible() {
             note(format!(
-                "{tier} was replayed by a cc-bench build with no recorded revision, \
-                 so nobody can say which code produced it"
+                "{tier} was replayed by cc-bench {}, which is not a clean build of \
+                 a commit, so nobody can rebuild the code that produced it",
+                prov.revision.describe()
             ));
         }
         if prov.alignment_language != claim {
@@ -656,6 +662,15 @@ fn provenance_problems(
                 "Tier B and {tier} compiled scripts differently (CC_BENCH_APP_TOKENS)"
             ));
         }
+        // Scripts are read from the checkout, not the build, so one binary can
+        // replay against two different texts.
+        for (script, digest) in &prov.scripts {
+            if first.scripts.get(script).is_some_and(|d| d != digest) {
+                note(format!(
+                    "Tier B and {tier} replayed different text for the script {script}"
+                ));
+            }
+        }
     }
 
     // One record per scoring fixture per tier, the same record in both.
@@ -667,6 +682,15 @@ fn provenance_problems(
         let mut conditions: Option<(&str, CaptureRecord)> = None;
         for run in runs.iter() {
             let record = match records.get(run) {
+                // A record filed under another fixture's name describes that
+                // fixture's capture, whatever the map key says.
+                Some(Some(record)) if record.run != *run => {
+                    note(format!(
+                        "{tier}: the capture record filed for {run} describes {}",
+                        record.run
+                    ));
+                    continue;
+                }
                 Some(Some(record)) => record,
                 Some(None) => {
                     note(format!(
@@ -738,11 +762,12 @@ fn check_record(
             record.model
         ));
     }
-    if record.revision.commit.is_none() {
-        note(
-            "the corpus was captured by a cc-bench build with no recorded revision"
-                .to_string(),
-        );
+    if !record.revision.is_reproducible() {
+        note(format!(
+            "the corpus was captured by cc-bench {}, which is not a clean build \
+             of a commit",
+            record.revision.describe()
+        ));
     }
 }
 
@@ -1296,7 +1321,25 @@ mod tests {
             app_tokens: false,
             source,
             layouts,
+            scripts: [("starter".to_string(), "digest of starter".to_string())]
+                .into_iter()
+                .collect(),
         }
+    }
+
+    /// One scoring run's record in one tier.
+    fn record_mut<'a>(prov: &'a mut Option<Provenance>, run: &str) -> &'a mut Option<CaptureRecord> {
+        let Source::Captured { runs } = &mut prov.as_mut().unwrap().source else {
+            unreachable!()
+        };
+        runs.get_mut(run).unwrap()
+    }
+
+    fn problems_of(language: &str, b: &SuiteResult, c: &TierCResult) -> String {
+        evaluate_saved(language, b, c, &catalogue())
+            .unwrap()
+            .corpus_problems
+            .join("\n")
     }
 
     /// Every scoring run's record in both tiers, changed the same way.
@@ -1559,9 +1602,13 @@ mod tests {
         let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
         assert!(err.contains("focus-lead 0"), "{err}");
 
-        // Lead 0, but some other geometry under the same name.
+        // Lead 0, but some other geometry under the same name — every field
+        // counts, not just the ones the sweep happens to vary.
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.provenance.as_mut().unwrap().layouts[0].atoms_per_line = 4.0;
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err());
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance.as_mut().unwrap().layouts[0].refresh_hz = 30.0;
         assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err());
 
         // A sweep: the right layout and others beside it.
@@ -1620,6 +1667,13 @@ mod tests {
         assert!(err.contains("Tier B result lacks provenance"), "{err}");
         let err = evaluate_saved("en", &b, &old_c, &catalogue()).unwrap_err().to_string();
         assert!(err.contains("Tier C result lacks provenance"), "{err}");
+
+        // A file older still has neither provenance nor a scoring table, and
+        // the missing provenance is what it is reported for.
+        let mut older = old_b.clone();
+        older.scoring = None;
+        let err = evaluate_saved("en", &older, &old_c, &catalogue()).unwrap_err().to_string();
+        assert!(err.contains("lacks provenance"), "{err}");
     }
 
     #[test]
@@ -1628,7 +1682,57 @@ mod tests {
         let (mut b, c) = saved(&english_corpus(), &m, &m);
         b.provenance.as_mut().unwrap().source = Source::Synthetic;
         let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
-        assert!(err.contains("synthetic"), "{err}");
+        assert!(err.contains("Tier B result was replayed from synthetic"), "{err}");
+
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance.as_mut().unwrap().source = Source::Synthetic;
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
+        assert!(err.contains("Tier C result was replayed from synthetic"), "{err}");
+    }
+
+    /// A scored fixture the provenance does not mention at all — a hand-edited
+    /// file — is as unproven as one recorded without a capture.
+    #[test]
+    fn a_scored_fixture_absent_from_the_provenance_is_refused() {
+        let m = english_baseline_metrics();
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        let Source::Captured { runs } = &mut c.provenance.as_mut().unwrap().source else {
+            unreachable!()
+        };
+        runs.remove("technical__pauses__xai");
+        assert!(problems_of("en", &b, &c)
+            .contains("Tier C: the result's provenance does not cover technical__pauses__xai"));
+    }
+
+    /// The tiers agree, and the record is genuine — for another fixture.
+    #[test]
+    fn a_fixture_cannot_borrow_another_fixtures_record() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        for prov in [&mut b.provenance, &mut c.provenance] {
+            let borrowed = record_mut(prov, "starter__exact__gemini").clone();
+            *record_mut(prov, "names__exact__xai") = borrowed;
+        }
+        let problems = problems_of("en", &b, &c);
+        assert!(
+            problems.contains("the capture record filed for names__exact__xai describes starter__exact__gemini"),
+            "{problems}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_claim_is_not_a_claim() {
+        let m = english_baseline_metrics();
+        let (b, c) = saved(&english_corpus(), &m, &m);
+        for claim in ["en-", "-en", "", "e", "english"] {
+            let report = evaluate_saved(claim, &b, &c, &catalogue()).unwrap();
+            assert!(!report.passed(), "{claim:?} passed");
+            assert!(
+                report.corpus_problems.iter().any(|p| p.contains("not a language tag")),
+                "{claim:?}: {:?}",
+                report.corpus_problems
+            );
+        }
     }
 
     #[test]
@@ -1667,10 +1771,17 @@ mod tests {
             report.corpus_problems
         );
 
+        // A model whose weights ARE catalogued but that this build does not
+        // ship: only the model check can refuse it.
         let (mut b, mut c) = saved(&english_corpus(), &m, &m);
         edit_records(&mut b, &mut c, |_, r| r.model = "some-other-model".into());
-        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
+        let mut with_other = catalogue();
+        let shipped = with_other.models[cc_stt::default_model().id].clone();
+        with_other.models.insert("some-other-model".into(), shipped);
+        let report = evaluate_saved("en", &b, &c, &with_other).unwrap();
+        let problems = report.corpus_problems.join("\n");
         assert!(problems.contains("does not ship"), "{problems}");
+        assert!(!problems.contains("weights"), "{problems}");
     }
 
     /// One fixture captured another way is enough to make the corpus two
@@ -1706,13 +1817,55 @@ mod tests {
 
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.provenance.as_mut().unwrap().revision.commit = Some("fedcba".into());
-        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
-        assert!(problems.contains("different cc-bench builds"), "{problems}");
+        assert!(problems_of("en", &b, &c).contains("different cc-bench builds"));
 
+        // Two dirty builds of one commit have identical stamps and can be
+        // different programs, so a dirty build is never evidence.
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        b.provenance.as_mut().unwrap().revision.dirty = true;
+        c.provenance.as_mut().unwrap().revision.dirty = true;
+        let problems = problems_of("en", &b, &c);
+        assert!(problems.contains("Tier B was replayed by cc-bench") && problems.contains("not a clean build"), "{problems}");
+
+        for unknown in [None, Some(String::new())] {
+            let (mut b, c) = saved(&english_corpus(), &m, &m);
+            b.provenance.as_mut().unwrap().revision.commit = unknown;
+            assert!(problems_of("en", &b, &c).contains("not a clean build"));
+        }
+
+        // And the same holds for the build that captured.
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |_, r| r.revision.dirty = true);
+        assert!(problems_of("en", &b, &c).contains("the corpus was captured by cc-bench"));
+    }
+
+    #[test]
+    fn both_tiers_must_compile_the_same_scripts_the_same_way() {
+        let m = english_baseline_metrics();
         let (mut b, c) = saved(&english_corpus(), &m, &m);
-        b.provenance.as_mut().unwrap().revision.commit = None;
-        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
-        assert!(problems.contains("no recorded revision"), "{problems}");
+        b.provenance.as_mut().unwrap().app_tokens = true;
+        assert!(problems_of("en", &b, &c).contains("CC_BENCH_APP_TOKENS"));
+
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance
+            .as_mut()
+            .unwrap()
+            .scripts
+            .insert("starter".into(), "an edited starter".into());
+        assert!(problems_of("en", &b, &c).contains("different text for the script starter"));
+    }
+
+    /// `EN-US` and `en-US` are one tag, not two capture conditions.
+    #[test]
+    fn tag_case_is_not_a_difference_in_conditions() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |run, r| {
+            if run == "names__exact__xai" {
+                r.language = "EN-US".into();
+            }
+        });
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
     }
 
     /// Pace is recorded but not judged: every metric is a function of the

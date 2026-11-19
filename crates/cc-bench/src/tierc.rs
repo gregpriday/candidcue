@@ -243,6 +243,7 @@ pub fn run_tier_c(
         crate::provenance::Source::Synthetic,
         false,
         layouts,
+        Default::default(),
     ));
     Ok(result)
 }
@@ -270,6 +271,7 @@ pub fn run_tier_c_captured(
     dirs.sort();
     anyhow::ensure!(!dirs.is_empty(), "no captured runs in {}", runs_dir.display());
     let mut captures = std::collections::BTreeMap::new();
+    let mut scripts = std::collections::BTreeMap::new();
 
     for dir in dirs {
         let manifest: RunManifest =
@@ -280,6 +282,10 @@ pub fn run_tier_c_captured(
             serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
         let events = crate::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
         let source = std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+        scripts.insert(
+            manifest.script.clone(),
+            crate::provenance::script_digest(&source),
+        );
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
         if let Some(captured) = manifest.atom_count {
             anyhow::ensure!(
@@ -313,6 +319,7 @@ pub fn run_tier_c_captured(
         crate::provenance::Source::Captured { runs: captures },
         false,
         layouts,
+        scripts,
     ));
     // The gate's rows again, over the scoring fixtures alone.
     let core: Vec<&PerceptualMetrics> = result

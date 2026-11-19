@@ -67,6 +67,13 @@ impl Revision {
         }
     }
 
+    /// Whether this revision names code somebody else can check out: a real
+    /// commit, built clean. Two dirty builds of one commit record the same
+    /// stamp and can be different programs, so neither is evidence.
+    pub fn is_reproducible(&self) -> bool {
+        self.commit.as_deref().is_some_and(|c| !c.trim().is_empty()) && !self.dirty
+    }
+
     pub fn describe(&self) -> String {
         match &self.commit {
             Some(c) if self.dirty => format!("{} (dirty)", &c[..c.len().min(12)]),
@@ -125,6 +132,8 @@ impl CaptureRecord {
         c.fixture_sha256 = String::new();
         c.recogniser.model_dir = Default::default();
         c.pace = 1.0;
+        // `EN-US` and `en-US` are one tag.
+        c.language = c.language.to_ascii_lowercase();
         c
     }
 }
@@ -160,11 +169,26 @@ pub struct Provenance {
     /// included. Empty for Tier A and Tier B, which render nothing.
     #[serde(default)]
     pub layouts: Vec<Layout>,
+    /// SHA-256 of every script source the replay compiled, by script name.
+    ///
+    /// Scripts are read from the checkout at run time, not built into the
+    /// binary, and a capture's fixtures do not contain them — so without this
+    /// the same corpus replayed by the same build against two different
+    /// edits of a script would carry identical provenance. A script edit that
+    /// changes the atom count is already refused at replay; this catches the
+    /// one that does not.
+    #[serde(default)]
+    pub scripts: BTreeMap<String, String>,
 }
 
 impl Provenance {
     /// Provenance for a replay done by this build.
-    pub fn of_replay(source: Source, app_tokens: bool, layouts: &[Layout]) -> Self {
+    pub fn of_replay(
+        source: Source,
+        app_tokens: bool,
+        layouts: &[Layout],
+        scripts: BTreeMap<String, String>,
+    ) -> Self {
         Provenance {
             revision: Revision::current(),
             alignment_language: cc_align::CompileOptions::default()
@@ -174,8 +198,25 @@ impl Provenance {
             app_tokens,
             source,
             layouts: layouts.to_vec(),
+            scripts,
         }
     }
+}
+
+/// SHA-256 of a script's source text, for [`Provenance::scripts`].
+pub fn script_digest(source: &str) -> String {
+    hex(ring::digest::digest(&ring::digest::SHA256, source.as_bytes()).as_ref())
+}
+
+/// Whether `tag` is shaped like a BCP-47 language tag: a 2-3 letter primary
+/// subtag, then any number of non-empty alphanumeric subtags of at most eight.
+/// Not a registry lookup — enough that `en-` or `-en` is not read as English.
+pub fn is_language_tag(tag: &str) -> bool {
+    let mut parts = tag.trim().split(['-', '_']);
+    let primary = parts.next().unwrap_or_default();
+    (2..=3).contains(&primary.len())
+        && primary.chars().all(|c| c.is_ascii_alphabetic())
+        && parts.all(|p| (1..=8).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// A primary language subtag, lowercased: `en-US` → `en`.
@@ -278,15 +319,36 @@ pub fn seal_capture(run_dir: &Path, conditions: &CaptureConditions) -> anyhow::R
 /// Beside rather than inside, because Tier B and Tier C replay every directory
 /// in the corpus, and a half-written run left there by an interrupted capture
 /// would stop every replay. On the same filesystem, so publishing is a rename.
-pub fn staging_root(runs_dir: &Path) -> std::path::PathBuf {
-    let name = runs_dir
+///
+/// Created here, exclusively, under a name no other session can share: a
+/// process id alone repeats across containers and hosts that share a corpus.
+/// The corpus path is resolved first, so `--runs .` stages beside the corpus
+/// rather than inside it.
+pub fn staging_root(runs_dir: &Path) -> anyhow::Result<std::path::PathBuf> {
+    let corpus = std::fs::canonicalize(runs_dir)?;
+    let name = corpus
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "runs".to_string());
-    let parent = runs_dir.parent().filter(|p| !p.as_os_str().is_empty());
-    parent
-        .unwrap_or(Path::new("."))
-        .join(format!(".{name}.capturing-{}", std::process::id()))
+    let parent = corpus
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent to stage beside", corpus.display()))?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    for attempt in 0..100u32 {
+        let dir = parent.join(format!(
+            ".{name}.capturing-{}-{nanos:x}-{attempt}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => anyhow::bail!("cannot create a staging directory beside {}: {e}", corpus.display()),
+        }
+    }
+    anyhow::bail!("no free staging directory name beside {}", corpus.display())
 }
 
 /// Move a staged, sealed run into the corpus, never over a finished one.
@@ -373,7 +435,19 @@ pub struct WeightCatalogue {
     pub models: BTreeMap<String, BTreeMap<String, String>>,
 }
 
+/// The catalogue this build was compiled with.
+///
+/// Built in rather than read from the checkout at run time, so the bytes a
+/// gate accepts as a model's weights are fixed by the build — the same one the
+/// result's revision names — and cannot change with the directory the binary
+/// happens to be run from.
+const SHIPPED_CATALOGUE: &str = include_str!("../../../src-tauri/models/catalogue.json");
+
 impl WeightCatalogue {
+    pub fn shipped() -> anyhow::Result<Self> {
+        Self::from_json(SHIPPED_CATALOGUE)
+    }
+
     pub fn from_json(text: &str) -> anyhow::Result<Self> {
         #[derive(Deserialize)]
         struct File {
@@ -403,14 +477,30 @@ impl WeightCatalogue {
         })
     }
 
-    /// `None` when `weights` are exactly files the catalogue lists for
-    /// `model`, each with the catalogued digest; otherwise why not.
+    /// `None` when `weights` are files the catalogue lists for `model`, each
+    /// with the catalogued digest, each once, and covering every graph and the
+    /// token table; otherwise why not.
+    ///
+    /// Coverage is the catalogue's `.onnx` files and `tokens.txt`, not every
+    /// file it lists: an install also carries `bpe.model`, which the loader
+    /// never reads (see `cc_stt::local::ModelFiles::bpe_vocab`). Without the
+    /// coverage rule a record holding only the genuine token table would vouch
+    /// for an encoder nobody checked.
     pub fn mismatch(&self, model: &str, weights: &[WeightFile]) -> Option<String> {
         let Some(expected) = self.models.get(model) else {
             return Some(format!("the model catalogue has no entry for {model}"));
         };
-        if weights.is_empty() {
-            return Some("no weight files were recorded".to_string());
+        let mut recorded = std::collections::BTreeSet::new();
+        for w in weights {
+            if !recorded.insert(w.name.as_str()) {
+                return Some(format!("{} is recorded twice", w.name));
+            }
+        }
+        if let Some(missing) = expected
+            .keys()
+            .find(|name| (name.ends_with(".onnx") || *name == "tokens.txt") && !recorded.contains(name.as_str()))
+        {
+            return Some(format!("no digest was recorded for {model}'s {missing}"));
         }
         for w in weights {
             match expected.get(&w.name) {
@@ -546,10 +636,21 @@ mod tests {
 
     #[test]
     fn staging_is_beside_the_corpus_not_in_it() {
-        let root = staging_root(Path::new("../bench/runs-fr"));
-        assert_eq!(root.parent(), Some(Path::new("../bench")));
-        assert!(root.file_name().unwrap().to_string_lossy().starts_with(".runs-fr.capturing-"));
-        assert_eq!(staging_root(Path::new("runs")).parent(), Some(Path::new(".")));
+        let root = tempfile::tempdir().unwrap();
+        let corpus = root.path().join("runs-fr");
+        std::fs::create_dir_all(&corpus).unwrap();
+        let a = staging_root(&corpus).unwrap();
+        let b = staging_root(&corpus).unwrap();
+        assert_ne!(a, b, "two sessions never share a staging directory");
+        let parent = std::fs::canonicalize(root.path()).unwrap();
+        for dir in [&a, &b] {
+            assert!(dir.is_dir());
+            assert_eq!(dir.parent(), Some(parent.as_path()));
+            assert!(dir.file_name().unwrap().to_string_lossy().starts_with(".runs-fr.capturing-"));
+        }
+        // `--runs .` names the corpus by a path with no file name of its own.
+        let dotted = staging_root(&corpus.join(".")).unwrap();
+        assert_eq!(dotted.parent(), Some(parent.as_path()));
     }
 
     #[test]
@@ -561,11 +662,7 @@ mod tests {
 
     #[test]
     fn the_shipped_catalogue_parses_and_names_the_default_model() {
-        let text = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/models/catalogue.json"),
-        )
-        .unwrap();
-        let catalogue = WeightCatalogue::from_json(&text).unwrap();
+        let catalogue = WeightCatalogue::shipped().unwrap();
         let files = catalogue
             .models
             .get(cc_stt::default_model().id)
@@ -590,6 +687,55 @@ mod tests {
         assert!(catalogue.mismatch("m", &[w("encoder.onnx", "abc")]).is_some());
         assert!(catalogue.mismatch("other", &[w("tokens.txt", "abc")]).is_some());
         assert!(catalogue.mismatch("m", &[]).is_some());
+        assert!(catalogue
+            .mismatch("m", &[w("tokens.txt", "abc"), w("tokens.txt", "abc")])
+            .unwrap()
+            .contains("twice"));
+    }
+
+    /// The shipped model's genuine token table alone vouches for nothing.
+    #[test]
+    fn every_graph_must_be_accounted_for() {
+        let catalogue = WeightCatalogue::shipped().unwrap();
+        let model = cc_stt::default_model().id;
+        let files = catalogue.models[model].clone();
+        let all: Vec<WeightFile> = files
+            .iter()
+            .filter(|(name, _)| name.ends_with(".onnx") || *name == "tokens.txt")
+            .map(|(name, sha)| WeightFile {
+                name: name.clone(),
+                bytes: 1,
+                sha256: sha.clone(),
+            })
+            .collect();
+        assert_eq!(all.len(), 4, "three graphs and the token table");
+        assert_eq!(catalogue.mismatch(model, &all), None);
+        let tokens_only: Vec<WeightFile> =
+            all.iter().filter(|w| w.name == "tokens.txt").cloned().collect();
+        let why = catalogue.mismatch(model, &tokens_only).unwrap();
+        assert!(why.contains("no digest was recorded"), "{why}");
+    }
+
+    #[test]
+    fn language_tags_are_checked_for_shape() {
+        for good in ["en", "EN", "en-US", "en-GB", "zh-Hans", "fil", "es-419"] {
+            assert!(is_language_tag(good), "{good}");
+        }
+        for bad in ["", "e", "en-", "-en", "english", "en--US", "e1", "en-toolongsubtag"] {
+            assert!(!is_language_tag(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_clean_commit_is_reproducible_and_nothing_else_is() {
+        let r = |commit: Option<&str>, dirty| Revision {
+            commit: commit.map(str::to_string),
+            dirty,
+        };
+        assert!(r(Some("abc"), false).is_reproducible());
+        assert!(!r(Some("abc"), true).is_reproducible());
+        assert!(!r(Some(""), false).is_reproducible());
+        assert!(!r(None, false).is_reproducible());
     }
 
     #[test]

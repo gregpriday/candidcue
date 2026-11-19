@@ -240,6 +240,7 @@ pub fn run_tier_a(
             crate::provenance::Source::Synthetic,
             false,
             &[],
+            Default::default(),
         )),
     })
 }
@@ -820,6 +821,7 @@ pub fn run_tier_b(
     anyhow::ensure!(!dirs.is_empty(), "no captured runs in {}", runs_dir.display());
     let app_tokens = std::env::var("CC_BENCH_APP_TOKENS").is_ok();
     let mut captures = std::collections::BTreeMap::new();
+    let mut scripts = std::collections::BTreeMap::new();
 
     for dir in dirs {
         let manifest: RunManifest =
@@ -832,6 +834,10 @@ pub fn run_tier_b(
         let performance_text = std::fs::read_to_string(dir.join("performance.txt"))?;
         let source =
             std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+        scripts.insert(
+            manifest.script.clone(),
+            crate::provenance::script_digest(&source),
+        );
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
         if let Some(captured) = manifest.atom_count {
             anyhow::ensure!(
@@ -1068,6 +1074,7 @@ pub fn run_tier_b(
             crate::provenance::Source::Captured { runs: captures },
             app_tokens,
             &[],
+            scripts,
         )),
     })
 }

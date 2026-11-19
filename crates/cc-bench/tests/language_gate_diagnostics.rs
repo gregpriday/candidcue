@@ -21,7 +21,9 @@ use cc_align::AlignmentConfig;
 use cc_bench::capture_local::write_events_jsonl;
 use cc_bench::language_gate::{evaluate_saved, is_scoring_run, LanguageGateReport, SHIP_BAR};
 use cc_bench::plan::{expand, synthetic_timing};
-use cc_bench::provenance::{seal_capture, CaptureConditions, WeightCatalogue, WeightFile, CAPTURE_FILE};
+use cc_bench::provenance::{
+    seal_capture, CaptureConditions, Revision, Source, WeightCatalogue, WeightFile, CAPTURE_FILE,
+};
 use cc_bench::scenarios::{build_suite, tier_b_selection};
 use cc_bench::suite::{run_tier_b, RunManifest, SuiteResult};
 use cc_bench::synthetic::generate_events;
@@ -110,7 +112,14 @@ fn conditions() -> CaptureConditions {
             bytes: 1,
             sha256: WEIGHTS_SHA.into(),
         }],
-        recogniser: cc_stt::LocalSttConfig::for_model(model, "/models/x-asr-480ms"),
+        recogniser: {
+            // An override on top of the model's tuning, as `--blank-penalty`
+            // gives, so the record is shown to carry the config the
+            // recogniser was loaded with rather than the model's defaults.
+            let mut config = cc_stt::LocalSttConfig::for_model(model, "/models/x-asr-480ms");
+            config.blank_penalty = 2.5;
+            config
+        },
         pace: 1.0,
     }
 }
@@ -134,15 +143,36 @@ fn as_shipped() -> Vec<cc_bench::stage::Layout> {
 }
 
 /// Both tiers over a directory, through JSON as `--out` writes them.
+///
+/// The build stamp is checked to be this build's, then replaced by a clean
+/// one: the gate refuses a dirty build, and whether the checkout running this
+/// test has uncommitted edits is not something the test should depend on.
 fn replay(runs: &Path, layouts: &[cc_bench::stage::Layout]) -> (SuiteResult, TierCResult) {
     let config = AlignmentConfig::default();
     let tier_b = run_tier_b(runs, &scripts_dir(), &config, "t").expect("tier-b");
     let tier_c =
         run_tier_c_captured(runs, &scripts_dir(), &config, "t", layouts).expect("tier-c");
-    (
-        serde_json::from_str(&serde_json::to_string(&tier_b).unwrap()).unwrap(),
-        serde_json::from_str(&serde_json::to_string(&tier_c).unwrap()).unwrap(),
-    )
+    let mut tier_b: SuiteResult =
+        serde_json::from_str(&serde_json::to_string(&tier_b).unwrap()).unwrap();
+    let mut tier_c: TierCResult =
+        serde_json::from_str(&serde_json::to_string(&tier_c).unwrap()).unwrap();
+    let clean = Revision {
+        commit: Some("0123456789abcdef".into()),
+        dirty: false,
+    };
+    for prov in [tier_b.provenance.as_mut(), tier_c.provenance.as_mut()] {
+        let prov = prov.expect("a captured tier records provenance");
+        assert_eq!(prov.revision, Revision::current());
+        prov.revision = clean.clone();
+        let Source::Captured { runs: records } = &mut prov.source else {
+            panic!("captured tiers record a captured source");
+        };
+        for record in records.values_mut().flatten() {
+            assert_eq!(record.revision, Revision::current());
+            record.revision = clean.clone();
+        }
+    }
+    (tier_b, tier_c)
 }
 
 struct Measured {
@@ -284,7 +314,7 @@ fn saved_results_carry_their_provenance_to_the_gate() {
     for prov in [tier_b.provenance.as_ref(), tier_c.provenance.as_ref()] {
         let prov = prov.expect("a captured tier records provenance");
         assert_eq!(prov.alignment_language, "en");
-        let cc_bench::provenance::Source::Captured { runs: records } = &prov.source else {
+        let Source::Captured { runs: records } = &prov.source else {
             panic!("captured tiers record a captured source");
         };
         assert_eq!(records.len(), 18);
@@ -292,10 +322,8 @@ fn saved_results_carry_their_provenance_to_the_gate() {
             let record = record.as_ref().unwrap_or_else(|| panic!("{run} has no record"));
             assert_eq!(&record.run, run);
             assert_eq!(record.language, "en-US");
-            assert_eq!(
-                record.recogniser.blank_penalty,
-                cc_stt::default_model().tuning.blank_penalty
-            );
+            assert_eq!(record.recogniser, conditions().recogniser);
+            assert_eq!(record.recogniser.blank_penalty, 2.5);
         }
     }
     assert_eq!(tier_c.provenance.as_ref().unwrap().layouts, as_shipped());
@@ -319,14 +347,16 @@ fn saved_results_carry_their_provenance_to_the_gate() {
     std::fs::remove_file(runs.join("names__exact__xai").join(CAPTURE_FILE)).unwrap();
     let (tier_b, tier_c) = replay(&runs, &as_shipped());
     let report = evaluate_saved("en", &tier_b, &tier_c, &catalogue()).expect("valid evidence");
-    assert!(
-        report
-            .corpus_problems
-            .iter()
-            .any(|p| p.contains("names__exact__xai has no capture record")),
-        "{}",
-        report.render()
-    );
+    for tier in ["Tier B", "Tier C"] {
+        assert!(
+            report
+                .corpus_problems
+                .iter()
+                .any(|p| p.contains(&format!("{tier}: names__exact__xai has no capture record"))),
+            "{}",
+            report.render()
+        );
+    }
 
     // A record copied from another run is not missing provenance but wrong
     // provenance, and the tier refuses to replay it at all.
@@ -338,5 +368,15 @@ fn saved_results_carry_their_provenance_to_the_gate() {
     let err = run_tier_b(&runs, &scripts_dir(), &AlignmentConfig::default(), "t")
         .unwrap_err()
         .to_string();
+    assert!(err.contains("copied here"), "{err}");
+    let err = run_tier_c_captured(
+        &runs,
+        &scripts_dir(),
+        &AlignmentConfig::default(),
+        "t",
+        &as_shipped(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(err.contains("copied here"), "{err}");
 }

@@ -35,40 +35,61 @@ fn git_path(dir: &Path, name: &str) -> Option<PathBuf> {
     Some(if p.is_absolute() { p } else { dir.join(p) })
 }
 
+/// Every input to what the benchmark measures, relative to `crates/`: the
+/// three crates, the workspace manifest and lockfile, and the model catalogue
+/// the gate compiles in. One list drives both what Cargo watches and what
+/// counts as dirty, so the two cannot disagree about a file.
+const INPUTS: &[&str] = &[
+    "cc-align",
+    "cc-stt",
+    "cc-bench",
+    "Cargo.toml",
+    "Cargo.lock",
+    "../src-tauri/models/catalogue.json",
+];
+
+/// Watch a path only if it exists: Cargo reruns a build script on every build
+/// when told to watch a path that is not there, and `packed-refs`, or a loose
+/// ref once it has been packed, often is not.
+fn watch(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let crates = manifest.parent().unwrap().to_path_buf();
 
-    // Every input to what the benchmark measures. Cargo scans a directory
-    // recursively for modified files.
-    println!("cargo:rerun-if-changed=build.rs");
-    for input in ["cc-bench/src", "cc-bench/Cargo.toml", "cc-align", "cc-stt", "Cargo.lock"] {
-        println!("cargo:rerun-if-changed={}", crates.join(input).display());
+    // Cargo scans a watched directory recursively for modified files.
+    for input in INPUTS {
+        watch(&crates.join(input));
     }
 
     let Some(commit) = git(&manifest, &["rev-parse", "HEAD"]) else {
         return;
     };
+    if commit.is_empty() {
+        return;
+    }
     for name in ["HEAD", "packed-refs"] {
         if let Some(path) = git_path(&manifest, name) {
-            println!("cargo:rerun-if-changed={}", path.display());
+            watch(&path);
         }
     }
     if let Some(branch) = git(&manifest, &["symbolic-ref", "-q", "HEAD"]) {
         if let Some(path) = git_path(&manifest, &branch) {
-            println!("cargo:rerun-if-changed={}", path.display());
+            watch(&path);
         }
     }
 
-    // Dirty means an uncommitted change to the code that ran: the three crates
-    // and their lockfile. A stray file elsewhere in the repository does not
-    // change a measurement, and calling it dirty would teach people to ignore
-    // the flag.
-    let dirty = git(
-        &crates,
-        &["status", "--porcelain", "--untracked-files=normal", "--", "cc-align", "cc-stt", "cc-bench", "Cargo.lock"],
-    )
-    .is_some_and(|s| !s.is_empty());
+    // Dirty means an uncommitted change to an input. A stray file elsewhere in
+    // the repository does not change a measurement, and calling it dirty
+    // would teach people to ignore the flag. A status that cannot be read is
+    // dirty: clean is a claim, and nothing here can make it.
+    let mut status = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
+    status.extend_from_slice(INPUTS);
+    let dirty = git(&crates, &status).is_none_or(|s| !s.is_empty());
 
     println!("cargo:rustc-env=CC_BENCH_COMMIT={commit}");
     println!("cargo:rustc-env=CC_BENCH_DIRTY={}", if dirty { "1" } else { "0" });

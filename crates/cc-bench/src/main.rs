@@ -21,9 +21,6 @@ use cc_bench::suite::{
 use cc_bench::tierc::TierCResult;
 use cc_bench::tts::{shared_rendered_dir, synthesize, wav_bytes, Synthesizer};
 
-/// The model catalogue, relative to the repository root.
-const MODEL_CATALOGUE: &str = "src-tauri/models/catalogue.json";
-
 /// Scripts `vocab` reports on when none are named: the three written to
 /// exercise term extraction — proper names, brand spellings, and figures.
 const VOCAB_SCRIPTS: &[&str] = &["names", "brands", "figures"];
@@ -647,8 +644,14 @@ fn main() -> anyhow::Result<()> {
             let out_runs = flags
                 .runs
                 .ok_or_else(|| anyhow::anyhow!("--runs <dir> required (do not overwrite bench/runs)"))?;
+            // A pace that is not a finite positive number cannot be paced, and
+            // an infinite one is written to `capture.json` as `null`, which
+            // then cannot be read back.
+            anyhow::ensure!(
+                flags.pace.is_finite() && flags.pace > 0.0,
+                "--pace must be a positive number (1.0 is real time)"
+            );
             capture_all_local(
-                &root,
                 &out_runs,
                 &model_dir,
                 flags.pace,
@@ -1089,10 +1092,9 @@ fn main() -> anyhow::Result<()> {
             // Reads each tier's scoring table — the gate's rows aggregated
             // over the core fixtures alone — and refuses a result without one.
             // The weights a capture recorded are checked against the same
-            // catalogue the app's downloader verifies an install against.
-            let catalogue = cc_bench::provenance::WeightCatalogue::from_json(
-                &std::fs::read_to_string(root.join(MODEL_CATALOGUE))?,
-            )?;
+            // catalogue the app's downloader verifies an install against, as
+            // compiled into this build.
+            let catalogue = cc_bench::provenance::WeightCatalogue::shipped()?;
             let report = language_gate::evaluate_saved(&language, &tier_b, &tier_c, &catalogue)?;
             print!("{}", report.render());
             if !report.passed() {
@@ -1189,7 +1191,6 @@ async fn synth_audio(
 /// ~200 ms and belongs nowhere near the start of a take.
 #[allow(clippy::too_many_arguments)]
 fn capture_all_local(
-    root: &std::path::Path,
     runs_dir: &std::path::Path,
     model_dir: &std::path::Path,
     pace: f64,
@@ -1218,6 +1219,10 @@ fn capture_all_local(
     // replay compiles every script under the default profile.
     let language = language.unwrap_or_else(|| model.default_language.to_string());
     anyhow::ensure!(
+        cc_bench::provenance::is_language_tag(&language),
+        "--language {language:?} is not a language tag (en, en-US, fr, …)"
+    );
+    anyhow::ensure!(
         model.serves_language(&language),
         "{} does not transcribe {language} (it serves {:?})",
         model.id,
@@ -1242,21 +1247,13 @@ fn capture_all_local(
     }
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
     let weights = cc_bench::provenance::weights_of(model_dir)?;
-    match std::fs::read_to_string(root.join(MODEL_CATALOGUE))
-        .map_err(anyhow::Error::from)
-        .and_then(|t| cc_bench::provenance::WeightCatalogue::from_json(&t))
-    {
-        Ok(catalogue) => {
-            if let Some(why) = catalogue.mismatch(model.id, &weights) {
-                println!(
-                    "WARNING: {} does not hold {}'s weights ({why}). The capture \
-                     records what it loaded, and gate-language will refuse it.",
-                    model_dir.display(),
-                    model.id
-                );
-            }
-        }
-        Err(e) => println!("WARNING: could not read {MODEL_CATALOGUE}: {e}"),
+    if let Some(why) = cc_bench::provenance::WeightCatalogue::shipped()?.mismatch(model.id, &weights) {
+        println!(
+            "WARNING: {} does not hold {}'s weights ({why}). The capture \
+             records what it loaded, and gate-language will refuse it.",
+            model_dir.display(),
+            model.id
+        );
     }
     let conditions = cc_bench::provenance::CaptureConditions {
         language: language.clone(),
@@ -1288,7 +1285,7 @@ fn capture_all_local(
     dirs.sort();
 
     std::fs::create_dir_all(runs_dir)?;
-    let staging = cc_bench::provenance::staging_root(runs_dir);
+    let staging = cc_bench::provenance::staging_root(runs_dir)?;
     for dir in dirs {
         let name = dir.file_name().unwrap().to_string_lossy().to_string();
         let out_dir = runs_dir.join(&name);
