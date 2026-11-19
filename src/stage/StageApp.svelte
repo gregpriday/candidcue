@@ -99,6 +99,7 @@
   import { manualScrollRelocated } from './renderer/motion';
   import { transcriptTail } from './renderer/transcript-tail';
   import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
+  import { takeScopeText, type TakeScopePart } from './renderer/take-scope';
 
   interface EmbeddedStageBridge {
     envelope: StageSessionEnvelope;
@@ -159,6 +160,16 @@
      * following your own voice is the thing being practised.
      */
     practice?: boolean;
+    /**
+     * §parts. The part this reading is of, and whether its end has been
+     * reached (#241) — for the label that says on the glass what is running.
+     *
+     * Read for that label and nothing else. The part bounds nothing: the
+     * alignment and motion paths never see it, exactly as they never see the
+     * practice flag.
+     */
+    part?: TakeScopePart | null;
+    partComplete?: boolean;
     /**
      * "Show nothing", the host's own switch, mirrored the same way
      * `followPaused` is — directly, not through a directive, for the same
@@ -632,6 +643,18 @@
    * acknowledgement is only ever a confirmation of something they just did.
    */
   const ackCrowded = $derived(ackMaxWidthPx !== null && ackMaxWidthPx < 6 * overlayFontSizePx);
+
+  /**
+   * What is running, said on the glass (#241): "Practising", the part, both,
+   * or nothing for an ordinary take of the whole script. Only the embedded
+   * path has a session to describe; the separate window's preview, test and
+   * calibration have none.
+   */
+  const takeScope = $derived(
+    embedded
+      ? takeScopeText(embedded.practice ?? false, embedded.part, embedded.partComplete ?? false)
+      : null,
+  );
 
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');
@@ -2655,6 +2678,39 @@
         {/if}
 
         <!--
+          What is running (#241): "Practising", the part, or both.
+
+          In this plane because it is words the presenter reads through the
+          glass, so it takes the corrective flip with the script. It sits on the
+          bottom edge — below the reading band, in the strip the dock already
+          reserves — and in the PHYSICAL corner opposite the dock. The dock is
+          in the unmirrored operator plane at the bottom left, so under a
+          mirror the label's side flips in these coordinates to land at the
+          bottom right of the panel either way.
+
+          Persistent rather than transient: it answers "is this the take?", a
+          question that matters for the whole reading, and it does not fade
+          with the dock. A blank hides it like everything else.
+        -->
+        {#if takeScope && !app.blanked}
+          <div
+            class="take-scope"
+            class:flip-x={settings?.mirrorX ?? false}
+            class:flip-y={settings?.mirrorY ?? false}
+            role="status"
+            style:font-size="{overlayFontSizePx}px"
+          >
+            <span class="take-scope-lead">{takeScope.lead}</span>
+            {#if takeScope.name}
+              <span class="take-scope-name">{takeScope.name}</span>
+            {/if}
+            {#if takeScope.done}
+              <span class="take-scope-done">{takeScope.done}</span>
+            {/if}
+          </div>
+        {/if}
+
+        <!--
           THE WAY OUT AND THE AUDIO READOUT ARE NOT HERE ANY MORE.
 
           Both moved into the session dock, in the unmirrored operator plane at
@@ -3305,6 +3361,57 @@
     font-weight: 550;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  /*
+   * What is running (#241). One quiet line, at the secondary floor, in the
+   * bottom corner opposite the dock. The name is the only piece that may be
+   * long, so it is the piece that truncates; the lead and the "end reached"
+   * mark always show.
+   */
+  .take-scope {
+    position: absolute;
+    right: var(--stage-chrome-inset, 20px);
+    bottom: var(--stage-chrome-bottom-inset, 16px);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    max-width: 45%;
+    padding: 0.3em 0.9em;
+    border-radius: 999px;
+    border: 1px solid var(--stage-chrome-border);
+    background: var(--stage-overlay);
+    color: var(--stage-text);
+    font-weight: 550;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .take-scope.flip-x {
+    right: auto;
+    left: var(--stage-chrome-inset, 20px);
+  }
+
+  .take-scope.flip-y {
+    bottom: auto;
+    top: var(--stage-chrome-bottom-inset, 16px);
+  }
+
+  .take-scope-lead,
+  .take-scope-done {
+    flex: none;
+  }
+
+  .take-scope-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.8;
+  }
+
+  .take-scope-name::before,
+  .take-scope-done::before {
+    content: '· ';
   }
 
   /*

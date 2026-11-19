@@ -4195,9 +4195,16 @@ export function stopSession(): SessionSummary {
      *
      * This is the number "From last ending" opens the next take at, so it is
      * the one that most needs to agree with the glass.
+     *
+     * A PRACTICE WRITES NONE (#241). "From last ending" is "where the last
+     * take stopped", and a rehearsal is not where the footage left off: record
+     * part two, practise part three, and the next take should still open where
+     * part two ended. Left out rather than written as zero, so the row reads
+     * exactly as a take that never recorded an end — the case every reader of
+     * the column already skips — and the rest of the row is kept.
      */
     void trackPersistence(endSessionRecord(s.sessionId, {
-      endTokenIndex,
+      ...(s.practice ? {} : { endTokenIndex }),
       commandCount: 0,
       retakeCount: s.counts.retakes,
       reconnectCount: s.counts.reconnects,

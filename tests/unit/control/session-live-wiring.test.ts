@@ -353,7 +353,7 @@ describe('#214 — a take keeps its summary and its session row without the hist
     expect(recorded.metrics?.sectionsReached).toBe(3);
   });
 
-  it('closes a practice’s session row once, with where it ended', async () => {
+  it('closes a practice’s session row once, without an ending (#241)', async () => {
     const compiled = compile(SOURCE, { scriptId: 'script-1' });
     start({ compiled, sentences: compiled.sentences as never, practice: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -367,6 +367,24 @@ describe('#214 — a take keeps its summary and its session row without the hist
 
     expect(records.endSessionRecord).toHaveBeenCalledTimes(1);
     const [, recorded] = records.endSessionRecord.mock.calls[0] as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    // A rehearsal is not where the footage left off, so "From last ending"
+    // must go on meaning the last recording.
+    expect(ended).toBeGreaterThan(0);
+    expect(recorded, 'a practice supplies no ending').not.toHaveProperty('endTokenIndex');
+  });
+
+  it('still closes a take’s session row with where it ended', async () => {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    const ended = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(ended));
+
+    stopSession();
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
       string,
       { endTokenIndex?: number },
     ];

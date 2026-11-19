@@ -149,6 +149,50 @@ export function snapToStart(token: number, input: SnapInput): StartPoint {
 }
 
 /**
+ * The start point for a caret at a SOURCE offset in the editor (#241).
+ *
+ * The rule for body text is the sentence the caret is at or after: the caret
+ * can sit in whitespace, a cue or a sentence's markup, so "the sentence
+ * containing it" is not always defined, and "the one it is at or after" is.
+ *
+ * A HEADING IS THE EXCEPTION, and the one that matters: clicking a section in
+ * the outline puts the caret at the start of its heading line. A heading that
+ * is not read aloud has no sentence of its own, so the body rule found the
+ * last sentence ABOVE it — in the previous section, and on a divided script in
+ * the previous part — and "From here" from the outline opened one section too
+ * early. A caret anywhere on a heading's line is a request for that section,
+ * so it starts at the section's first spoken words.
+ *
+ * A heading with nothing spoken after it at all, at the very end of a script,
+ * has no section start and falls back to the body rule.
+ *
+ * Null when there is no compile to resolve against, so the menu leaves its
+ * "From here" rows out rather than pointing them at the top.
+ */
+export function startPointAtCaret(offset: number, input: SnapInput): StartPoint | null {
+  const sentences = input.sentences;
+  if (sentences.length === 0) return null;
+
+  const heading = input.blocks?.find(
+    (b) => b.kind === 'heading' && b.source.utf16Start <= offset && offset <= b.source.utf16End,
+  );
+  if (heading !== undefined) {
+    const node = flattenOutline(input.outline).find((n) => n.blockId === heading.id);
+    if (node !== undefined && node.startTokenIndex < input.totalTokens) {
+      return snapToStart(node.startTokenIndex, input);
+    }
+  }
+
+  let best: SentenceUnit | null = null;
+  for (const sentence of sentences) {
+    if (sentence.source.utf16Start <= offset) best = sentence;
+    else break;
+  }
+  if (best === null) return null;
+  return snapToStart(best.startTokenIndex, input);
+}
+
+/**
  * The last element whose key is at or before `target`.
  *
  * Linear rather than binary: outlines are tens of entries and sentences are

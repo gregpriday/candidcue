@@ -195,11 +195,12 @@ export const FINISH_PRACTICE_CONFIRM_TITLE = 'Finish practising?';
  * "Your place in the script will be saved" answers a fear about losing a take.
  * A rehearsal does not create that fear; what somebody wants to know before
  * finishing one is that nothing is being written down about it. The second
- * sentence is true for the reason a practice writes an ordinary session row —
- * "From last ending" picks a rehearsal up exactly as it picks a take up.
+ * sentence says what that means for the next take (#241): a rehearsal is not
+ * an ending, so "From last ending" still opens where the last recording
+ * stopped.
  */
 export const FINISH_PRACTICE_CONFIRM_BODY =
-  'Nothing is reported. Your place in the script is kept.';
+  'Nothing is reported, and where your last take stopped is unchanged.';
 
 /* ---------------------------------------------------------------------------
  * Axis C: the microphone

@@ -1167,8 +1167,13 @@ function shimBody(config: ShimConfig): void {
       case 'list_sessions': {
         const scriptId = args?.['scriptId'] as string | null | undefined;
         const limit = args?.['limit'] as number | null | undefined;
+        // #241: Rust filters to rows with an ending before the limit.
+        const withEnding = args?.['withEnding'] === true;
         const rows = (config.sessionHistory ?? []).filter(
-          (row) => scriptId === null || scriptId === undefined || row.scriptId === scriptId,
+          (row) =>
+            (scriptId === null || scriptId === undefined || row.scriptId === scriptId) &&
+            (!withEnding ||
+              (typeof row['endTokenIndex'] === 'number' && row['endTokenIndex'] > 0)),
         );
         return typeof limit === 'number' ? rows.slice(0, limit) : rows;
       }
