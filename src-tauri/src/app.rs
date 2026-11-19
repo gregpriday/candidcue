@@ -101,6 +101,8 @@ pub fn run() {
             commands::reveal_data_folder,
             commands::write_unsaved_recovery,
             commands::get_startup_findings,
+            commands::get_legacy_library_notice,
+            commands::reveal_legacy_library,
             // Scripts (spec §46.2)
             commands::list_scripts,
             commands::create_script,
@@ -246,6 +248,9 @@ pub fn run() {
                 }
             }
             legacy_data.log();
+            // And for the window, which is where somebody looking at an empty
+            // library will actually read it (`get_legacy_library_notice`).
+            handle.manage(crate::legacy_data::LegacyLibrary(legacy_data.notice()));
 
             /*
              * Start each run with an empty client trace — but keep the last one.

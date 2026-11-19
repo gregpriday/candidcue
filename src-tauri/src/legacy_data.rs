@@ -159,7 +159,60 @@ impl Outcome {
             ),
         }
     }
+
+    /// What the control window has to tell the user, when anything.
+    ///
+    /// Only the two outcomes that leave the old library behind. The log alone
+    /// was not enough for either: the window shows an empty library while the
+    /// old scripts are still on disk, and the obvious next step, trying the
+    /// sample on Welcome, is exactly what ends the retry.
+    pub fn notice(&self) -> Option<Notice> {
+        match self {
+            Outcome::NotNeeded | Outcome::Copied { .. } => None,
+            Outcome::Failed { from, error, .. } => Some(Notice {
+                kind: NoticeKind::Failed,
+                old_folder: from.clone(),
+                reason: Some(error.to_string()),
+            }),
+            Outcome::Abandoned { from, .. } => Some(Notice {
+                kind: NoticeKind::Abandoned,
+                old_folder: from.clone(),
+                reason: None,
+            }),
+        }
+    }
 }
+
+/// Why the old library is not in the new folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoticeKind {
+    /// This launch could not copy it. The next one tries again, but only while
+    /// the new library holds no script.
+    Failed,
+    /// An earlier copy failed and the user has worked here since, so the new
+    /// folder was settled as it is. No launch will copy it again.
+    Abandoned,
+}
+
+/// A launch's [`Outcome`], as the control window reports it
+/// (`get_legacy_library_notice`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notice {
+    pub kind: NoticeKind,
+    /// Where the old library still is. Shown, and revealed by Rust
+    /// (`reveal_legacy_library`): the window never sends it back.
+    pub old_folder: PathBuf,
+    /// Why the copy failed, for `Failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The notice for this launch, held for the window to ask for. Managed in
+/// `setup` whatever the outcome, so the command never finds it missing.
+#[derive(Debug, Default)]
+pub struct LegacyLibrary(pub Option<Notice>);
 
 /// Copy the old folder into place, if there is one and the new one is not
 /// settled. Called before the Tauri builder.
@@ -778,6 +831,44 @@ mod tests {
             let outcome = run(data_dir.path());
             assert!(matches!(outcome, Outcome::NotNeeded), "{path}: said once, not every launch");
         }
+    }
+
+    #[test]
+    fn the_window_is_told_when_the_old_library_was_left_behind() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let old = legacy_folder(data_dir.path());
+        write(&old.join("restore-pending.json"), "{}");
+
+        // Refused: the window hears where the old library is, and why.
+        let notice = run(data_dir.path()).notice().expect("a refused copy is reported");
+        assert_eq!(notice.kind, NoticeKind::Failed);
+        assert_eq!(notice.old_folder, old);
+        assert!(notice.reason.as_deref().unwrap_or("").contains("restore-pending.json"));
+        let json = serde_json::to_value(&notice).unwrap();
+        assert_eq!(json["kind"], "failed");
+        assert_eq!(json["oldFolder"], old.to_string_lossy().as_ref());
+
+        // Work begun in the fresh folder settles it: said once, without a reason.
+        let new = fresh_folder(data_dir.path());
+        write(&new.join("scripts/xyz/script.md"), "# The sample\n");
+        let notice = run(data_dir.path()).notice().expect("an abandoned copy is reported");
+        assert_eq!(notice.kind, NoticeKind::Abandoned);
+        assert_eq!(notice.old_folder, old);
+        let json = serde_json::to_value(&notice).unwrap();
+        assert_eq!(json["kind"], "abandoned");
+        assert!(json.get("reason").is_none());
+        assert!(run(data_dir.path()).notice().is_none(), "and not again");
+    }
+
+    #[test]
+    fn a_clean_install_or_a_successful_copy_tells_the_window_nothing() {
+        let data_dir = tempfile::tempdir().unwrap();
+        assert!(run(data_dir.path()).notice().is_none(), "no old folder");
+
+        legacy_folder(data_dir.path());
+        let outcome = run(data_dir.path());
+        assert!(matches!(outcome, Outcome::Copied { .. }), "{outcome:?}");
+        assert!(outcome.notice().is_none());
     }
 
     #[cfg(unix)]

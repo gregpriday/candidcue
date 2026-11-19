@@ -378,3 +378,29 @@ pub async fn reveal_data_folder<R: tauri::Runtime>(
     tauri_plugin_opener::reveal_item_in_dir(paths.root())
         .map_err(|e| AppError::Internal(format!("reveal failed: {e}")))
 }
+
+/// What this launch has to say about the CandidCue library, if anything: that
+/// it could not be copied into place, or that it no longer will be
+/// (`legacy_data::Notice`). `None` for a clean install and a successful copy.
+///
+/// Read as often as it is asked, not taken: it describes this launch, and a
+/// reloaded window has to be able to say it again.
+#[tauri::command]
+pub async fn get_legacy_library_notice(
+    legacy: State<'_, crate::legacy_data::LegacyLibrary>,
+) -> Result<Option<crate::legacy_data::Notice>, AppError> {
+    Ok(legacy.0.clone())
+}
+
+/// Show the old library in the file manager. Takes no path: the only folder
+/// it can reveal is the one this launch reported.
+#[tauri::command]
+pub async fn reveal_legacy_library(
+    legacy: State<'_, crate::legacy_data::LegacyLibrary>,
+) -> Result<(), AppError> {
+    let Some(notice) = &legacy.0 else {
+        return Err(AppError::Internal("there is no CandidCue library to show".into()));
+    };
+    tauri_plugin_opener::reveal_item_in_dir(&notice.old_folder)
+        .map_err(|e| AppError::Internal(format!("reveal failed: {e}")))
+}

@@ -2508,6 +2508,14 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("rescue_scripts", "copies canonical files OUT; the first thing a user wants"),
         ("reveal_data_folder", "opens Finder; the last resort that always works"),
         (
+            "get_legacy_library_notice",
+            "reads managed state about the data folder copy; touches no database",
+        ),
+        (
+            "reveal_legacy_library",
+            "opens Finder on the old folder this launch reported; takes no path",
+        ),
+        (
             "write_unsaved_recovery",
             "parks text a failed save would otherwise lose; must work when nothing else does",
         ),
