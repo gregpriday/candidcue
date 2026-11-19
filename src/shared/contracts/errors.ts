@@ -2,8 +2,8 @@
  * Application error contracts (spec §44.12 and Appendix C.7).
  *
  * All Rust errors exposed through IPC map to this stable shape. The UI maps
- * codes to localized copy and recovery actions — never branch on English
- * provider messages, and never surface a raw Rust debug string.
+ * codes to localized copy and recovery actions — never branch on an English
+ * message, and never surface a raw Rust debug string.
  */
 
 // No 'auth'. The category described a rejected API key from the hosted speech
@@ -45,8 +45,8 @@ export const APP_ERROR_CODES = [
   /*
    * The on-device recogniser.
    *
-   * `STT_MODEL_NOT_INSTALLED` is the odd one out and deliberately so: since
-   * §152 the stock installer ships no weights, so "the model is not here" is an
+   * `STT_MODEL_NOT_INSTALLED` is the odd one out and deliberately so: the
+   * stock installer ships no weights, so "the model is not here" is an
    * ORDINARY state a first run reaches rather than a damaged installation, and
    * it is one of only two the user can clear themselves — Settings → Speech has
    * the download. Rust raises it recoverable for that reason, and the other,
@@ -97,7 +97,7 @@ export const APP_ERROR_CODES = [
   'STAGE_SESSION_MISMATCH',
   'STAGE_LAYOUT_FAILED',
   /*
-   * Window › Speaking Glass / Stage could not bring a window forward (§13.4).
+   * Window › Speaking Glass / Stage could not bring a window forward.
    *
    * Raised rather than swallowed because the window IS there — the menu item is
    * only enabled when it is — so a focus that fails is a real fault the window

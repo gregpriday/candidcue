@@ -29,7 +29,7 @@ export interface MotionSample {
   controllerState: string;
   /** Acceleration/velocity limiting was active (§70 saturation counts). */
   saturated?: boolean;
-  /** The controller's finite-value fuse held this frame (§C1). */
+  /** The controller's finite-value fuse held this frame. */
   fused?: boolean;
   /** Wall time the frame's motion work took, ms (§63 budget). */
   frameCostMs?: number;
@@ -50,7 +50,7 @@ export interface MotionMetrics {
   /** Frames on which a limit was actively saturating (§70). */
   saturatedFrames: number;
   /**
-   * Frames the controller's finite-value fuse held (§C1). Any value above zero
+   * Frames the controller's finite-value fuse held. Any value above zero
    * means something upstream produced a non-finite target; the display was
    * protected, but the cause is a defect.
    */

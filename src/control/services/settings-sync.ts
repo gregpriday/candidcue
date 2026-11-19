@@ -1,5 +1,5 @@
 /**
- * Keeping two windows' settings in step (desktop refinement §14.1).
+ * Keeping two windows' settings in step.
  *
  * ---------------------------------------------------------------------------
  * THE PROBLEM THAT ARRIVED WITH THE SECOND WINDOW
@@ -153,7 +153,7 @@ export function installSettingsSectionSync(show: (section: SettingsSection) => v
  * `settings://changed` is emitted by Rust from the one command that writes the
  * settings document. Two kinds of change do not pass through it:
  *
- *   - OVERLAY settings — stage font, stage type size, mirror — which are stored
+ *   - OVERLAY settings — stage font and stage type size — which are stored
  *     per-window in `localStorage` and never reach Rust at all;
  *   - other Rust commands that write settings as a side effect, the speech
  *     language picker being the one that exists today.

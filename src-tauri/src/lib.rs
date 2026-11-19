@@ -23,6 +23,7 @@ pub mod errors;
 pub mod legacy_data;
 pub mod menu;
 pub mod net;
+pub mod perf;
 pub mod scripts;
 pub mod sessions;
 pub mod speech;

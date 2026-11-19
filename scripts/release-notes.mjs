@@ -186,8 +186,18 @@ if (prose.length < 120) {
  * A tripwire, and honest about being one. A determined stub can be written in
  * words this does not list; what it catches is the ordinary case — a section
  * copied forward with its placeholders still in it.
+ *
+ * Placeholder MARKERS only. "Draft" used to be on this list in any case, and
+ * this is an app people write drafts in: "recovers a draft script" is a
+ * release note, not a stub. A marker is written in capitals, so a capitalised
+ * DRAFT still trips it, and so does a heading that calls the section a draft.
  */
-const stub = prose.match(/\b(TODO|T\.?B\.?D\.?|FIXME|XXX|coming soon|placeholder|draft)\b/i);
+const stub =
+  prose.match(/\b(TODO|T\.?B\.?D\.?|FIXME|XXX|coming soon|placeholder)\b/i) ??
+  prose.match(/\bDRAFT\b/) ??
+  // …or as a heading that only says so ("### Draft", "## Draft notes"), which
+  // is a marker and never a note. "### Draft recovery" is a note.
+  prose.match(/^ {0,3}#{1,6}[ \t]+\[?draft\]?(?:[ \t]+(?:release[ \t]+)?notes?)?[ \t]*#*[ \t]*$/im);
 if (stub) {
   fail(`the "## ${wanted.title}" section still contains "${stub[0]}".`);
 }

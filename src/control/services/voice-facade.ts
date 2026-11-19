@@ -1,10 +1,9 @@
 /**
- * Voice facade — the typed seam between the control UI and the audio/realtime
- * services that another agent owns (src/control/services/audio/**,
- * src/control/services/realtime/**). This file defines the interface the UI
- * consumes; integration binds the real implementation with
- * `bindVoiceFacade(...)`. Until then a clearly-marked mock keeps every screen
- * fully drivable.
+ * Voice facade — the typed seam between the UI and the audio services
+ * (src/control/services/audio/**) and the on-device recogniser. This file
+ * defines the interface the UI consumes; `voice-live.ts` binds the real
+ * implementation with `bindVoiceFacade(...)` at startup. Until then a
+ * clearly-marked mock keeps every screen fully drivable.
  */
 import type {
   AudioDeviceInfo,
@@ -26,7 +25,7 @@ export type Unsubscribe = () => void;
  */
 export type AsyncUnsubscribe = () => void | Promise<void>;
 
-/** §28.3 capture processing toggles (Settings → Audio / Preflight → Advanced). */
+/** Capture processing toggles (Settings → Audio). */
 export interface AudioProcessingOptions {
   echoCancellation?: boolean;
   noiseSuppression?: boolean;
@@ -35,17 +34,17 @@ export interface AudioProcessingOptions {
 
 export interface ObserveLevelsOptions {
   /**
-   * §28.4. The user's 0–1 slider; omitted means the A.6 defaults. It is on this
-   * seam so what is metered shows the same speech/silence decision the take
-   * will make — a sensitivity control the user cannot see the effect of is a
+   * The user's 0–1 sensitivity slider; omitted means the default thresholds.
+   * It is on this seam so what is metered shows the same speech/silence
+   * decision the take will make — a sensitivity control the user cannot see the effect of is a
    * control they cannot set.
    */
   vadSensitivity?: number;
   /**
-   * §28.3. The processing the TAKE will open with.
+   * The processing the TAKE will open with.
    *
-   * Load-bearing for the microphone check, which exists to be evidence about
-   * the capture that follows it. Left unset, `getUserMedia` defaults every
+   * Load-bearing for the Settings microphone check, which exists to be
+   * evidence about the capture a take will open. Left unset, `getUserMedia` defaults every
    * toggle ON — so a check could pass on a quiet microphone that default AGC
    * had boosted into usefulness, and the take would then open with AGC off and
    * receive the unusable audio the check was supposed to have caught.
@@ -62,12 +61,12 @@ export interface TranscriptTestEvents {
   onError(message: string): void;
 }
 
-/** Contract the audio/realtime agent implements and binds at integration. */
+/** Contract `voice-live.ts` implements and binds at startup. */
 export interface VoiceFacade {
   /** Enumerate input devices. May prompt for permission only when asked to. */
   listMicrophones(): Promise<AudioDeviceInfo[]>;
   /**
-   * Observe the input list (spec §28.2). Fires with the fresh list whenever a
+   * Observe the input list. Fires with the fresh list whenever a
    * device is connected or removed.
    *
    * A picker that enumerated once is wrong the moment someone plugs in the
@@ -77,25 +76,25 @@ export interface VoiceFacade {
    */
   watchInputDevices(cb: (devices: AudioDeviceInfo[]) => void): Unsubscribe;
   /**
-   * Explicit permission request (spec §9.1 — never at app launch).
+   * Explicit permission request — never at app launch.
    *
    * 'denied' is a refusal and nothing else; a missing or busy device rejects
    * with its own `MIC_*` code (#303).
    */
   requestMicrophoneAccess(): Promise<'granted' | 'denied'>;
   /**
-   * Passively observe the microphone permission (spec §28.1). Reports the
+   * Passively observe the microphone permission. Reports the
    * current state immediately and again whenever it changes, so a grant made
    * in System Settings mid-flow is noticed. MUST never call getUserMedia and
    * therefore never triggers the OS prompt.
    */
   watchMicrophonePermission(cb: (state: MicPermissionState) => void): Unsubscribe;
   /**
-   * Local level meter; responds before anything is streamed (spec §14.2 C).
+   * Local level meter; responds before anything is streamed.
    *
    * The disposer is an {@link AsyncUnsubscribe}: callers that are about to open
-   * another capture — the microphone check, which runs immediately before the
-   * take — MUST await it, or they hand the take a device whose previous claim
+   * another capture — Settings' transcription test, which takes the device
+   * from its meter — MUST await it, or they open a device whose previous claim
    * has not finished being given up.
    */
   observeLevels(
@@ -103,16 +102,16 @@ export interface VoiceFacade {
     cb: (s: AudioLevelSnapshot) => void,
     options?: ObserveLevelsOptions,
   ): AsyncUnsubscribe;
-  /** Temporary realtime transcription test session (spec §14.2 C). */
+  /** Temporary transcription test session, for Settings. */
   startTranscriptionTest(deviceId: string | undefined, events: TranscriptTestEvents): Promise<Unsubscribe>;
-  /** Realtime transport state for Live/Preflight status pills. */
+  /** The transcription test's session state. */
   getRealtimeState(): RealtimeState;
   subscribeRealtimeState(cb: (state: RealtimeState) => void): Unsubscribe;
 }
 
 let bound: VoiceFacade | null = null;
 
-/** Called once by the audio/realtime integration at startup. */
+/** Called once by `voice-live.ts` at startup. */
 export function bindVoiceFacade(impl: VoiceFacade): void {
   bound = impl;
 }
@@ -122,9 +121,9 @@ export function getVoiceFacade(): VoiceFacade {
 }
 
 /* ============================================================================
- * MOCK IMPLEMENTATION — awaiting audio/realtime integration.
- * Synthesizes plausible devices, levels, and a transcription test so the
- * Preflight and Live screens are complete and reviewable.
+ * MOCK IMPLEMENTATION — used until a real facade is bound.
+ * Synthesizes plausible devices, levels, and a transcription test so
+ * Settings and the Live screen are complete and reviewable.
  * ========================================================================== */
 
 const MOCK_DEVICES: AudioDeviceInfo[] = [

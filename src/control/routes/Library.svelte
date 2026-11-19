@@ -1,14 +1,9 @@
 <!--
-  The script collection (desktop refinement §10).
+  The script collection.
 
   ---------------------------------------------------------------------------
   A DESKTOP COLLECTION, NOT A CARD FEED
   ---------------------------------------------------------------------------
-  This route used to be a stack of `ScriptCard` surfaces under a 28px page
-  heading, with a search box below the heading and a separate sort select. It
-  had a `selectedId` in the store that nothing drew, so "the selected script"
-  was a fiction the Present shortcut aimed at and the user could not see.
-
   What a desktop collection is, and what each part is here for:
 
     SELECTION      one row is selected, it is drawn, it survives opening a script
@@ -17,7 +12,7 @@
                    what makes selection worth having — click-to-open leaves
                    nothing standing for a menu or an inspector to act on.
     KEYBOARD       arrows, Home/End, PageUp/PageDown, Enter to open, Delete to
-                   trash (§10.2), ⌘F to the filter field. A library larger than
+                   trash, ⌘F to the filter field. A library larger than
                    one 500-row read is reached with Show more, which is a
                    focusable control rather than a scroll sentinel — so the rows
                    past the first page are reachable by keyboard as well as by
@@ -25,10 +20,10 @@
                    route comes back.
     SCROLL         restored per view for the length of the session (see the
                    module block below). Not persisted across launches.
-    CONTEXT MENU   right-click selects the row first, then opens (§10.6).
+    CONTEXT MENU   right-click selects the row first, then opens.
     DROP TARGET    Markdown dropped on the window imports. The paths are handled
                    in Rust — see `windows/drag_drop.rs` for why.
-    STATUS BAR     the count lives at the bottom, not under a heading (§10.8).
+    STATUS BAR     the count lives at the bottom, not under a heading.
 
   ---------------------------------------------------------------------------
   THE ROWS ARE ONE TAB STOP; THE SELECTED ROW'S ACTIONS ARE TWO MORE
@@ -152,7 +147,7 @@
   const mac = detectPlatform() === 'macos';
 
   /*
-   * Put the list back where it was (§10.2).
+   * Put the list back where it was.
    *
    * Opening a script unmounts this route, so returning rebuilt the list at the
    * top — which for anybody with more than a screenful means hunting for the
@@ -193,7 +188,7 @@
   $effect(() => {
     void loadLibrary();
     /*
-     * ⌘F focuses the filter field (§6.1). It arrives as `edit.find` from the
+     * ⌘F focuses the filter field. It arrives as `edit.find` from the
      * command registry rather than as a hand-written shortcut, which is what
      * lets the native Find item say "Find in Library…" and be enabled here —
      * and what stopped the Library and Insert › Link from both claiming ⌘K.
@@ -266,8 +261,8 @@
   }
 
   function onSearchKeydown(event: KeyboardEvent): void {
-    /* Escape clears before it does anything else — §23.1's layered rule, with
-       the field's own content as the most local transient thing. */
+    /* Escape clears before it does anything else — the most local transient
+       thing answers first, and here that is the field's own content. */
     if (event.key === 'Escape' && query !== '') {
       event.preventDefault();
       event.stopPropagation();
@@ -408,10 +403,9 @@
       case 'Backspace': {
         /*
          * Delete moves to Trash, and Trash's Delete deletes permanently — both
-         * behind the confirmation the visible action uses. §10.2 asks for the
-         * platform semantics, and the platform semantics for a managed library
-         * are "the destructive key does the destructive thing, once you have
-         * said yes".
+         * behind the confirmation the visible action uses. The platform
+         * semantics for a managed library are "the destructive key does the
+         * destructive thing, once you have said yes".
          *
          * `confirmingDelete` guards a HELD key: `requestConfirm` replaces its
          * singleton without resolving the request it displaces, so a repeat
@@ -462,7 +456,7 @@
     confirmingDelete = true;
     try {
       const accepted = await requestConfirm({
-        // Named. §18.4: "Are you sure?" tells somebody with forty scripts nothing.
+        // Named: "Are you sure?" tells somebody with forty scripts nothing.
         title: 'Move to Trash?',
         body: `“${script.title}” will move to Trash and can be restored for 30 days.`,
         confirmLabel: 'Move to Trash',
@@ -535,8 +529,8 @@
    * The row's actions, as one list used by BOTH the context menu and the
    * overflow button.
    *
-   * §10.6's last rule — do not duplicate every menu item as a visible row button
-   * — is only keepable if the two surfaces share a definition. Two lists drift,
+   * The rule not to duplicate every menu item as a visible row button is only
+   * keepable if the two surfaces share a definition. Two lists drift,
    * and the drift is invisible because nobody opens both.
    */
   function rowMenuItems(script: ScriptSummary): ContextMenuItem[] {
@@ -576,7 +570,7 @@
   }
 
   /**
-   * Right-click SELECTS FIRST, then opens (§10.6).
+   * Right-click SELECTS FIRST, then opens.
    *
    * Without this the menu acts on a row the user is pointing at while the
    * selection highlight sits somewhere else — so "Move to Trash" appears to be
@@ -602,7 +596,7 @@
     openRowMenu(script, { x: event.clientX, y: event.clientY }, event.currentTarget as HTMLElement);
   }
 
-  /** View options: sort and density in one compact menu (§10.4). */
+  /** View options: sort and density in one compact menu. */
   const viewOptionItems = $derived([
     ...(showsSort
       ? sortOptions.map((option) => ({
@@ -725,9 +719,9 @@
     {#snippet actions()}
       <!--
         Search in the PRIMARY toolbar, where it is stable across every Library
-        view (§10.4). The ⌘K keycap that used to sit inside the field is gone:
-        §10.4 asks for it in the tooltip and the native menu instead, because a
-        rendered keycap inside an input is a web command-palette signature.
+        view. Its shortcut is named in the tooltip and the native menu rather
+        than as a keycap inside the field, because a rendered keycap inside an
+        input is a web command-palette signature.
 
         At the TRAILING end, with the commands, where a Mac toolbar keeps its
         search field. It used to lead the toolbar, in front of the title, and
@@ -759,9 +753,8 @@
         {/if}
       {:else}
         <!--
-          Import is secondary and New Script is primary (§10.4) — they used to be
-          two equally weighted buttons, which made the toolbar ask a question
-          instead of offering a default.
+          Import is secondary and New Script is primary: two equally weighted
+          buttons make the toolbar ask a question instead of offering a default.
         -->
         <Button onclick={() => importMarkdown()}>Import</Button>
         <Button variant="primary" onclick={() => createAndOpenScript('new')}>
@@ -791,7 +784,7 @@
     {/if}
     <!--
       A refresh that failed with rows on screen: the list is stale, not wrong, so
-      it stays and the failure is reported over it as a persistent bar (§10.7).
+      it stays and the failure is reported over it as a persistent bar.
       Deliberately not a toast — `danger` toasts never expire, and a debounced
       search that keeps failing would stack one per keystroke.
     -->
@@ -807,7 +800,7 @@
 
     {#if $library.loading && scripts.length === 0}
       <!--
-        Row skeletons, not a centred block (§10.7). Replacing the whole workspace
+        Row skeletons, not a centred block. Replacing the whole workspace
         with "Loading scripts…" makes every launch look like a page navigation;
         rows that are the right shape make it look like a list filling in.
       -->
@@ -884,7 +877,7 @@
       -->
       <div class="collection">
         <!--
-          Column headings (§10.1's stable columns, named). Without them the two
+          Column headings, naming the stable columns. Without them the two
           figures on every row were unlabelled — a length and a date the reader
           had to recognise by shape — and the list's order was a fact hidden
           behind the View options menu. The heading of the column the list is
@@ -934,7 +927,7 @@
                 oncontextmenu={(event) => contextMenuFor(script, event)}
               >
                 {#snippet status()}
-                  <!-- Shown only when actionable (§10.1): "Prepared" on every
+                  <!-- Shown only when actionable: "Prepared" on every
                        healthy row is a badge that carries no information. -->
                   {#if script.hasWarnings}
                     <StatusPill tone="warning" label="Needs attention" size="sm" />
@@ -969,7 +962,7 @@
 
       {#if scripts.length < $library.total}
         <!--
-          The rest of the collection, reachable (§10.2).
+          The rest of the collection, reachable.
 
           The count line used to say "Showing 500 of 812" and stop there — an
           honest sentence about 312 scripts no gesture in the product could
@@ -1262,8 +1255,8 @@
     height: calc(var(--list-row-h-compact) + 1px);
   }
   /*
-   * Static placeholder lines, not a shimmer. §23.5 and §3.2: no perpetual
-   * motion, and a sweeping gradient across six rows is the most decorative
+   * Static placeholder lines, not a shimmer. No perpetual motion, and a
+   * sweeping gradient across six rows is the most decorative
    * animation a list can have. A title-shaped and an excerpt-shaped line read
    * as "these rows are not real yet" perfectly well standing still; the blank
    * tinted bands they replace read as a ruled table with nothing in it.

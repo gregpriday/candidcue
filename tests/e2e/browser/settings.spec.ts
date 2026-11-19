@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { gotoSection, openPreferences } from './fixtures/preferences';
+import { VAD_SENSITIVITY_COPY } from '../../../src/control/services/settings-audio';
+import { SESSION_MODE_LABELS } from '../../../src/shared/take-vocabulary';
 
 /**
  * Settings round-trip journey, SHIM-BACKED.
@@ -123,21 +125,18 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
   }
   await expect(tuning).toHaveAttribute('open', '');
 
-  const slider = page.getByRole('slider', { name: 'Voice-detection sensitivity' });
+  // The words come from the shared copy module, so rewording the control is a
+  // change to settings-audio.ts alone.
+  const slider = page.getByRole('slider', { name: VAD_SENSITIVITY_COPY.label });
   await expect(slider).toBeVisible();
   // The shim's document predates the field, so the UI shows the A.6 neutral
   // rather than an extreme — and says which one it is.
   await expect(slider).toHaveValue('50');
-  await expect(page.getByText('Default', { exact: true })).toBeVisible();
+  await expect(page.getByText(VAD_SENSITIVITY_COPY.format(50), { exact: true })).toBeVisible();
 
-  /*
-   * The bound is in the copy: what the slider does NOT move is why it is safe
-   * to offer. It used to be "the pause that ends a sentence", which was the
-   * honest limit when a local detector decided turn boundaries. The recogniser
-   * decides its own turn boundaries, so this slider cannot gate a single byte — and a
-   * user who believes it can will turn it up and be no better off.
-   */
-  await expect(page.getByText(/recogniser hears everything/)).toBeVisible();
+  // The description the screen renders is the shared one, whose advice
+  // direction audio-settings-ipc-contract.test.ts holds against the VAD bounds.
+  await expect(page.getByText(VAD_SENSITIVITY_COPY.description, { exact: true })).toBeVisible();
 
   await slider.fill('80');
 
@@ -600,64 +599,85 @@ test('measuring another rig opens the wizard on a new name, not the applied one'
   await expect(page.getByLabel('Rig name')).not.toHaveValue('Desk hood');
 });
 
-test('a session mode stored by an older build is admitted, not papered over', async ({ page }) => {
-  // `fromRustDocument` still accepts a persisted 'manual', and startTake passes
-  // it straight into the session — so a readout hardcoded to "Follow voice"
-  // would be the same defect one layer along, and removing the Select would
-  // have taken away the only way back.
-  await installTauriShim(page, { welcomed: true, promptMode: 'manual' });
-  await page.goto('/control.html');
-  await openSettingsSection(page, 'General');
+/** The sentence under the Session mode choice, whatever it says. */
+async function modeDescription(page: Page): Promise<string> {
+  const id = await page.getByLabel('Session mode').getAttribute('aria-describedby');
+  return (await page.locator(`[id="${id}"]`).textContent())?.trim() ?? '';
+}
 
-  await expect(page.getByText('Manual', { exact: true })).toBeVisible();
-  // The way back is named in the readout's own vocabulary, in the sentence and
-  // on the button alike: "Switch to voice follow" leading to a value that reads
-  // "Follow voice" is two names for one mode.
-  await expect(
-    page.getByText(
-      'Saved by an earlier version. Takes in this mode do not follow your voice; ' +
-        'switch back to Follow voice to prompt normally.',
-      { exact: true },
-    ),
-  ).toBeVisible();
-
-  await page.getByRole('button', { name: 'Switch to Follow voice', exact: true }).click();
-  // The store changes before the save is awaited, so the readout alone would
-  // pass on a way back that never reached the backend.
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.__E2E__.calls.some(
-          (c) =>
-            c.command === 'update_settings' &&
-            (c.args as { patch?: { stageBehavior?: { promptMode?: unknown } } }).patch
-              ?.stageBehavior?.promptMode === 'voice',
-        ),
+/** Whether a settings write carrying this prompt mode reached the backend. */
+function savedPromptMode(page: Page, mode: string): Promise<boolean> {
+  return page.evaluate(
+    (wanted) =>
+      window.__E2E__.calls.some(
+        (c) =>
+          c.command === 'update_settings' &&
+          (c.args as { patch?: { stageBehavior?: { promptMode?: unknown } } }).patch
+            ?.stageBehavior?.promptMode === wanted,
       ),
-    )
-    .toBe(true);
-  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Saved by an earlier version/)).toHaveCount(0);
-});
+    mode,
+  );
+}
 
-test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
+test('Session mode is a choice between Follow voice and Read (#243)', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await page.goto('/control.html');
   await openSettingsSection(page, 'General');
 
-  await expect(page.getByText('Session mode', { exact: true })).toBeVisible();
-  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  // The dropdown is gone, and with it the two permanently disabled rows.
-  await expect(page.getByLabel('Default session mode')).toHaveCount(0);
-  await expect(page.getByText(/not available in this release/)).toHaveCount(0);
-  // It says where the pace actually lives — Teleprompter, not "below" in General.
-  await expect(
-    page.getByText(
-      'Every take opens listening. Auto-scroll can still roll the script at a set pace ' +
-        '(Teleprompter › Auto-scroll pace).',
-      { exact: true },
-    ),
-  ).toBeVisible();
+  const mode = page.getByLabel('Session mode');
+  await expect(mode).toHaveValue('voice');
+  // Only the modes a take can open in; no permanently disabled rows.
+  await expect(mode.locator('option')).toHaveText([
+    SESSION_MODE_LABELS.voice,
+    SESSION_MODE_LABELS.manual,
+  ]);
+  const voiceSays = await modeDescription(page);
+  expect(voiceSays).not.toBe('');
+
+  await mode.selectOption('manual');
+  // The store changes before the save is awaited, so the select alone would
+  // pass on a choice that never reached the backend.
+  await expect.poll(() => savedPromptMode(page, 'manual')).toBe(true);
+  await expect(mode).toHaveValue('manual');
+  // The sentence describes the mode chosen, not the one before it.
+  await expect.poll(() => modeDescription(page)).not.toBe(voiceSays);
+});
+
+test('Speech offers voice following once the data is installed and takes open in Read (#243)', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true, promptMode: 'manual' });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Speech');
+
+  const turnOn = page.getByRole('button', { name: 'Follow my voice in takes', exact: true });
+  await expect(turnOn).toBeVisible();
+  await turnOn.click();
+  await expect.poll(() => savedPromptMode(page, 'voice')).toBe(true);
+  await expect(turnOn).toHaveCount(0);
+});
+
+test('a session mode stored by an older build is admitted, not papered over', async ({ page }) => {
+  // `fromRustDocument` still accepts a persisted 'fixed', and startTake passes
+  // it straight into the session — so a choice that showed an offered mode over
+  // it would describe a state the app is not in.
+  await installTauriShim(page, { welcomed: true, promptMode: 'fixed' });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'General');
+
+  const mode = page.getByLabel('Session mode');
+  await expect(mode).toHaveValue('fixed');
+  // Shown, and not choosable.
+  await expect(mode.locator('option[value="fixed"]')).toBeDisabled();
+
+  await mode.selectOption('voice');
+  await expect.poll(() => savedPromptMode(page, 'voice')).toBe(true);
+  await expect(mode).toHaveValue('voice');
+  // Nothing offers the earlier version's mode once it has been replaced.
+  await expect(mode.locator('option')).toHaveText([
+    SESSION_MODE_LABELS.voice,
+    SESSION_MODE_LABELS.manual,
+  ]);
 });
 
 test('Following drops the dead Script fidelity control', async ({ page }) => {

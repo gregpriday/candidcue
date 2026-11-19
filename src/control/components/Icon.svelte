@@ -1,5 +1,5 @@
 <!--
-  One coherent bundled outline icon set (spec §11.7), drawn from Lucide.
+  One coherent bundled outline icon set, drawn from Lucide.
   Icons supplement labels; IconButton supplies accessible names where an icon
   stands alone.
 

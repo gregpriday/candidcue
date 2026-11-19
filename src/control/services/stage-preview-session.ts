@@ -22,7 +22,7 @@
  * with its own drawing path would be free to be wrong in precisely the way that
  * matters — agreeing with the sliders and disagreeing with the take.
  *
- * Not a calibration either. Calibrate (§17) measures a rig: millimetres per
+ * Not a calibration either. Calibrate measures a rig: millimetres per
  * pixel, the hood's safe area, where the lens sits, how far away the presenter
  * stands. This shows what the CURRENT settings look like, which is the question
  * an uncalibrated rig has and the one the wizard does not answer.

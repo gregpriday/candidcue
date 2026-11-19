@@ -1,5 +1,5 @@
 /**
- * Where the panes are, and how wide (desktop refinement §21).
+ * Where the panes are, and how wide.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS NOT IN `settings`
@@ -69,7 +69,7 @@ export const PANE_LIMITS = {
 
 export type PaneName = keyof typeof PANE_LIMITS;
 
-/** Editor workspace modes. `split` is the one this refinement adds. */
+/** Editor workspace modes. */
 export type EditorLayout = 'edit' | 'preview' | 'split';
 
 const EDITOR_LAYOUTS: readonly EditorLayout[] = ['edit', 'preview', 'split'];
@@ -79,7 +79,7 @@ export interface WorkspaceState {
   sidebarWidth: number;
   outlineVisible: boolean;
   outlineWidth: number;
-  /** The Library's selection inspector. Off by default — see §10.3. */
+  /** The Library's selection inspector. Off by default. */
   inspectorVisible: boolean;
   inspectorWidth: number;
   diagnosticsWidth: number;
@@ -88,7 +88,7 @@ export interface WorkspaceState {
   /** Editor/preview split position as a fraction of the available width. */
   editorSplitRatio: number;
   /**
-   * Editor and preview text scale, as a multiplier (§11.3).
+   * Editor and preview text scale, as a multiplier.
    *
    * DELIBERATELY NOT the stage's font size, and the View menu labels say so:
    * "Larger Editor Text", never "Zoom In". A teleprompter user who reads "Zoom
@@ -98,7 +98,7 @@ export interface WorkspaceState {
    */
   documentScale: number;
   /**
-   * Library row density (§10.1).
+   * Library row density.
    *
    * `comfortable` shows one line of excerpt in a 52px row; `compact` drops the
    * excerpt for a 38px one. Offered rather than imposed because the right answer

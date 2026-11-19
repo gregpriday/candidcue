@@ -77,4 +77,14 @@ describe('session-record IPC payloads match the Rust DTOs', () => {
       limit: fixture.list_sessions.limit,
     });
   });
+
+  it('list_sessions asks Rust for only the rows with an ending when told to (#241)', async () => {
+    await sessions.listSessionRecords(fixture.list_sessions.scriptId, 20, { withEnding: true });
+    // `with_ending` on the Rust command; Tauri maps the camelCase key.
+    expect(payloadFor('list_sessions')).toEqual({
+      scriptId: fixture.list_sessions.scriptId,
+      limit: 20,
+      withEnding: true,
+    });
+  });
 });

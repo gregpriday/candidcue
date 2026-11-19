@@ -289,3 +289,63 @@ async fn startup_closes_sessions_that_were_never_ended() {
     // Idempotent: a clean launch closes nothing.
     assert_eq!(sessions::close_orphaned_sessions(&h.pool).await.unwrap(), 0);
 }
+
+/// #241: a rehearsal closes its row without an ending, and "From last
+/// ending" reads only the rows that have one. Filtering after the page limit
+/// would let a run of rehearsals push the last recording out of the page, so
+/// the filter has to be in the query.
+#[tokio::test]
+async fn rows_with_an_ending_survive_a_run_of_rehearsals_past_the_limit() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+
+    let take = sessions::start_session(&h.pool, &start_input(&f, &script_id))
+        .await
+        .expect("take row");
+    let with_ending: EndSessionSummary =
+        serde_json::from_value(serde_json::json!({ "endTokenIndex": 7 })).unwrap();
+    sessions::end_session(&h.pool, &take.id, with_ending)
+        .await
+        .expect("take ends");
+
+    for _ in 0..25 {
+        let practice = sessions::start_session(&h.pool, &start_input(&f, &script_id))
+            .await
+            .expect("practice row");
+        let without_ending: EndSessionSummary =
+            serde_json::from_value(serde_json::json!({ "retakeCount": 0 })).unwrap();
+        sessions::end_session(&h.pool, &practice.id, without_ending)
+            .await
+            .expect("practice ends");
+    }
+    // `started_at` orders the page; make the take unambiguously the oldest
+    // rather than relying on the clock ticking between inserts.
+    sqlx::query("UPDATE sessions SET started_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+        .bind(&take.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    let page = sessions::list_sessions(&h.pool, Some(script_id.as_str().to_string()), 20)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 20);
+    assert!(
+        page.iter().all(|r| r.end_token_index.is_none()),
+        "the unfiltered page is all rehearsals — the bug the filter exists for"
+    );
+
+    let endings =
+        sessions::list_sessions_filtered(&h.pool, Some(script_id.as_str().to_string()), 20, true)
+            .await
+            .unwrap();
+    assert_eq!(endings.len(), 1);
+    assert_eq!(endings[0].id, take.id);
+    assert_eq!(endings[0].end_token_index, Some(7));
+
+    let all = sessions::list_sessions_filtered(&h.pool, None, 500, false)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 26, "without the filter every row is listed");
+}

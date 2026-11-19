@@ -1,17 +1,17 @@
 /**
- * Realtime audio defaults (spec Appendix A.6). These are evaluation
- * parameters surfaced in one place — not magic numbers scattered through the
- * codebase (spec §28.4).
+ * Audio defaults for the level meter and its voice-activity detector. These
+ * are evaluation parameters surfaced in one place — not magic numbers
+ * scattered through the codebase.
  */
 
 export interface VadConfig {
-  /** Sustained level above threshold before speech opens (A.6: 100 ms). */
+  /** Sustained level above threshold before speech opens (100 ms). */
   speechOpenMs: number;
-  /** Silence duration that closes a turn and triggers commit (A.6: 420 ms). */
+  /** Silence duration that closes a turn on the meter (420 ms). */
   endOfTurnSilenceMs: number;
-  /** Force a commit after this much continuous speech (A.6: 5 s). */
+  /** Close a turn on the meter after this much continuous speech (5 s). */
   maxUtteranceMs: number;
-  /** Ambient noise-floor calibration window (A.6: 2 s). */
+  /** Ambient noise-floor calibration window (2 s). */
   calibrationMs: number;
   /** Speech threshold = max(minSpeechRms, noiseFloor * noiseFloorMargin). */
   noiseFloorMargin: number;
@@ -29,7 +29,7 @@ export interface VadConfig {
    * NOT the mean, which is the documented way to get this wrong: speech during
    * the calibration window drags an average up, and the gate is a multiple of
    * the result, so a presenter who starts reading immediately sets a threshold
-   * above their own voice and is never heard again. Measured in the wild at a
+   * above their own voice and the meter never registers them again. Measured in the wild at a
    * floor of 0.1008 and a gate of 0.2520 against speech of 0.03–0.12.
    *
    * Speech is sparse — even continuous reading has gaps between words — so a
@@ -89,9 +89,9 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
 };
 
 /**
- * Bounds for the Settings → Audio "Local voice-detection sensitivity" slider.
+ * Bounds for the Settings → Audio sensitivity slider.
  *
- * The slider is 0–1 with 0.5 meaning "exactly the A.6 defaults", and it moves
+ * The slider is 0–1 with 0.5 meaning "exactly the defaults", and it moves
  * the SPEECH THRESHOLD only — `noiseFloorMargin` and the absolute `minSpeechRms`
  * floor. Endpointing sensitivity is genuinely room- and device-dependent (a
  * condenser in a quiet office and a laptop mic in a hotel room do not share a
@@ -99,7 +99,7 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
  *
  * What it must NOT do is move the turn cadence the meter reports.
  * `endOfTurnSilenceMs` (420 ms), `maxUtteranceMs` (5 s) and `calibrationMs` are
- * therefore fixed at their A.6 values at every slider position, which bounds
+ * therefore fixed at their default values at every slider position, which bounds
  * the reading in both directions:
  *
  *  - at maximum sensitivity the threshold sits near the noise floor, so room
@@ -110,25 +110,23 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
  *
  * None of this gates what the recogniser hears. Audio streams unconditionally
  * and `cc_stt::local` decides its own utterance boundaries; this VAD drives the
- * level meter and the §28.6 dead-input check, and nothing else. (It was once
- * the commit cue for a hosted recogniser, which is why the bounds are drawn
- * this tightly — a threshold that moved the cadence moved the bill.)
+ * level meter and the dead-input check, and nothing else.
  *
- * The threshold multiplier is confined to roughly ×0.64…×1.6 of the default
- * margin. That is a deliberately narrow band: wide enough to rescue a noisy room
+ * The margin is confined to 1.6–4.0, against a default of 1.8. That is a
+ * deliberately narrow band: wide enough to rescue a noisy room
  * or a quiet talker, too narrow to turn the VAD into something that either never
  * fires or fires on every breath.
  */
 export const VAD_SENSITIVITY_BOUNDS = {
   /** `noiseFloorMargin` at sensitivity 0 — hardest to trigger. */
   marginAtMin: 4,
-  /** `noiseFloorMargin` at sensitivity 0.5 — the A.6 default. */
+  /** `noiseFloorMargin` at sensitivity 0.5 — the default. */
   marginAtMid: DEFAULT_VAD_CONFIG.noiseFloorMargin,
   /** `noiseFloorMargin` at sensitivity 1 — easiest to trigger. */
   marginAtMax: 1.6,
   /** `minSpeechRms` at sensitivity 0. */
   floorAtMin: 0.02,
-  /** `minSpeechRms` at sensitivity 0.5 — the A.6 default. */
+  /** `minSpeechRms` at sensitivity 0.5 — the default. */
   floorAtMid: DEFAULT_VAD_CONFIG.minSpeechRms,
   /** `minSpeechRms` at sensitivity 1. */
   floorAtMax: 0.005,
@@ -138,7 +136,7 @@ export const VAD_SENSITIVITY_BOUNDS = {
  * Turn the user's 0–1 sensitivity into a `VadConfig` override.
  *
  * Only the two threshold fields are returned; everything the caller does not see
- * here keeps its A.6 value, which is the whole point — see the bounds above.
+ * here keeps its default value, which is the whole point — see the bounds above.
  * Out-of-range and non-finite input falls back to the neutral midpoint rather
  * than clamping to an extreme, because a corrupt setting must not silently
  * become the most aggressive configuration available.
@@ -153,9 +151,9 @@ export function vadConfigForSensitivity(sensitivity: number): Partial<VadConfig>
 }
 
 /**
- * Piecewise-linear through the midpoint, so 0.5 lands exactly on the A.6 value
+ * Piecewise-linear through the midpoint, so 0.5 lands exactly on the default
  * rather than near it. A single linear ramp between the extremes would put the
- * default at 2.8 instead of 2.5 and quietly retune every existing user.
+ * default at 2.8 instead of 1.8 and quietly retune every existing user.
  */
 function interpolate(s: number, atMin: number, atMid: number, atMax: number): number {
   return s <= 0.5 ? atMin + (atMid - atMin) * (s / 0.5) : atMid + (atMax - atMid) * ((s - 0.5) / 0.5);
@@ -164,11 +162,11 @@ function interpolate(s: number, atMin: number, atMid: number, atMax: number): nu
 /** Meter/VAD analysis frame cadence in milliseconds. */
 export const DEFAULT_ANALYSIS_INTERVAL_MS = 50;
 
-/** Local signal test length (spec §28.5: 10-second live meter). */
+/** Local signal test length (a 10-second live meter). */
 export const MIC_TEST_METER_SECONDS = 10;
 
 /** Sustained no-signal duration before MIC_NO_SIGNAL is raised. */
 export const DEFAULT_SILENT_INPUT_MS = 5000;
 
-/** Soft-pause auto-disconnect default (A.6: 10 minutes). */
+/** Soft-pause auto-disconnect default (10 minutes). */
 export const DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS = 10 * 60 * 1000;

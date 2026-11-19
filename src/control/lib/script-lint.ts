@@ -8,17 +8,12 @@
  * the stage guessing its way into unspoken words is now the next full stop
  * rather than the next blank line.
  *
- * This file used to argue that a sentence-level ceiling was a week of Rust plus
- * a benchmark campaign away, and that asking the author to press Enter twice
- * bought most of the same protection for four seconds of work. The Rust got
- * written. What it did not change is RECOVERY: the approximate-bridge gate is
- * still bounded by the paragraph on purpose (`can_bridge_local_approx` in
- * `tracker.rs`), because failing that gate does not merely dim less — it drops
- * the engine into `Holding`. Inside a three-hundred-word block that bound sits
- * three hundred words away, so a skipped line or a restarted sentence still has
- * a very long runway before the script's own structure catches it. That is what
- * the long-paragraph finding is about now, and it is why this still lives in
- * the editor and not in the engine.
+ * What the sentence ceiling does not change is RECOVERY: the
+ * approximate-bridge gate is still bounded by the paragraph on purpose
+ * (`can_bridge_local_approx` in `tracker.rs`), so the paragraph is the outer
+ * bound on how far approximate recovery can reach. That is what the
+ * long-paragraph finding is about, and it is why this lives in the editor and
+ * not in the engine.
  *
  * Everything here is advisory and stays advisory. Nothing it reports blocks a
  * compile, a save, or a take: these are scripts that read badly, not scripts
@@ -141,7 +136,7 @@ function positionAt(lines: SourceLine[], offset: number): { line: number; column
  * Block classification mirrors the aligner's Markdown reader
  * (`crates/cc-align/src/script.rs`), not the app compiler's `scanContainers`,
  * and the divergence is deliberate. The compiler keeps an *unknown* `:::name`
- * container visible as readable source (§22.7), so a `:::cue` block would
+ * container visible as readable source, so a `:::cue` block would
  * arrive here as ordinary prose and get scolded for the stage notes inside it.
  * Every finding in this file is a claim about the paragraph the *aligner* will
  * put its ceiling on, so the two have to agree about where paragraphs are.

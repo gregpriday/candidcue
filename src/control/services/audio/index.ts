@@ -1,5 +1,5 @@
 /**
- * Public API of the audio services package (spec §28).
+ * Public API of the audio services package.
  *
  * Consumers (the session facade / UI layer) should import from this barrel
  * only. Browser APIs are injected via the interfaces in `types.ts`, so every

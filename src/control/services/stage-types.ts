@@ -1,5 +1,5 @@
 /**
- * Stage/display command payloads (spec §46.6) — exact twins of the Rust
+ * Stage/display command payloads — exact twins of the Rust
  * shapes in src-tauri/src/windows/mod.rs.
  */
 
@@ -24,7 +24,7 @@ export interface PhysicalSizeMm {
   height: number;
 }
 
-/** Twin of Rust `DisplayDescriptor` (spec §52.3). */
+/** Twin of Rust `DisplayDescriptor`. */
 export interface DisplayDescriptor {
   id: string;
   name?: string;
@@ -53,7 +53,7 @@ export interface DisplayDescriptor {
   physicalSizeMm?: PhysicalSizeMm;
 }
 
-/** Twin of Rust `IdentificationSession` (spec §52.4). */
+/** Twin of Rust `IdentificationSession`. */
 export interface IdentificationSession {
   sessionId: string;
   durationMs: number;
@@ -69,7 +69,7 @@ export interface IdentificationSession {
 /**
  * Twin of Rust `OpenStageRequest`.
  *
- * `sessionId` is mandatory (M1). It used to be optional, so the stage could be
+ * `sessionId` is mandatory. It used to be optional, so the stage could be
  * registered with no owning session — and then `close_stage` accepted any id,
  * and every downstream generation check had nothing to compare against.
  */

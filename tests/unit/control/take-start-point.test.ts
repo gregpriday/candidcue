@@ -20,6 +20,7 @@ import {
   lastEndingFor,
   newestEnding,
   snapToStart,
+  startPointAtCaret,
   type SnapInput,
 } from '../../../src/control/lib/take-start-point';
 import type { OutlineNode, SentenceUnit } from '../../../src/shared/contracts';
@@ -335,5 +336,82 @@ describe('describeStartPoint', () => {
     expect(describeStartPoint(snapToStart(20, INPUT))).toBe('From here');
     expect(describeStartPoint(continueFrom(40, INPUT)!)).toBe('From last ending');
     expect(describeStartPoint(snapToStart(40, INPUT))).toBe('From here');
+  });
+});
+
+describe('startPointAtCaret (#241)', () => {
+  const source = [
+    '# Opening',
+    '',
+    'Hello there everyone. Welcome back to the show.',
+    '',
+    '# Pricing',
+    '',
+    'Raise prices now. Then raise them again.',
+    '',
+  ].join('\n');
+  const script = compile(source, { scriptId: 'script-241' });
+  const input: SnapInput = {
+    sentences: script.sentences,
+    outline: script.outline,
+    totalTokens: script.statistics.spokenWordCount,
+    blocks: script.blocks,
+  };
+  const pricingFirst = script.sentences.find((s) =>
+    s.normalizedText.startsWith('raise prices'),
+  )!;
+
+  it('starts the section when the caret is on its heading, as an outline click leaves it', () => {
+    // Before #241 this resolved to the last sentence ABOVE the heading —
+    // "Welcome back…", in the previous section.
+    for (const offset of [source.indexOf('# Pricing'), source.indexOf('Pricing') + 3]) {
+      const point = startPointAtCaret(offset, input)!;
+      expect(point.tokenIndex).toBe(pricingFirst.startTokenIndex);
+      // Quoted as the section's first sentence, which is what the menu shows.
+      expect(point.excerpt).toMatch(/^“Raise prices now/);
+    }
+  });
+
+  it('still uses the sentence at or before the caret in body text', () => {
+    const point = startPointAtCaret(source.indexOf('Then raise'), input)!;
+    expect(point.tokenIndex).toBe(
+      script.sentences.find((s) => s.normalizedText.startsWith('then raise'))!.startTokenIndex,
+    );
+    expect(point.kind).toBe('sentence');
+  });
+
+  it('treats the first heading as the beginning', () => {
+    expect(startPointAtCaret(0, input)).toEqual(beginning());
+  });
+
+  it('treats a caret above the first sentence as the beginning, as the Opening row leaves it', () => {
+    const opening = '\nIntro words come first. Then more.\n\n# Pricing\n\nRaise prices now.\n';
+    const compiled = compile(opening, { scriptId: 'script-241c' });
+    expect(
+      startPointAtCaret(0, {
+        sentences: compiled.sentences,
+        outline: compiled.outline,
+        totalTokens: compiled.statistics.spokenWordCount,
+        blocks: compiled.blocks,
+      }),
+    ).toEqual(beginning());
+  });
+
+  it('offers nothing without a compile', () => {
+    expect(startPointAtCaret(5, { sentences: [], outline: [], totalTokens: 0 })).toBeNull();
+  });
+
+  it('falls back to the body rule for a trailing heading with nothing spoken after it', () => {
+    const trailing = `${source}\n# Afterword\n`;
+    const compiled = compile(trailing, { scriptId: 'script-241b' });
+    const point = startPointAtCaret(trailing.indexOf('# Afterword'), {
+      sentences: compiled.sentences,
+      outline: compiled.outline,
+      totalTokens: compiled.statistics.spokenWordCount,
+      blocks: compiled.blocks,
+    })!;
+    expect(point.tokenIndex).toBe(
+      compiled.sentences.find((s) => s.normalizedText.startsWith('then raise'))!.startTokenIndex,
+    );
   });
 });

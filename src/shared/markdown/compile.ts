@@ -66,9 +66,10 @@ import { deriveParts } from './parts';
  * 1.2.3 drops the retired coaching directives: no `coaching` field, and no
  * warnings about `cc:` comments or `coach:` front matter (#208).
  *
- * 1.2.4 follows the rename to Speaking Glass: the default wake phrase is the
- * product's name, so a sentence that says "Speaking Glass" now draws the
- * command-collision warning and one that says "CandidCue" no longer does.
+ * 1.2.4 follows the rename to Speaking Glass: the default phrases the
+ * command-collision warning looks for are "Speaking Glass" and
+ * "SpeakingGlass", so spoken text outside a literal block that says either now
+ * draws the warning and one that says "CandidCue" no longer does.
  */
 export const COMPILER_VERSION = '1.2.4';
 export const SCHEMA_VERSION = 1;
@@ -571,7 +572,7 @@ const LINE_PREFIX = /[ \t>]*/y;
 /** How many starts inside one continuation prefix are tried after the first. */
 const MAX_PREFIX_RETRIES = 64;
 
-/** What a backslash escapes (CommonMark §2.4): ASCII punctuation, nothing else. */
+/** What a backslash escapes (CommonMark): ASCII punctuation, nothing else. */
 const ESCAPABLE = /^[!-/:-@[-`{-~]$/;
 
 function mapValueToSource(
@@ -1985,7 +1986,7 @@ function finalize(
     }
     blocks.push(block);
 
-    // §23.7: typed token ranges the command router uses to suppress detection.
+    // §23.7: the inclusive token ranges of `:::literal-command` blocks.
     if (draft.literalCommand && spokenTokens.length > blockTokenStart) {
       const previous = literalCommandRanges[literalCommandRanges.length - 1];
       if (previous && previous.endTokenIndex + 1 === blockTokenStart) {

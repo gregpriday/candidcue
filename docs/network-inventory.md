@@ -151,7 +151,7 @@ true, and only one sentence is both.
 - "Nothing ever leaves your computer."
 - "Completely offline from first launch."
 - "There is no network code."
-- "Automatic updates." — the check is automatic, the install never is.
+- "Updates install automatically." — the check is automatic, the install never is.
 - "Speaking Glass never checks for updates." — true of 1.0's plan, false of the app.
 - "A support bundle can never contain your prose" — see
   `src/control/lib/diagnostics-format.ts` for what is actually promised.

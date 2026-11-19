@@ -1,5 +1,5 @@
 <!--
-  The bottom status band (desktop refinement §10.8, §11.7).
+  The bottom status band.
 
   ---------------------------------------------------------------------------
   WHAT GOES HERE, AND WHY IT IS NOT A NOTIFICATION FEED
@@ -9,10 +9,10 @@
   is a different category from an event, which is what a toast is for, and from a
   fault, which needs to be next to the thing that failed.
 
-  §24.1's rule is state ownership: every state appears closest to the object that
+  The rule is state ownership: every state appears closest to the object that
   owns it, and exactly one surface is canonical. So this band is deliberately
-  narrow in what it will accept — §10.8 says so directly: do not turn the status
-  bar into a notification feed.
+  narrow in what it will accept: do not turn the status bar into a notification
+  feed.
 
   ---------------------------------------------------------------------------
   24px, AND THE LAYOUT DOES NOT MOVE
@@ -24,7 +24,7 @@
   ---------------------------------------------------------------------------
   ITEMS ARE BUTTONS ONLY WHEN CLICKING THEM DOES SOMETHING
   ---------------------------------------------------------------------------
-  §11.7: let each item act as a button only when clicking it opens a meaningful
+  Each item acts as a button only when clicking it opens a meaningful
   panel. An item with an `onclick` renders as a button and takes focus; one
   without renders as plain text and is skipped by the keyboard, because a tab
   stop that does nothing is worse than no tab stop.
@@ -42,14 +42,14 @@
     /** An escape hatch for a control that is not a label (a density toggle). */
     extra?: Snippet;
     /**
-     * A short sentence announced when it changes (§23.2).
+     * A short sentence announced when it changes.
      *
      * The Library's result count moved into this band, and a band that is only
      * painted tells a screen-reader user nothing when a search narrows fifty
      * scripts to two. This is a SEPARATE, polite live region rather than
      * `aria-live` on the whole bar: making the bar live would re-announce every
-     * word count and cursor position as it changed, which is the interruption
-     * §23.2 warns about in the same breath.
+     * word count and cursor position as it changed, which is exactly the
+     * interruption a status region must not make.
      *
      * Absent means "this screen has nothing worth announcing", which is the
      * right default — the editor's word count changes on every keystroke.
@@ -61,7 +61,7 @@
 </script>
 
 <!--
-  A NAMED landmark (§23.2). `<footer>` at the top level of a route is already
+  A NAMED landmark. `<footer>` at the top level of a route is already
   `contentinfo`; the name is what lets a screen-reader user jump to the
   document's state instead of walking the route to find it.
 -->
@@ -137,7 +137,7 @@
     /* Room for descenders: labels clip their overflow (to truncate), and a
        line box of exactly 1em cut the tails off "scripts" and "agents". */
     line-height: 16px;
-    /* No radius. §9.2: permanent panes have straight edges. */
+    /* No radius: permanent panes have straight edges. */
     border-radius: 0;
     user-select: none;
   }
@@ -297,7 +297,7 @@
 
   /*
    * Tones carry an icon as well as a colour at every call site that uses them
-   * (§9.4: colour is never the only state signal). The component cannot enforce
+   * (colour is never the only state signal). The component cannot enforce
    * that — it can only make the colours available — so the icon is required by
    * convention and checked in review rather than by the type.
    */

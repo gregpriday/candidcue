@@ -69,7 +69,16 @@ export declare function writeOnce(
   options?: NetworkOptions,
 ): Promise<{ unpublished: string[]; published: string[] }>;
 export declare function checkOrigin(stageDir: string, publicUrl: string): void;
+export declare function originReport(publicUrl: string, options: { fromVariable: boolean }): string[];
 export declare function newestStable(tags: readonly string[]): string | null;
 export declare function rustLines(text: string): string[];
+export declare const IMMUTABLE_CACHE_CONTROL: string;
+export declare const UNCACHED_CACHE_CONTROL: string;
+export declare const CONFLICTING: unique symbol;
+export declare function cacheDirectives(
+  header: string | null | undefined,
+): Map<string, string | true | typeof CONFLICTING> | null;
+export declare function immutableCacheProblem(header: string | null | undefined): string | null;
+export declare function uncachedProblem(header: string | null | undefined): string | null;
 export declare function verifyFiles(stageDir: string, options?: NetworkOptions): Promise<void>;
 export declare function verifyFeed(stageDir: string, options?: NetworkOptions): Promise<void>;

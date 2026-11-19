@@ -129,9 +129,147 @@ same `v*` tag starts all three. Each is a full vertical slice (gates, tests,
 build, inspection, R2, GitHub Release) and publishes the moment its own
 pipeline is green, so a failing Windows run never strands a good macOS build.
 
+### The credentials, by name
+
+Every credential is a secret you add by hand; none is in the repository.
+`scripts/release-credentials.mjs` is the list. Each workflow checks the
+signing secrets before it builds and the R2 secrets before it publishes, and
+each check names every secret of its own kind that is missing at once:
+
+| Secret | Holds | Needed by | Checked |
+|---|---|---|---|
+| `APPLE_CERTIFICATE` | the Developer ID Application `.p12`, base64 | macOS | Gates |
+| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password | macOS | Gates |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <Name> (<TEAM ID>)` | macOS | Gates (name and shape), keychain import |
+| `APPLE_API_KEY` | the App Store Connect API key `.p8`, base64 | macOS | Gates |
+| `APPLE_API_KEY_ID` | that key's ID | macOS | Gates |
+| `APPLE_API_ISSUER` | that key's issuer UUID | macOS | Gates |
+| `TAURI_SIGNING_PRIVATE_KEY` | the updater private key matching `plugins.updater.pubkey` | all three | Gates |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password; leave unset for a key made without one | all three | by the signing itself |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | an R2 API token that can write the bucket | publishing | Publish |
+| `R2_ENDPOINT` | the account's R2 S3 endpoint | publishing | Publish |
+| `SPEAKING_GLASS_R2_BUCKET` | the bucket the public origin serves | publishing | Publish |
+
+`APPLE_SIGNING_IDENTITY` is the one secret whose wrong value does not fail by
+itself: Tauri hands it straight to `codesign --sign`, and `-` is codesign's
+ad-hoc identity, so the build would sign ad hoc and succeed. The gate therefore
+also checks its shape — exactly `Developer ID Application: <Name> (<TEAM ID>)`,
+a ten-character Team ID, no surrounding whitespace — and reports it `INVALID`
+without printing it. An Apple Development or Mac App Store identity, or a
+certificate's SHA-1 hash, is refused the same way. After the certificate is
+imported, the build checks that the keychain holds an identity of exactly that
+name before it compiles anything, so a secret that does not match the `.p12`
+fails in seconds rather than as a codesign error after the universal build.
+
+The signing secrets are checked in each workflow's `Gates` job, and every test
+runner and build waits for it, so a missing one fails the run in a minute or
+two rather than at the end of a build. The build job checks them again before
+it starts, because re-running only a failed build does not run the gates.
+Dry runs are no exception: there is no unsigned fallback, because proving the
+signing is what a dry run is for (CI already builds the unsigned macOS `.app`,
+Windows installer and Linux packages). Keep the signing secrets at repository
+level; the gates and build jobs name no environment, so they cannot see
+environment secrets.
+
+The R2 secrets are checked as the first step of each `publish` job instead,
+because that is the only job that names the `release-stable` /
+`release-prerelease` environment, and so the only one that can see R2 secrets
+kept there. A tag pushed without them builds, stages and then stops before
+publishing anything; add them and re-run only the failed `publish` job.
+
+One repository **variable** sits beside them:
+
+| Variable | Holds | Read by |
+|---|---|---|
+| `SPEAKING_GLASS_PUBLIC_URL` | the origin the bucket is served from: `https://updates.speakingglass.com` | staging (build job) and publishing |
+
+It is optional: unset, the feed uses `https://updates.speakingglass.com`,
+which is also the only value that reaches anyone, because installed copies poll
+the base compiled into the app (`UPDATE_BASE_URL` in
+`src-tauri/src/updater.rs`). Staging prints the origin it used, and whether it
+came from the variable, and warns (`Unexpected update origin`) on any other.
+Keep it at repository level only. The build job that stages names no
+environment, so it cannot see an environment variable, while publishing can.
+Whatever origin the two jobs end up with must be the same (trailing slashes
+aside), or publishing refuses the stage (`the release was staged for …`).
+
+### Where each setting lives, and how to check it
+
+Repository-level settings are under Settings → Secrets and variables →
+Actions; an environment's own secrets are under Settings → Environments → that
+environment.
+
+- **Signing secrets** (`APPLE_*`, `TAURI_SIGNING_PRIVATE_KEY` and its
+  password): repository level, always.
+- **R2 secrets** (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`,
+  `SPEAKING_GLASS_R2_BUCKET`): repository level, or all four on **both** the
+  `release-stable` and `release-prerelease` environments. A publish job sees
+  only the environment its tag selects, so a secret kept on `release-stable`
+  alone is missing for every RC tag, and an environment secret silently
+  overrides a repository one of the same name. Keep the four together.
+- **`SPEAKING_GLASS_PUBLIC_URL`**: repository level only (above).
+
+Check names, never values:
+
+```bash
+gh secret list                           # repository secrets: names and dates
+gh variable list                         # repository variables, with values
+gh secret list --env release-stable      # only if the R2 secrets live on environments
+gh secret list --env release-prerelease
+```
+
+A secret cannot be read back, and nothing before a real publish uses
+`SPEAKING_GLASS_R2_BUCKET`. A wrong one can fail at `Upload the release files`
+(a bucket that does not exist, or one the token cannot write), or when
+publishing reads its upload back from the public origin (`Every file must be
+readable at its public URL`, before the feed goes up, then `The feed must
+serve what was announced`), but it need not fail at all. Those read-backs
+check what the origin serves, not which bucket was written: a re-run of a
+publish that already reached the right bucket finds the files and the feed
+there, and passes while writing somewhere else. The only check of the bucket itself
+is in Cloudflare, so copy the name from there (R2, the bucket whose Settings ›
+Custom Domains lists `updates.speakingglass.com`) rather than from memory.
+
+### The CandidCue-era settings, renamed
+
+The workflows read new names since the app's rename (#445); the repository
+still held the old ones on 19 November 2026 (#451). Until the new secret
+exists, a tag builds and stages, then stops at publishing with
+`SPEAKING_GLASS_R2_BUCKET` reported missing. The owner's checklist:
+
+- [ ] Create the repository secret `SPEAKING_GLASS_R2_BUCKET`, holding the name
+  of the bucket `updates.speakingglass.com` serves (#445 named `speaking-glass`;
+  confirm it in Cloudflare as above).
+- [ ] Optionally, create the repository variable `SPEAKING_GLASS_PUBLIC_URL` =
+  `https://updates.speakingglass.com`, with no path. Leaving it unset does the
+  same thing.
+- [ ] `gh secret list` shows `SPEAKING_GLASS_R2_BUCKET` beside
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_ENDPOINT`, and
+  `gh variable list` shows `SPEAKING_GLASS_PUBLIC_URL` with exactly that value,
+  or not at all.
+- [ ] Run the three dry runs (next section). In each, `Stage the release`
+  prints `origin: https://updates.speakingglass.com/releases/` and no
+  `Unexpected update origin` warning, and the `receive-speaking-glass` step
+  after the upload unpacks the artifact just uploaded (the handover publishing
+  will make). A dry run proves nothing about R2: its publish job never runs.
+- [ ] Delete `CANDIDCUE_PUBLIC_URL`, `CANDIDCUE_R2_BUCKET` and `CANDIDCUE_UPDATER_PUBKEY`; nothing reads them, and the updater's public key is `plugins.updater.pubkey` in `tauri.conf.json`.
+- [ ] Leave the first real publish to its own release decision (§5). In it,
+  `Every publishing credential must be present` lists all four R2 secrets
+  `present`, and the upload and both read-backs from the public origin pass.
+
+Replacing the account-wide R2 keys with a token scoped to that bucket (#306)
+is a separate change, not part of the rename: it takes effect only once
+`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` hold the new token's keys.
+
+### The dry run
+
 Dispatch each one against `develop` with `dry_run` ticked (the default). They
 build, sign where they sign, inspect and stage the release, and the `publish`
-jobs do not run.
+jobs do not run. A dry run is not entirely private: on macOS it submits the
+app and the disk image to Apple's notary service, and on every OS it uploads
+the staged release to GitHub Actions artifact storage for 90 days. It writes
+nothing to R2 and creates no GitHub Release, so it proves nothing about the
+R2 secrets.
 
 ```bash
 for os in macos windows linux; do
@@ -144,7 +282,9 @@ gh run watch <id>
 Read the macOS log for: the keychain import, the universal build,
 notarisation of the app AND the DMG, the step that compares each link map
 against the slice lipo packaged, the copyleft check for both architectures,
-`verify-signed-bundle.mjs`, the DMG and updater-payload inspection, the smoke
+`verify-signed-bundle.mjs` (on the bundle, on the app inside the mounted DMG
+and on the unpacked updater payload: a `PASS` line per slice for the hardened runtime, the Developer ID
+signature and the entitlements), the DMG inspection, the smoke
 launch, and the credential cleanup step reporting that it ran. Read the Windows
 and Linux logs for the TTS-free recogniser (`sherpa-no-tts.mjs`), the GPL check
 on the linked binary (`verify-no-gpl-in-binary.mjs`), and the installer smoke
@@ -168,11 +308,18 @@ gh pr create --base main --head develop --title "Release 1.0.0-rc.2" --body "Spe
 gh pr merge <number> --merge   # once CI is green on the pull request
 ```
 
-Wait for CI to pass on the merge commit's own push run, then tag that commit:
+Wait for CI to pass on the merge commit's own push run. **If the release
+publishes Windows or Linux builds**, dry-run `release-windows.yml` and
+`release-linux.yml` on that commit now and take their files through the
+Windows and Linux drill in §7 before tagging: nothing after the tag waits for
+it. A wording fix that drill calls for changes the commit, so it goes through
+`develop` and a new release merge, and the dry run is repeated on the new one.
+Note the SHA the dry runs built, then tag that commit, and only that one:
 
 ```bash
 git fetch origin
 git switch -C main origin/main # the release merge, and nothing after it
+git rev-parse HEAD             # the SHA the dry runs built? if main moved, stop and dry-run the new tip
 pnpm version:tag v1.0.0-rc.2   # the tag must name the version the artifact reports
 pnpm notes:check v1.0.0-rc.2   # CHANGELOG.md must describe it
 git tag -s v1.0.0-rc.2 -m "Speaking Glass 1.0.0-rc.2"
@@ -194,23 +341,32 @@ The gates refuse a tag whose commit is not on `main`.
 Each OS's `publish` job runs `.github/actions/publish-speaking-glass`, in this
 order, and stops at the first failure:
 
-1. Receives the build job's artifact and checks every file against its
-   `SHA256SUMS` (`.github/actions/receive-speaking-glass`, which the build job
-   also runs on its own upload, so a dry run proves this handover too).
-2. Refuses a version older than what that OS's update feed already serves.
+1. Checks that every R2 secret is present (`release-credentials.mjs
+   publish`), naming any that are not.
+2. Receives the build job's artifact, checks every file against its
+   `SHA256SUMS`, and on macOS checks that the SBOMs and provenance it will
+   attach arrived too (`.github/actions/receive-speaking-glass`, which the
+   build job also runs on its own upload, so a dry run proves this handover
+   too).
+3. Refuses a version older than what that OS's update feed already serves.
    The same version is allowed through, so a re-run can finish a publish
    that failed half way.
-3. Refuses to change a file that is already published: every file already
+4. Refuses to change a file that is already published: every file already
    under `releases/<version>/` must be byte for byte the one staged.
-4. Uploads the installers, the updater payload and its `.sig`, and
+5. Uploads the installers, the updater payload and its `.sig`, and
    `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
-   bucket, cached as immutable.
-5. Downloads every one of them back from `https://updates.speakingglass.com` and
-   compares the bytes.
-6. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
+   bucket, with `Cache-Control: public, max-age=31536000, immutable`.
+6. Downloads every one of them back from `https://updates.speakingglass.com`,
+   compares the bytes, and checks each is served with that `Cache-Control`
+   (read as directives, so their order and case do not matter).
+7. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
    which installed copies poll, and `releases/<channel>-<os>.json`, which a
-   download page reads. Both are served `no-cache`, and both are read back.
-7. Creates the GitHub Release (empty, so no draft is ever left for another
+   download page reads. Both are served `no-cache, no-store,
+   must-revalidate`, and both are read back as the updater asks for them,
+   with those three directives, no lifetime, and no `CF-Cache-Status` saying
+   Cloudflare is caching them (`HIT`, `MISS`, `EXPIRED`, `STALE`, `UPDATING`
+   or `REVALIDATED`; an edge honouring `no-store` says `DYNAMIC` or `BYPASS`).
+8. Creates the GitHub Release (empty, so no draft is ever left for another
    OS to lose its files in), or finds the one another OS created, then
    attaches its files and checks each one arrived.
 
@@ -219,10 +375,26 @@ waiting behind it and cancels that one if a third arrives, so release one
 version at a time and let it finish publishing before tagging the next.
 
 **If a publish fails**, re-run only the failed `publish` job. It reuses the
-build that was staged, so step 3 passes and the rest repairs whatever the
+build that was staged, so step 4 passes and the rest repairs whatever the
 first attempt left undone. Re-running the whole workflow rebuilds every
-file with new bytes under the same names, and step 3 refuses that once any
+file with new bytes under the same names, and step 4 refuses that once any
 of them is published: release a new version instead.
+
+A step 6 or step 7 failure that names `Cache-Control` or `CF-Cache-Status`
+means the edge is not serving the release with the lifetime it was uploaded
+with. Compare the object's metadata in R2 with what the public URL returns,
+then fix the cause: Cloudflare drops `immutable` when the zone's Origin
+Cache Control is off (on by default below Enterprise), and a Cache Rule can
+rewrite the header or cache the feed outright. Purge the URLs the failure
+named from Cloudflare's cache (the edge keeps what it already served), then
+re-run the `publish` job. The two steps leave different states behind:
+
+- **Step 6** fails before the feed is touched, so no installed copy has
+  been pointed at these files yet. (On a re-run, an earlier attempt may
+  already have published the feed; step 3 says so as "published".)
+- **Step 7** fails after the feed went up, so installed copies may already
+  be offered this version while this OS's files are not yet on the GitHub
+  Release. The re-run finishes that.
 
 `scripts/release-feed.mjs` is the whole layout, with the reasons.
 
@@ -247,6 +419,23 @@ BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents
 ```
 
 **Signature, notarisation, Gatekeeper**
+
+The release workflow already runs `scripts/verify-signed-bundle.mjs` on the
+app, on the app inside the DMG and on the updater payload, and fails the build on any of what follows. It
+runs on a downloaded copy too, given the identity it should have been signed
+with (the Team ID is read from it):
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: <Name> (<TEAM ID>)" \
+  node scripts/verify-signed-bundle.mjs "$APP"
+```
+
+For each of the arm64 and x86_64 slices it requires a Developer ID
+Application signature that is not ad hoc, that Team ID, `com.speakingglass.app`,
+a secure timestamp and the hardened runtime (`flags=0x10000(runtime)`), and
+entitlements exactly equal to `src-tauri/entitlements/entitlements.macos.plist`
+with `com.apple.security.device.audio-input` true; then `codesign --verify
+--deep --strict`, `spctl` and the stapled ticket. By hand:
 
 ```bash
 codesign --verify --deep --strict --verbose=4 "$APP"
@@ -327,6 +516,28 @@ environment variables, and no cached speech model.
 
 No terminal command may be required for any of this. If one is, that is a
 release defect, not a documentation gap.
+
+**Windows and Linux** have their own drill in place of the list above, which
+is written for the hosted macOS download: `docs/real-rig-test-protocol.md` §F
+is the procedure, on a machine that has never run Speaking Glass, with one sheet per
+installer format (`-setup.exe`, `.deb`, AppImage), naming the OS, its web view
+(WebView2 or WebKitGTK), the display session (X11 or Wayland on Linux) and what
+fed the take. SmartScreen's **More info › Run anyway** takes the place of the
+Gatekeeper row, as README tells Windows users to expect, and a Linux install
+may use the terminal as §F1 allows, recorded on the sheet.
+
+Nothing in the release workflows waits for this drill: their publish jobs need
+only the build, and a prerelease publishes without a reviewer. So run it
+**before tagging**, on a `workflow_dispatch` dry run of `release-windows.yml`
+and `release-linux.yml` on the commit you are about to tag (its
+`speaking-glass-release-<os>` artifact), and settle the wording then: the
+release notes are read from the tagged `CHANGELOG.md`, so a correction made
+after the tag misses that release. The release workflows' smoke tests only
+start each build headless (the Windows installer on Windows Server, the `.deb`
+installed through apt and the AppImage extracted, both under Xvfb) and see it
+stay up for 25 seconds; they are not this drill. **An
+installer format with no passing sheet is not advertised as tested**: README
+and the `CHANGELOG.md` section say what ran for it instead.
 
 ## 8. Long sessions, before a build goes wide
 
@@ -420,6 +631,7 @@ no sheet behind it**:
 
 | Dimension | Cells a 1.0 claim would need |
 |---|---|
+| OS | Each advertised OS: macOS, Windows 11, and Linux under X11 and Wayland, if those are advertised |
 | CPU | Apple Silicon; Intel, if Intel is advertised |
 | macOS | The oldest supported version; one in between; the current one |
 | Display | Laptop only; one external; two displays |

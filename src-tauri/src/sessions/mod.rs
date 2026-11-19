@@ -194,22 +194,44 @@ pub async fn list_sessions(
     script_id: Option<String>,
     limit: u32,
 ) -> Result<Vec<SessionRecord>, AppError> {
+    list_sessions_filtered(pool, script_id, limit, false).await
+}
+
+/// `list_sessions`, optionally only the rows that recorded where they ended.
+///
+/// "From last ending" wants the newest row with an ending, and since #241 a
+/// rehearsal closes its row without one. Filtering AFTER the limit would let a
+/// run of rehearsals push the last recording out of the page and hide the
+/// row; filtering in the query is what keeps "the newest ending" true however
+/// many practices came after it.
+pub async fn list_sessions_filtered(
+    pool: &SqlitePool,
+    script_id: Option<String>,
+    limit: u32,
+    with_ending: bool,
+) -> Result<Vec<SessionRecord>, AppError> {
     let limit = limit.clamp(1, 500) as i64;
     let rows = match script_id {
         Some(id) => {
             sqlx::query(
-                "SELECT * FROM sessions WHERE script_id = ? ORDER BY started_at DESC LIMIT ?",
+                "SELECT * FROM sessions WHERE script_id = ? AND (? = 0 OR end_token_index > 0) \
+                 ORDER BY started_at DESC LIMIT ?",
             )
             .bind(id)
+            .bind(with_ending)
             .bind(limit)
             .fetch_all(pool)
             .await?
         }
         None => {
-            sqlx::query("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?")
-                .bind(limit)
-                .fetch_all(pool)
-                .await?
+            sqlx::query(
+                "SELECT * FROM sessions WHERE (? = 0 OR end_token_index > 0) \
+                 ORDER BY started_at DESC LIMIT ?",
+            )
+            .bind(with_ending)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
         }
     };
     rows.iter()

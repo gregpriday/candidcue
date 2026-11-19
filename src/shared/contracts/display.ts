@@ -137,13 +137,14 @@ export interface StageSessionEnvelope {
    * The coordinator's session generation — present on every TAKE envelope.
    *
    * Optional because the wire contract is optional, not because a take may omit
-   * it. Rust validates it as "when carried, must also be current"
-   * (`validate_stage_payload_header`), and the number exists only because
-   * `start_session` minted it. A payload that belongs to no session therefore
-   * has no honest value to put here: the Settings screen's live preview opens a
-   * real stage window without ever starting a session, and any literal it chose
-   * would match the coordinator only by coincidence and be silently DROPPED the
-   * rest of the time.
+   * it. A take's envelope reaches the embedded stage in memory; an envelope
+   * published to the separate stage window is checked by Rust as "when carried,
+   * must also be current" (`validate_stage_payload_header`). Either way the
+   * number exists only because `start_session` minted it. A payload that
+   * belongs to no session therefore has no honest value to put here: the
+   * Settings screen's live preview opens a real stage window without ever
+   * starting a session, and any literal it chose would match the coordinator
+   * only by coincidence and be silently DROPPED the rest of the time.
    *
    * A take must still carry it, and that is pinned at the source rather than by
    * this type: `ipc-command-reachability.test.ts` asserts the start sequence

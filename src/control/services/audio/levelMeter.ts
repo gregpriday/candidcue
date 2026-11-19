@@ -1,11 +1,11 @@
 /**
- * Level meter + local VAD runner (spec §28.4).
+ * Level meter + local VAD runner.
  *
  * Owns the polling loop over an injected analyser graph and feeds the pure
  * `LocalVad`. The default graph factory builds AudioContext →
  * MediaStreamSource → AnalyserNode and reaches the destination only through a
  * zero-gain node, so the graph renders but microphone audio cannot reach the
- * speakers (feedback is explicitly prevented, spec §28.4).
+ * speakers (feedback is explicitly prevented).
  */
 import type { AudioLevelSnapshot, Unsubscribe } from '../../../shared/contracts';
 import { DEFAULT_ANALYSIS_INTERVAL_MS, type VadConfig } from './defaults';
@@ -29,21 +29,21 @@ export interface MicrophoneMonitorDeps {
 }
 
 /**
- * Default analysis graph for the real WebView.
+ * Default analysis graph for the real WebView (`createAnalyserGraph`, below).
  *
- * Two things here are about WKWebView specifically, and both were absent.
+ * Two things here are about WKWebView specifically, and both are load-bearing.
  *
  * A graph with no path to `destination` is not guaranteed to be PULLED. The
- * spec only requires a node to render if it reaches the destination, and some
- * engines take that literally — an `AnalyserNode` hanging off the end of a
- * source with nowhere to go can return zeros forever while every state looks
- * healthy, and this graph was left dangling. The silent path is `analyser → GainNode(0) → destination`: it makes the graph
- * render without emitting a sample of the presenter's own voice back into the
- * room, which is what the original "no feedback" note was protecting against.
+ * Web Audio spec only requires a node to render if it reaches the destination,
+ * and some engines take that literally — an `AnalyserNode` hanging off the end
+ * of a source with nowhere to go can return zeros forever while every state
+ * looks healthy. The silent path is `analyser → GainNode(0) → destination`: it
+ * makes the graph render without emitting a sample of the presenter's own
+ * voice back into the room.
  *
- * And an `AudioContext` can be constructed `suspended`. Nothing resumed it, so
- * every frame the VAD measured could have been silence regardless of what the
- * microphone was doing — which looks identical to a presenter who never spoke.
+ * And an `AudioContext` can be constructed `suspended`. Left unresumed, every
+ * frame the VAD measures is silence regardless of what the microphone is
+ * doing — which looks identical to a presenter who never spoke.
  */
 /**
  * The analyser's context, at the capture's rate where the engine allows it.
@@ -78,7 +78,7 @@ export const createAnalyserGraph: AnalysisGraphFactory = (stream) => {
    *     No signal — Speaking Glass cannot hear this microphone.
    *     Transcription is working.   "This is a test of the transcription."
    *
-   * That silence reached the §28.6 dead-input detector, which held following
+   * That silence reached the dead-input detector, which held following
    * for the whole take: the stage heard, transcribed, aligned and moved the
    * document, then stopped, with every instrument reporting health.
    *
@@ -167,7 +167,7 @@ export class MicrophoneMonitor {
     this.timer = this.schedule(() => this.tick(), this.intervalMs);
   }
 
-  /** Stop analysis and tear down the audio graph (spec §28.7 retention). */
+  /** Stop analysis and tear down the audio graph. */
   async stop(): Promise<void> {
     if (this.timer) {
       this.timer.cancel();
@@ -200,7 +200,7 @@ export class MicrophoneMonitor {
  * Does this PCM frame carry anything at all?
  *
  * Deliberately a floor, not a speech threshold. It answers "is this device
- * producing audio" — the question the §28.6 dead-input detector is really
+ * producing audio" — the question the dead-input detector is really
  * asking — and it has to be true of a quiet room, because a quiet room is a
  * working microphone. Real analog silence still carries thermal noise and a
  * dither floor; a dead capture path returns samples that are exactly zero.

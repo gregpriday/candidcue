@@ -489,6 +489,26 @@ describe('single-window Present', () => {
     );
   });
 
+  it('opens a Read take on a missing pin without looking for it or saying so (#243)', async () => {
+    settingsState.value!.general.defaultSessionMode = 'manual';
+    settingsState.value!.audio.followSystemDefault = false;
+    settingsState.value!.audio.preferredDeviceId = 'rode';
+    settingsState.value!.audio.preferredDeviceLabel = 'RØDE NT-USB Mini';
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    const opened = calls.startLiveSession.mock.calls[0]?.[0] as {
+      micDeviceId?: string;
+      mode?: string;
+    };
+    expect(opened.mode).toBe('manual');
+    expect(opened.micDeviceId).toBeUndefined();
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'manual' }),
+    );
+    expect(calls.preloadSpeechEngine).not.toHaveBeenCalled();
+    expect(calls.showToast).not.toHaveBeenCalled();
+  });
+
   it('reads the legacy `default` pin as the system default, not a missing device', async () => {
     settingsState.value!.audio.followSystemDefault = false;
     settingsState.value!.audio.preferredDeviceId = 'default';
@@ -1287,9 +1307,10 @@ describe('starting a practice', () => {
 
   it('writes an ordinary session row, in the ordinary place', async () => {
     /*
-     * A rehearsal is a real reading and its ending is a real place in the
-     * script — "From last ending" is offered on it. Nothing about the row says
-     * practice, which is also why the feature needs no migration.
+     * A rehearsal is a real reading, so it opens a real row. Nothing about the
+     * row says practice, which is also why the feature needs no migration; the
+     * one difference is at the other end, where it is closed without an ending
+     * (#241) — see the session store's tests.
      */
     await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
     expect(calls.startSessionRecord).toHaveBeenCalledWith(
@@ -1550,17 +1571,40 @@ describe('recording one part of a script', () => {
       expect(glass()).toBe(40);
     });
 
-    it('lets a practice keep its token and drop the part', async () => {
-      // A practice is never bounded (§practice), so the part is not there to
-      // confine the token — and it is not "missing" either, so nothing is said.
+    it('gives a practice its part, so the stage can say which one is rehearsed (#241)', async () => {
+      // 44 snaps to the sentence at 40, inside p2 (20..49): the practice keeps
+      // the caret's place rather than jumping to the part's start.
+      await expect(
+        startTake(SCRIPT.id, { practice: true, startTokenIndex: 44, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      expect((opened() as { practice?: boolean }).practice).toBe(true);
+      expect(opened().startTokenIndex).toBe(40);
+      expect(glass()).toBe(40);
+      expect(opened().part).toMatchObject({ id: 'p2', startTokenIndex: 20, endTokenIndex: 49 });
+      expect(calls.showToast).not.toHaveBeenCalled();
+    });
+
+    it('confines a practice’s token to its part exactly as a take’s (#241)', async () => {
+      // The caret's sentence moved out of the part between drawing the menu
+      // and choosing the row: the practice is still of the part, from its start.
       await expect(
         startTake(SCRIPT.id, { practice: true, startTokenIndex: 55, part: { id: 'p2' } }),
       ).resolves.toBe(true);
-      expect(opened().startTokenIndex).toBe(50);
-      expect(glass()).toBe(50);
+      expect(opened().startTokenIndex).toBe(20);
+      expect(glass()).toBe(20);
+      expect(opened().part).toMatchObject({ id: 'p2' });
+    });
+
+    it('says when a practice’s part has gone, in a practice’s words (#241)', async () => {
+      await expect(
+        startTake(SCRIPT.id, { practice: true, startTokenIndex: 55, part: { id: 'renamed' } }),
+      ).resolves.toBe(true);
       expect(opened().part).toBeNull();
-      expect(opened().nextPart).toBeNull();
-      expect(calls.showToast).not.toHaveBeenCalled();
+      expect(opened().startTokenIndex).toBe(50);
+      expect(calls.showToast).toHaveBeenCalledWith(
+        expect.stringContaining('the practice runs without one'),
+        'info',
+      );
     });
 
     it.each([

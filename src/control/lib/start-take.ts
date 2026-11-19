@@ -4,22 +4,20 @@
  * ---------------------------------------------------------------------------
  * WHY THIS IS A MODULE AND NOT A SCREEN
  * ---------------------------------------------------------------------------
- * There used to be a Preflight page between the editor and presentation: a
- * scrollable form with a display picker, a microphone picker, a speech-key
- * field, a tracking mode, an appearance panel, and a footer
- * that refused to start until five readiness rows agreed. Every one of those is
- * a choice a presenter makes once and then never thinks about again, so the
- * page was skipped without being read — which is the worst thing a gate can be,
- * because the moment it does block something the operator has no idea what it
- * is talking about.
+ * The display, the microphone, the tracking mode and the appearance are
+ * choices a presenter makes once, so they live in Settings and Present does not
+ * ask them again: a launch form that repeats one-time choices is skipped
+ * without being read, which is the worst thing a gate can be, because the
+ * moment it does block something the operator has no idea what it is talking
+ * about.
  *
- * So the choices moved to Settings, where a thing you set once belongs, and
- * what is left is this: the ordered sequence that turns a script id into a
- * live, fullscreen take in the control webview. Present runs it and goes.
+ * What is left is this: the ordered sequence that turns a script id into a
+ * live take in the control window — filling the prompter panel, or as a
+ * reading window. Present runs it and goes.
  *
- * There is deliberately no second stage window in this path. The same webview
- * owns microphone capture, transcript state and rendering, removing the
- * cross-webview transport from the critical presentation path.
+ * There is deliberately no separate stage window in this path. This webview
+ * owns microphone capture, transcript state and rendering; transcription and
+ * alignment run in Rust, reached over IPC.
  */
 import { get } from 'svelte/store';
 import { inputsWithheld, matchRememberedMicrophone } from '../services/audio';
@@ -114,8 +112,9 @@ export const takeStarting = { subscribe: startingStore.subscribe };
  * says nothing about where a reading window happens to be.
  *
  * KNOWN GAP: a reader who drags their window to another display MID-TAKE and
- * changes nothing else still keeps the opening panel's scale. Noticing a bare
- * drag needs a display/window event this app does not yet listen for. The two
+ * changes nothing else still keeps the opening panel's scale. Rust stops
+ * forwarding window moves while presenting, so a bare drag mid-take raises no
+ * display-change event. The two
  * moments Rust DOES answer are both covered — the opening, from
  * `enterPresentation`, and the ⌃⌘F switch, through `resolveLandedDisplay`
  * below.
@@ -182,7 +181,7 @@ export async function resolveLandedDisplay(
 export { stageSettingsFromSettings };
 
 /**
- * Compile the script this take will read (§29.2 step 1).
+ * Compile the script this take will read.
  *
  * Deliberately not the editor's compile: that one is debounced against typing
  * and carries whatever overrides the editor was last asked for. This is the one
@@ -209,7 +208,7 @@ async function compileForTake(
 type CompiledTake = CompileOutput & { script: NonNullable<CompileOutput['script']> };
 
 /**
- * §28.1. The device id the remembered microphone has RIGHT NOW, or undefined
+ * The device id the remembered microphone has RIGHT NOW, or undefined
  * for "follow the system default".
  *
  * The stored id is not enough on its own. Device ids are salted per origin and
@@ -301,10 +300,7 @@ async function resolveLaunchSettings(
  *
  * Three things have to hold. The take must be opening in reader mode — a
  * prompter fills a monitor and has no rectangle of its own. A frame must
- * actually have been stored. And "Restore windows" must be on: that toggle
- * shipped with no reader anywhere in the tree, which is the same defect the
- * retired `fullscreen` boolean was culled for, and this is the behaviour it now
- * governs.
+ * actually have been stored. And "Restore windows" must be on.
  */
 function restoreFrameFor(saved: AppSettings, mode: PresentationMode): ReaderFrame | null {
   if (mode !== 'reader') return null;
@@ -387,16 +383,13 @@ export interface StartTakeOptions {
    * things: the launch mode lived only in Settings, three levels from the
    * button, so the only reachable control was the transient one.
    *
-   * Absent means "whatever Settings says", which is what every Present button
-   * did before this existed.
+   * Absent means "whatever Settings says".
    */
   presentationMode?: PresentationMode;
   /**
-   * Where to begin, as a raw token index (CCUX-014, CCUX-015, CCUX-016).
+   * Where to begin, as a raw token index.
    *
-   * Absent means the beginning, which is what every take got before this
-   * existed — `startTake` wrote `startTokenIndex: 0` onto every session row
-   * while the field had been on the record since it was written. With a `part`
+   * Absent means the beginning. With a `part`
    * that resolves, it is confined to that part; see there.
    *
    * SNAPPED HERE rather than by the caller, and that is deliberate: the caret
@@ -429,10 +422,16 @@ export interface StartTakeOptions {
    * IS what somebody is practising. A rehearsal with the following switched off
    * would be a different feature that rehearses nothing.
    *
-   * Three things follow from the flag, and they are the whole of it:
+   * Four things follow from the flag, and they are the whole of it:
    *
-   *   1. The window. A practice is always `'reader'`, and the mode is FORCED
-   *      rather than resolved — see below.
+   *   1. The window. A practice OPENS as `'reader'`, and the mode is FORCED
+   *      rather than resolved — see below. It is where a practice starts, not
+   *      where it must stay: the take's own "Switch to teleprompter" moves a
+   *      running practice onto the glass at the size and line breaks the
+   *      recording will use, and it is still a practice there. Opening on the
+   *      display instead was considered and left alone (#241): rehearsing at a
+   *      desk is the common case, and the one-step switch already covers the
+   *      rest without a second launch row for it.
    *   2. The document. The stage renders it as a rehearsal rather than as a
    *      performance projection, so a reference table stays a table instead of
    *      becoming the words REFER TO TABLE. `performance-view.ts` has said this
@@ -440,13 +439,21 @@ export interface StartTakeOptions {
    *   3. The ending. Nothing is reported: `stopSession` produces no summary, so
    *      the practice ends by putting the editor back rather than by opening a
    *      card about a performance nobody gave.
+   *   4. The resume point. A practice's session row is an ordinary voice
+   *      session, but it is closed WITHOUT an ending (#241), so "From last
+   *      ending" — "Picks up where the last take stopped" — goes on meaning the
+   *      last recording. It used to pick a rehearsal up as if it were one:
+   *      record part two, practise part three, come back to record, and the
+   *      resume point was wherever the rehearsal had stopped. A rehearsal is
+   *      not where the footage left off, so it does not count as an ending.
    *
-   * The SESSION ROW is deliberately untouched — an ordinary voice session, in
-   * the ordinary place. A rehearsal is a real reading of the script and its
-   * ending is a real place in it, so "From last ending" on the Present menu
-   * should pick a practice up exactly as it picks a take up. The flag lives in
-   * the control-side session store and nowhere else, which is also why it needs
-   * no migration.
+   * The flag lives in the control-side session store and nowhere else, which
+   * is also why it needs no migration: the row says what it always said, minus
+   * the one number a rehearsal must not supply.
+   *
+   * A practice CAN carry a `part` (#241). It bounds nothing, as for a take, and
+   * since nothing is reported at the end it is only ever a label: which part is
+   * being rehearsed, on the glass, and when its end has been reached.
    */
   practice?: boolean;
   /**
@@ -466,7 +473,7 @@ export interface StartTakeOptions {
    */
   cameraAboveScreen?: boolean;
   /**
-   * The part of the script this take is recording (§parts).
+   * The part of the script this take is recording.
    *
    * -------------------------------------------------------------------------
    * IT BOUNDS THE TAKE WITHOUT BOUNDING THE DOCUMENT
@@ -475,8 +482,8 @@ export interface StartTakeOptions {
    * alignment engine are UNCHANGED — the whole script, exactly as an unbounded
    * take gets it. Nothing is truncated, hidden or filtered.
    *
-   * What the part adds is an answer to "what am I recording", which the app
-   * previously had no way to hold. From it come three things and no others: the
+   * What the part adds is an answer to "what am I recording". From it come
+   * three things and no others: the
    * part's name beside the timer, a "you have reached the end of it" once the
    * confirmed position gets there, and an offer on the summary to record the
    * next one.
@@ -500,7 +507,7 @@ export interface StartTakeOptions {
   part?: TakePartRequest;
 }
 
-/** A part to bound a take to (§parts): its identity, and how much of it. */
+/** A part to bound a take to: its identity, and how much of it. */
 export interface TakePartRequest {
   id: string;
   /**
@@ -525,8 +532,10 @@ export interface TakePartRequest {
  * Open a take for a script and route to Live. Resolves true when the take is
  * running.
  *
- * Every failure path leaves nothing behind: no half-open stage window, no
- * unfinished session row, no microphone held by a session that does not exist.
+ * Every failure path tries to leave nothing behind: no window left
+ * presenting, no unfinished session row, no microphone held by a session that
+ * does not exist. Restoring the window and closing the row are best-effort —
+ * a failure there is logged and the cover still drops.
  */
 export async function startTake(
   scriptId: string,
@@ -564,14 +573,14 @@ export async function startTake(
 
   try {
     /*
-     * §29.2 step 1: the take reads what is on disk, so flush the editor first —
+     * The take reads what is on disk, so flush the editor first —
      * and then check that the flush actually landed.
      *
      * `saveNow()` reports a conflict or a failed write through store state and
      * resolves normally either way, so awaiting it proves nothing on its own.
      * Presenting through an unsaved conflict means the stage shows the older
      * text while the editor shows the newer, and Rust's pre-session revision
-     * snapshot (§21.4) records a revision that does not match the compile the
+     * snapshot records a revision that does not match the compile the
      * aligner was built from. The remedy is on the Editor screen, so say so and
      * stop rather than present something the operator did not write.
      */
@@ -676,7 +685,7 @@ export async function startTake(
     }
 
     /*
-     * C1: open the session record FIRST.
+     * Open the session record FIRST.
      *
      * `start_session` is the only path to `AppCoordinator::begin_session`,
      * which is the only writer of the Rust-side session generation. Skipping it
@@ -686,7 +695,7 @@ export async function startTake(
      * build. Rust assigns, control adopts.
      */
     /*
-     * §parts: which part this take is recording, and which one follows it.
+     * Which part this take is recording, and which one follows it.
      *
      * Resolved against THIS compile, the same one the stage is built from. A
      * part identified against an older compile could name a span that has since
@@ -697,21 +706,18 @@ export async function startTake(
      * caller's copy came from whatever the editor had compiled when the menu
      * was drawn, and a script edited between opening the menu and choosing a
      * row is an ordinary thing to do. When it no longer exists the take simply
-     * runs unbounded, which is what every take did before §parts.
+     * runs unbounded, as a take launched without a part does.
      */
     /*
-     * A PRACTICE IS NEVER BOUNDED TO A PART, and that is enforced here rather
-     * than only at the call site. `stopSession` produces no summary for a
-     * rehearsal (§practice), so "you reached the end of part three" and "record
-     * part four next" would both be claims about a reading the app has already
-     * decided not to report on — and the Live readout would name a part whose
-     * completion nothing would ever act on.
-     *
-     * The Editor's Present menu already refuses the combination. This is the
-     * invariant, in the one place every caller of the exported `startTake` goes
-     * through.
+     * A practice resolves its part exactly as a take does (#241). It used to
+     * be stripped here, on the grounds that a rehearsal reports nothing and so
+     * "you reached the end of part three" would be a claim nothing acts on. The
+     * claim turned out to be the useful half: the person rehearsing the part
+     * about to be filmed wants the glass to say which part it is and when its
+     * end has gone by. The summary card and its "record the next part" offer
+     * stay withheld, because `stopSession` withholds the whole summary.
      */
-    const compiledParts = options.practice ? [] : compiled.parts;
+    const compiledParts = compiled.parts;
     const takePart = options.part
       ? reduceToTakePart(
           compiledParts.find((p) => p.id === options.part!.id) ?? null,
@@ -735,9 +741,11 @@ export async function startTake(
      * that gets noticed only in the footage. This happens when a break is renamed
      * or deleted while the launch menu or the take summary is still open.
      */
-    if (options.part && takePart === null && !options.practice) {
+    if (options.part && takePart === null) {
       showToast(
-        'That part is no longer in the script, so the take will run to the end.',
+        options.practice
+          ? 'That part is no longer in the script, so the practice runs without one.'
+          : 'That part is no longer in the script, so the take will run to the end.',
         'info',
       );
     }
@@ -750,7 +758,7 @@ export async function startTake(
      * index would be resolved against a document the take is not going to
      * show.
      *
-     * A RESOLVED PART CONFINES THE TOKEN THAT CAME WITH IT (§parts). Both
+     * A RESOLVED PART CONFINES THE TOKEN THAT CAME WITH IT. Both
      * arrive from the same menu row, but only the part was re-measured against
      * this compile: the caller's token index was read off whatever the editor
      * had compiled when the row was drawn. Edit the script between opening the
@@ -799,7 +807,13 @@ export async function startTake(
     sessionId = record.id;
 
     const assets = await resolveDocumentAssets(compiled.script);
-    const micDeviceId = await resolvePinnedMicrophone(s);
+    /*
+     * Only a voice take opens a microphone, so only a voice take resolves the
+     * pin (#243). A Read take must not list inputs, nor toast that a pinned
+     * microphone is missing over a take that was never going to use it.
+     */
+    const micDeviceId =
+      s.general.defaultSessionMode === 'voice' ? await resolvePinnedMicrophone(s) : undefined;
 
     /*
      * ------------------------------------------------------------------------
@@ -936,13 +950,12 @@ export async function startTake(
       stageSettings,
       assets,
       following: s.following,
-      // The glass opens HERE. `initialTokenIndex` has been on this contract
-      // since it was written; until CCUX-014 nothing on the stage read it.
+      // The glass opens HERE, at the snapped start point.
       initialTokenIndex: startPoint.tokenIndex,
     });
 
-    // There is no stage window. Alignment, transcription and rendering all
-    // live in this one webview; the stage reads the session through its props.
+    // No separate stage window: the stage renders in this webview and reads the
+    // session through its props. Transcription and alignment run in Rust.
     startLiveSession({
       scriptId,
       scriptTitle: doc.title,
@@ -1015,7 +1028,7 @@ export async function startTake(
      *
      * After this the stage is uncovered but not unprotected: `StageApp`'s
      * opening plate starts mounted and stays up until `ScriptLayer` reports the
-     * script placed, which is the interval the previous fix already owns.
+     * script placed, which covers that interval.
      */
     await painted();
     setPresentingPhase('on');
@@ -1046,7 +1059,7 @@ export async function startTake(
  * exactly where the teardown is most likely to hit a second fault.
  */
 /**
- * A compiler {@link ScriptPart} as the session store holds it (§parts).
+ * A compiler {@link ScriptPart} as the session store holds it.
  *
  * Reduced rather than passed whole so the store carries no field it does not
  * read — `origin` in particular is an authoring detail (marker or heading) that

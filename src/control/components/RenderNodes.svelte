@@ -1,6 +1,6 @@
 <!--
-  Recursive SafeRenderNode renderer. Text + marks only — no HTML pass-through
-  (spec Appendix C: "do not use SafeRenderNode as disguised arbitrary HTML").
+  Recursive SafeRenderNode renderer. Text + marks only — no HTML pass-through:
+  SafeRenderNode must never become disguised arbitrary HTML.
   The one picture it draws comes from a url Rust resolved (PreviewImage).
 -->
 <script lang="ts">
@@ -125,7 +125,7 @@
     text-decoration: underline;
     text-underline-offset: 2px;
   }
-  /* Table reference card (spec §24.6). Row separation is a background band,
+  /* Table reference card. Row separation is a background band,
      never a nested border inside the block's own surface. */
   .table {
     border-collapse: collapse;

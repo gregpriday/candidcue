@@ -156,6 +156,8 @@ interface StartOverrides {
     normalizedText: string;
   }>;
   practice?: boolean;
+  part?: { id: string; label: string; ordinal: number; totalParts: number; startTokenIndex: number; endTokenIndex: number };
+  nextPart?: StartOverrides['part'];
   micDeviceId?: string;
   micDeviceLabel?: string;
 }
@@ -175,6 +177,8 @@ function start(overrides: StartOverrides = {}): string {
     compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
     practice: overrides.practice,
+    ...(overrides.part === undefined ? {} : { part: overrides.part }),
+    ...(overrides.nextPart === undefined ? {} : { nextPart: overrides.nextPart }),
     ...(overrides.micDeviceId === undefined ? {} : { micDeviceId: overrides.micDeviceId }),
     ...(overrides.micDeviceLabel === undefined ? {} : { micDeviceLabel: overrides.micDeviceLabel }),
   });
@@ -353,7 +357,7 @@ describe('#214 — a take keeps its summary and its session row without the hist
     expect(recorded.metrics?.sectionsReached).toBe(3);
   });
 
-  it('closes a practice’s session row once, with where it ended', async () => {
+  it('closes a practice’s session row once, without an ending (#241)', async () => {
     const compiled = compile(SOURCE, { scriptId: 'script-1' });
     start({ compiled, sentences: compiled.sentences as never, practice: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -367,6 +371,49 @@ describe('#214 — a take keeps its summary and its session row without the hist
 
     expect(records.endSessionRecord).toHaveBeenCalledTimes(1);
     const [, recorded] = records.endSessionRecord.mock.calls[0] as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    // A rehearsal is not where the footage left off, so "From last ending"
+    // must go on meaning the last recording.
+    expect(ended).toBeGreaterThan(0);
+    expect(recorded, 'a practice supplies no ending').not.toHaveProperty('endTokenIndex');
+  });
+
+  it('closes a practice OF A PART without an ending, past the part’s end (#241)', async () => {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    const boundary = compiled.sentences[2]!.endTokenIndex;
+    const total = compiled.spokenTokens.length;
+    start({
+      compiled,
+      sentences: compiled.sentences as never,
+      practice: true,
+      part: { id: 'p1', label: 'Opening', ordinal: 1, totalParts: 2, startTokenIndex: 0, endTokenIndex: boundary },
+      nextPart: { id: 'p2', label: 'Close', ordinal: 2, totalParts: 2, startTokenIndex: boundary + 1, endTokenIndex: total - 1 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).part?.id, 'a practice keeps its part').toBe('p1');
+    const ended = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(ended));
+
+    stopSession();
+    expect(get(session).summary, 'a practice of a part opens no report either').toBeNull();
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    expect(recorded).not.toHaveProperty('endTokenIndex');
+  });
+
+  it('still closes a take’s session row with where it ended', async () => {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    const ended = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(ended));
+
+    stopSession();
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
       string,
       { endTokenIndex?: number },
     ];
@@ -1355,6 +1402,36 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(s.voiceFollow, 'the roll gave back nothing it did not take').toBe(false);
     expect(s.followPausedByUser).toBe(false);
     expect(lastAck()).toBe('Auto-scroll off');
+  });
+
+  it('does not let the follow switch stop a Read take’s roll (#243)', async () => {
+    await startScript('manual');
+    toggleAutoScroll();
+    expect(get(session).autoScroll.running).toBe(true);
+
+    // The menu key and the stage's intent both arrive here; there is no voice
+    // to hand the script to, so the switch does nothing at all.
+    toggleVoiceFollow();
+
+    const s = get(session);
+    expect(s.autoScroll.running, 'the roll is still moving the script').toBe(true);
+    expect(s.voiceFollow).toBe(false);
+    expect(s.followPausedByUser).toBe(false);
+  });
+
+  it('does not start a search for the presenter in a Read take (#243)', async () => {
+    await startScript('manual');
+    const before = lastAck();
+    // "Set my place" re-finds the presenter from what they say next.
+    smoothFollow.reAnchorHere();
+    expect(lastAck(), 'nothing claims to be finding a place').toBe(before);
+
+    // The same control in a voice take still asks.
+    stopSession();
+    clearSession();
+    await startScript();
+    smoothFollow.reAnchorHere();
+    expect(lastAck()).toBe('Re-finding your place');
   });
 
   it('ignores an end report from a roll the voice has already taken over', async () => {

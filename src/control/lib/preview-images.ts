@@ -13,7 +13,7 @@
  *                 the file is not there.
  *   - `error`:    the lookup itself failed, so nothing is known about the file.
  *                 Saying "missing" here would be a guess.
- *   - `remote`:   an http(s) image, which is never loaded (§24.2).
+ *   - `remote`:   an http(s) image, which is never loaded.
  */
 import type { CompiledScript } from '../../shared/contracts';
 import {

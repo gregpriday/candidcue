@@ -1,5 +1,7 @@
 <!--
-  Stage window shell (spec §16.1 layer model, §43.5 heartbeat, §45.6).
+  Stage shell (spec §16.1 layer model, §43.5 heartbeat, §45.6). A take embeds
+  it in the control window; it is also the page of the separate stage window
+  that Settings' preview, "Show test" and Calibrate open.
 
   ---------------------------------------------------------------------------
   TWO PLANES, AND WHICH ONE A THING BELONGS TO
@@ -33,8 +35,10 @@
   text + focus fades → reading cue → presenter overlays → calibration →
   operator instruments and dock.
 
-  All data arrives via Tauri events (the stage holds only event:listen);
-  outbound traffic is intents/acks that control is free to ignore.
+  In a take the envelope and the live state arrive through the `embedded`
+  bridge prop. The separate window gets them as Tauri events — it may listen
+  and emit, never invoke. Outbound traffic is intents/acks that control is
+  free to ignore.
 -->
 <script lang="ts">
   import { onMount, untrack, type Snippet } from 'svelte';
@@ -99,6 +103,7 @@
   import { manualScrollRelocated } from './renderer/motion';
   import { transcriptTail } from './renderer/transcript-tail';
   import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
+  import { takeScopeText, type TakeScopePart } from './renderer/take-scope';
 
   interface EmbeddedStageBridge {
     envelope: StageSessionEnvelope;
@@ -117,13 +122,13 @@
      */
     ack?: StageAckState | null;
     /**
-     * §48. Voice following is off — the host's own switch, read straight rather
+     * Voice following is off — the host's own switch, read straight rather
      * than through a directive.
      *
      * Single-window presentation runs at stage generation 0 and the directive
      * bus is a no-op there, so a mode that only travelled by directive would be
-     * dead in exactly the configuration most people use. The standalone window
-     * gets the same fact through `{ kind: 'follow' }`.
+     * dead in exactly the configuration every take uses. The standalone window
+     * can be told the same fact by a `follow` directive.
      */
     followPaused?: boolean;
     /**
@@ -149,7 +154,7 @@
      */
     autoScroll?: StageAutoScrollPayload | null;
     /**
-     * §practice. This reading is a rehearsal.
+     * A practice: this reading is a rehearsal.
      *
      * Only ever true on the embedded path, and that is a property of the
      * feature rather than an omission: a practice happens IN the control
@@ -159,6 +164,24 @@
      * following your own voice is the thing being practised.
      */
     practice?: boolean;
+    /**
+     * Whether this take listens at all (#243). False for a Read take, which
+     * opens no microphone and no recogniser: the dock then offers no "Follow
+     * voice" and the diagnostic transcript strip, which would only ever say
+     * "listening", is not drawn. Absent is true — a standalone stage window and
+     * an older host keep exactly what they had.
+     */
+    voiceInput?: boolean;
+    /**
+     * §parts. The part this reading is of, and whether its end has been
+     * reached (#241) — for the label that says on the glass what is running.
+     *
+     * Read for that label and nothing else. The part bounds nothing: the
+     * alignment and motion paths never see it, exactly as they never see the
+     * practice flag.
+     */
+    part?: TakeScopePart | null;
+    partComplete?: boolean;
     /**
      * "Show nothing", the host's own switch, mirrored the same way
      * `followPaused` is — directly, not through a directive, for the same
@@ -312,9 +335,10 @@
    *
    * `bind:clientWidth/clientHeight` is a ResizeObserver, and an observation is
    * delivered during the rendering update — which a window that has never been
-   * shown may never run. The stage is created hidden and only goes full screen
-   * AFTER the handshake completes (§29.2 step 3), so for the whole of that
-   * handshake these were the numbers of an unrendered window: zero. Everything
+   * shown may never run. The stage window is created hidden (primary §43.3),
+   * and Settings' document preview shows it only once it reports
+   * `layout-ready`, so for the whole of that handshake these were the numbers
+   * of an unrendered window: zero. Everything
    * downstream is guarded on a nonzero viewport, so the measurement pass bailed
    * and `layout-ready` was never sent.
    *
@@ -406,13 +430,13 @@
    *
    * Clean is the default and is what a take is recorded against: script, reading
    * cue, authored cues, acknowledgements, a hold message once a hold has earned
-   * one, faults the presenter can act on, and the Escape confirmation. Nothing
-   * that reports on the machinery.
+   * one, faults the presenter can act on, the Escape confirmation, and the
+   * dock's voice readout.
    *
    * Diagnostic adds the instruments — the raw transcript, the alignment state
-   * and token position, the frame and media health, and the voice pill's
-   * waveform. They are for the person debugging a rig, and every one of them
-   * costs the presenter attention during a take that is going fine.
+   * and token position, and the frame and media health. They are for the
+   * person debugging a rig, and every one of them costs the presenter attention
+   * during a take that is going fine.
    *
    * The `diagnostics` directive stays an independent override, because an
    * operator who asks for the readout mid-take is asking for it whatever mode
@@ -454,11 +478,11 @@
   /**
    * Both counters start again with each SESSION.
    *
-   * The window can outlive one — Present again opens a new session into it —
-   * and `alignmentArrived` is counted here rather than by the receiver, so
-   * nothing else would ever clear it. The receiver zeroes its own counters on
-   * the same signal (`setSession`), which is what keeps the two halves of this
-   * readout describing the same stretch of time.
+   * A mounted stage can be handed a new one, and `alignmentArrived` is counted
+   * here rather than by the receiver, so nothing else would ever clear it. The
+   * receiver zeroes its own counters on the same signal (`setSession`), which
+   * is what keeps the two halves of this readout describing the same stretch of
+   * time.
    *
    * A retake inside a session is deliberately NOT a reset: "restart paragraph"
    * opens a new take pass without minting a generation, and the feed it would
@@ -633,6 +657,65 @@
    */
   const ackCrowded = $derived(ackMaxWidthPx !== null && ackMaxWidthPx < 6 * overlayFontSizePx);
 
+  /**
+   * What is running, said on the glass (#241): "Practising", the part, both,
+   * or nothing for an ordinary take of the whole script. Only the embedded
+   * path has a session to describe; the separate window's preview, test and
+   * calibration have none.
+   */
+  const takeScope = $derived(
+    embedded
+      ? takeScopeText(embedded.practice ?? false, embedded.part, embedded.partComplete ?? false)
+      : null,
+  );
+
+  /*
+   * Which edge the label takes: the edge of the safe rectangle FARTHER from
+   * the reading band, and flush with it.
+   *
+   * The band is placed by the lens, not by convention — a camera below the
+   * screen puts it in the bottom tenth of the glass — so a label fixed to the
+   * bottom edge would sit on the words being read on exactly those rigs.
+   * Compared in the safe rectangle's own terms, which is what the calibrated
+   * `readingBandY` is already in; the flat `readingBandCenterPercent` is of the
+   * viewport and is converted. The farther edge is at least half the safe
+   * rectangle from the band's centre, and the label sits ON that edge rather
+   * than inset into the reading area — the transient prompts that share an
+   * edge with it are drawn after it and paint over it.
+   */
+  const takeScopeAtTop = $derived.by(() => {
+    if (!settings) return false;
+    const band = settings.optics
+      ? settings.optics.readingBandY
+      : safeInsets.height > 0
+        ? (settings.readingBandCenterPercent - safeInsets.y) / safeInsets.height
+        : settings.readingBandCenterPercent / 100;
+    return band > 0.5;
+  });
+  /*
+   * Each edge's inset. Whichever edge is PHYSICALLY the top — the top without
+   * a vertical mirror, the bottom with one — clears the host's "Take controls"
+   * tab (16px down, 32px tall), measured from the safe rectangle's inset on
+   * that physical side, as the acknowledgement chip does. The physical bottom
+   * sits on the dock's baseline; the label is on the other side from the dock.
+   */
+  const tabClearPx = (insetPx: number): number =>
+    embedded ? Math.max(16, Math.round(16 + 32 + 12 - insetPx)) : 16;
+  const takeScopeTop = $derived(
+    !takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? '16px'
+        : `${tabClearPx((vh * safeInsets.y) / 100)}px`,
+  );
+  const takeScopeBottom = $derived(
+    takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? `${tabClearPx((vh * (100 - safeInsets.y - safeInsets.height)) / 100)}px`
+        : '16px',
+  );
+
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');
 
@@ -676,7 +759,7 @@
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
   /**
-   * §48. Whether voice following is off, from whichever of the two roads
+   * Whether voice following is off, from whichever of the two roads
    * carries it: the host's prop in single-window presentation, the `follow`
    * directive in a standalone stage window.
    *
@@ -686,6 +769,8 @@
    * second opinion could only ever disagree with it.
    */
   const followPaused = $derived(embedded ? (embedded.followPaused ?? false) : app.followPaused);
+  /** See `voiceInput` on the bridge. */
+  const voiceInput = $derived(embedded?.voiceInput ?? true);
   /**
    * A paused take holds a reading window's text still — see `takePaused` on the
    * bridge. Only the motion engine hears it: the hold chip and the dock read
@@ -953,7 +1038,7 @@
   /**
    * Reported on every heartbeat ack and read by the coordinator (§40.5).
    *
-   * It has had no producer since the Listener was removed (§106): the layer
+   * It has had no producer since the Listener was removed: the layer
    * that decoded video was the only thing on the stage that could report a
    * media failure, so this is constant `true` today. The channel is kept
    * because the health field is part of the `StageStatus` contract rather than
@@ -969,8 +1054,8 @@
    * -------------------------------------------------------------------------
    * Every inbound event refreshed it — directives, the transcript tap, the
    * voice pill, live sync, and alignment. Alignment is the one that breaks it:
-   * Rust publishes snapshots DIRECTLY to this window, with control out of the
-   * motion path entirely (that is the whole point of the design). So a control
+   * Rust published snapshots DIRECTLY to the separate stage window, with
+   * control out of that path entirely. So a control
    * window that had crashed or wedged went on being reported as alive for as
    * long as the aligner kept publishing — which, mid-take with the recogniser
    * running, is indefinitely. The watchdog could not fire in precisely the
@@ -1022,9 +1107,9 @@
 
   /*
    * Single-window presentation uses the exact stage renderer but hands its
-   * session instruments across memory, not across a second webview. The
-   * envelope is immutable for a take; transcript, pill and transport remain
-   * live.
+   * session instruments across memory, not across a second webview: the
+   * envelope (whose settings the desk can change mid-take), the transcript,
+   * the pill and the transport.
    */
   $effect(() => {
     const bridge = embedded;
@@ -1211,16 +1296,17 @@
   /** §62: fatal line-map issues after the bounded rebuild retry. */
   let layoutIssues = $state<string[]>([]);
   /**
-   * §61: the stage is missing its frame budget. The engine already backs its
-   * own styling cadence and motion limits off; this is the flag the LAYERS
-   * need for the nonessential effects each one owns.
+   * Companion §61: the stage is missing its frame budget. The engine already
+   * backs its own styling cadence and motion limits off; this is the flag the
+   * LAYERS need for the nonessential effects each one owns.
    */
   let motionDegraded = $state(false);
   /**
-   * §47.1/§55. The session's motion profile, as the stage is willing to run it:
-   * the envelope's resolved profile when this build can interpret its version,
-   * and the Appendix A default otherwise. Resolved HERE, at the mount site, so
-   * the script layer is always constructed with a followable profile.
+   * Companion §47.1/§55. The session's motion profile, as the stage is willing
+   * to run it: the envelope's resolved profile when this build can interpret
+   * its version, and the Appendix A default otherwise. Resolved HERE, at the
+   * mount site, so the script layer is always constructed with a followable
+   * profile.
    */
   const followProfile = $derived(stageFollowProfile(app.envelope?.followProfile));
   /** Never block the script on a font that may never resolve. */
@@ -1231,9 +1317,9 @@
   }
 
   function applyAlignment(snapshot: StageAlignmentPayload) {
-    // Deliberately does NOT touch the control-liveness clock. These arrive from
-    // Rust with control out of the path, so they say nothing about whether the
-    // control window is still answering. See `lastHeartbeatAt`.
+    // Deliberately does NOT touch the control-liveness clock. On the separate
+    // window these arrive straight from Rust, so they say nothing about whether
+    // the control window is still answering. See `lastHeartbeatAt`.
     alignmentArrived += 1;
     const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
     const stats = scriptLayer?.alignmentFeedStats();
@@ -1332,13 +1418,15 @@
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           dispatch({ type: 'snapshot', envelope });
           /*
-           * A TAKE's envelope STARTS the liveness deadline, and it is the only
-           * other thing allowed to touch it.
+           * An envelope that belongs to a take (one carrying
+           * `sessionGeneration`) STARTS the liveness deadline, and it is the
+           * only other thing allowed to touch it. Only the separate window gets
+           * here: a take's embedded stage has no heartbeat to keep.
            *
            * Two holes close here, and both are the watchdog failing to fire at
            * all rather than firing wrongly:
            *
-           *   • control begins its heartbeat on a ~1 s `setInterval`, so the
+           *   • control began its heartbeat on a ~1 s `setInterval`, so the
            *     first beat is a second away. Arming only on a beat meant that a
            *     control window which died inside that window could never set
            *     `heartbeatSeen`, and the stage would sit there forever with no
@@ -1350,9 +1438,9 @@
            *     healthy.
            *
            * Seeding here is honest about what it proves: control published this
-           * envelope, so control was alive when it did. A real beat refreshes it
-           * about a second later, and if none comes the deadline expires on
-           * schedule.
+           * envelope, so control was alive when it did. A real beat was meant
+           * to refresh it about a second later, and if none comes the deadline
+           * expires on schedule.
            *
            * `sessionGeneration` is the discriminator, and it is not incidental:
            * `buildStageEnvelope` omits it exactly when the payload belongs to no
@@ -1405,10 +1493,11 @@
         subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
           /*
            * Counted, because "control sent 6 of 6" and an empty bar cannot both
-           * be true and neither side could see the other. Control counts what
-           * it EMITS — which is an attempt, not a delivery, since the promise
-           * is fire-and-forget with a swallowed rejection. This counts what
-           * arrived, so the next take says plainly which of the two it is.
+           * be true and neither side could see the other. Control's count was
+           * of what it EMITTED — an attempt, not a delivery, since the promise
+           * was fire-and-forget with a swallowed rejection. This counts what
+           * arrived on the separate window's event path. The embedded bridge's
+           * transcript is not counted here.
            */
           transcriptTapsArrived += 1;
           transcriptTap = payload.text;
@@ -1505,8 +1594,9 @@
      * `metricsMeasured: false` on the measurement. If the real font lands later
      * it does not slide in unannounced: the script layer re-measures the face,
      * the fingerprint's `fontHash` moves with it, and the rebuild is classified
-     * as a relayout with a §33 semantic re-anchor. A reflow the presenter can see
-     * is survivable; one nothing in the system admits to is not.
+     * as a relayout with a companion §33 semantic re-anchor. A reflow the
+     * presenter can see is survivable; one nothing in the system admits to is
+     * not.
      */
     const fontTimeout = window.setTimeout(() => {
       fontsSettled = true;
@@ -1523,10 +1613,11 @@
       },
     );
 
-    // Watchdog (§43.5): if control's heartbeat stops while live, freeze
-    // locally and wait. Only armed by a take — a take's envelope or a beat it
-    // owns — and only under Tauri; neither the preview bus nor the Settings
-    // appearance preview has a liveness contract to hold control to.
+    // Watchdog (§43.5): if control's heartbeat stops while live, freeze locally
+    // and wait. Only armed by an envelope carrying a session generation, or a
+    // beat it owns, in the separate window — never by an embedded take — and
+    // only under Tauri; neither the preview bus nor the Settings appearance
+    // preview has a liveness contract to hold control to.
     const watchdog = window.setInterval(() => {
       if (!isTauri || !heartbeatSeen || app.phase === 'handshake') return;
       if (performance.now() - lastHeartbeatAt > STAGE_HEARTBEAT_GRACE_MS) {
@@ -1540,9 +1631,10 @@
     /*
      * `?preview=1&replay=<url>` replays a frozen Tier-B run — real recorded
      * speech, through the real renderer — instead of the synthetic driver. It
-     * is the only configuration in which "does the product follow" can be
-     * asserted end to end: the benchmark proves the ENGINE follows and scores
-     * Rust's own model of the display, never the code that moves the glass.
+     * exercises the real renderer with recorded alignment snapshots, so "does
+     * the product follow" can be asserted through it: the benchmark proves the
+     * ENGINE follows and scores Rust's own model of the display, never the code
+     * that moves the glass.
      */
     if (preview && previewReplayUrl) void startFixtureReplay(previewReplayUrl);
     else if (preview) previewDriver = startPreviewDriver({ calibrated: previewCalibrated });
@@ -1721,19 +1813,15 @@
    * §16.9. Escape ends the take on the SECOND press, and the first press has
    * to say so — on the stage.
    *
-   * Control answers a single press with a toast reading "Press Escape again on
-   * the stage to end the session", and the presenter cannot see it: the stage
-   * is frameless, sized to the monitor and always-on-top (§52.7), so the
-   * control window is behind it. The first press therefore produced no visible
-   * result at all, and Escape read as broken or laggy — press, nothing, press
-   * again, gone.
+   * The prompter covers the panel the presenter is reading, so nothing else
+   * they can see answers the first press. When the only answer was a toast in
+   * a window behind the stage, the first press produced no visible result at
+   * all, and Escape read as broken or laggy — press, nothing, press again,
+   * gone.
    *
-   * This is answered locally rather than by asking control to send an ack
-   * back: the round trip is stage → Rust → control → Rust → stage, and the
-   * whole complaint is about responsiveness. The stage already knows it sent a
-   * single press, so it can say so in the same frame. Control's toast still
-   * fires for the operator at the control window, who is a different person
-   * looking at a different screen.
+   * This is answered locally rather than by waiting on the host: the stage
+   * already knows it saw a single press, so it can say so in the same frame,
+   * and the whole complaint is about responsiveness.
    *
    * It gets its own state rather than riding the acknowledgement chip, which
    * is gated on the `stageAcknowledgements` setting (§33.10) — turning command
@@ -1831,9 +1919,10 @@
   /**
    * §16.9's missing half: a way out that is not a keystroke.
    *
-   * Escape ends a take from whichever window holds the keyboard, and the stage
-   * is frameless, monitor-sized and always-on-top (§52.7). Put those together
-   * and there is a reachable state with no exit: the stage is covering a screen,
+   * Escape reaches the stage only while its window has the keyboard, and a
+   * prompter take is borderless and fills its panel (§52.7). Put those
+   * together and there is a reachable state with no exit: the stage is
+   * covering a screen,
    * the operator is working in some other application, and Escape goes to that
    * application. The stage has to be clicked before it can be dismissed, and
    * nothing on it says so — a full-screen window with no visible way out reads
@@ -2169,10 +2258,9 @@
       /*
        * The transport, answered where the hold chip advertises it.
        *
-       * On a separate-stage rig this window is the one holding the keyboard —
-       * the presenter is standing at it — and the chip that names these keys is
-       * drawn HERE. A key named on the glass and answered only by a window on a
-       * desk behind them is advice that does not work where it is read.
+       * The stage is what holds the keyboard while the presenter reads, and the
+       * chip that names these keys is drawn HERE. A key named on the glass and
+       * answered somewhere else is advice that does not work where it is read.
        *
        * `repeat` is refused for the toggle and allowed for the pace keys, the
        * same split the control window's shortcut layer makes: a held toggle
@@ -2590,6 +2678,48 @@
         style:--stage-hold-top={holdChipTop}
       >
         <!--
+          What is running (#241): "Practising", the part, or both.
+
+          In this plane because it is words the presenter reads through the
+          glass, so it takes the corrective flip with the script. It takes the
+          edge away from the reading band (see `takeScopeAtTop`), and the
+          PHYSICAL right-hand side: the dock is in the unmirrored operator plane
+          at the bottom left, so under a horizontal mirror the label's side
+          flips in these coordinates to land on the right of the panel either
+          way.
+
+          First in this plane, so every transient prompt drawn after it — the
+          acknowledgement, the hold chip, the Escape prompt — paints over it
+          rather than under it.
+
+          Persistent rather than transient: it answers "is this the take?", a
+          question that matters for the whole reading, and it does not fade
+          with the dock. A blank hides it like everything else. Not a live
+          region: the take-controls drawer already announces the part, and two
+          regions would say the same thing twice.
+        -->
+        {#if takeScope && !app.blanked}
+          <div
+            class="take-scope"
+            class:flip-x={settings?.mirrorX ?? false}
+            data-edge={takeScopeAtTop ? 'top' : 'bottom'}
+            style:font-size="{overlayFontSizePx}px"
+            style:top={takeScopeTop}
+            style:bottom={takeScopeBottom}
+          >
+            <span class="take-scope-lead">{takeScope.lead}</span>
+            {#if takeScope.name}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
+              <span class="take-scope-name">{takeScope.name}</span>
+            {/if}
+            {#if takeScope.done}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
+              <span class="take-scope-done">{takeScope.done}</span>
+            {/if}
+          </div>
+        {/if}
+
+        <!--
           Layer 7: transient command acknowledgement (§33.10).
 
           Always mounted, so its status region outlives each message. It stands
@@ -2810,17 +2940,20 @@
               {/if}
             {/if}
           </div>
-          <!-- Control emits these; Rust emits the snapshots. If this stays 0
-               while the summary reports taps sent, the control -> stage channel
-               is the fault and the snapshots are arriving by a different road. -->
-          <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
+          <!-- Transcript deliveries on the separate window's event path,
+               replayed directives included. Zero is expected in a take — the
+               embedded stage gets its transcript through the bridge, which
+               this does not count — so on its own it cannot establish a
+               delivery fault. A Read take (#243) sends no taps at all; its
+               snapshots come from hand moves, so the pair is not a fault there. -->
+          <div class:diag-fault={voiceInput && transcriptTapsArrived === 0 && alignmentArrived > 0}>
             taps: {transcriptTapsArrived} arrived
           </div>
           <div>viewport: {vw}×{vh}</div>
           {#if budget}
-            <!-- The number that used to be a `compact` flag, said properly: what
-                 the presenter can actually see. Short is worth knowing about
-                 BEFORE a take, which is why it is stated rather than corrected. -->
+            <!-- What the presenter can actually see, in rendered lines. Short
+                 is worth knowing about BEFORE a take, which is why it is
+                 stated rather than corrected. -->
             <div>
               lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
                 ? ''
@@ -2884,21 +3017,21 @@
         recogniser heard nothing" from "the aligner would not match".
 
         Every one of those now has a first-class reading somewhere the presenter
-        is already looking. A dead input or a dead socket resolves to a named
-        fault on the audio readout AND, through `resolveHoldStatus`, to that
-        same sentence in the mirrored hold chip; several seconds of speech with
-        nothing coming back is `not_heard`, which reads "Not hearing you"; and
-        an aligner that will not match is the hold ladder's own "Holding here".
-        The distinction survives without a strip of small changing text beside
-        an animated waveform, which is what made the finished surface read as a
-        development HUD.
+        is already looking. A dead input or a stopped recogniser resolves to a
+        named fault on the audio readout AND, through `resolveHoldStatus`, to
+        that same sentence in the mirrored hold chip; several seconds of speech
+        with nothing coming back is `not_heard`, which reads "Not hearing you";
+        and an aligner that will not match is the hold ladder's own "Holding
+        here". The distinction survives without a strip of small changing text
+        beside an animated waveform, which is what made the finished surface
+        read as a development HUD.
 
         Aligned to the dock's left edge and sitting directly above it, so the
         two instruments read as one column instead of as two corners — which is
         exactly what they were before, in different planes, parting company
         whenever anybody turned mirroring on.
       -->
-      {#if showDiagnostics && app.envelope !== null && !app.blanked && !dockPopoverOpen}
+      {#if showDiagnostics && voiceInput && app.envelope !== null && !app.blanked && !dockPopoverOpen}
         <div class="transcript-tap" class:silent={transcriptWords.length === 0}>
           <span class="transcript-tap-words">
             {transcriptWords.length > 0 ? transcriptWords : 'listening — no words yet'}
@@ -2953,7 +3086,7 @@
         readout={!app.blanked}
         revealed={dockVisible}
         {followPaused}
-        onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
+        onfollowtoggle={voiceInput ? () => sendIntent({ kind: 'toggle_follow' }) : undefined}
         presentationMode={embedded?.presentationMode ?? 'prompter'}
         onpresentationtoggle={embedded?.onpresentationtoggle}
         practice={embedded?.practice ?? false}
@@ -3308,6 +3441,58 @@
   }
 
   /*
+   * What is running (#241). One quiet line, at the secondary floor, on the
+   * edge away from the reading band; the edge's offset arrives inline. The
+   * name gives way first, then the lead, so a narrow window or presenter-sized
+   * type truncates rather than running off the glass. The line height is the
+   * label's own, not the stage's, so large type is not clipped.
+   */
+  .take-scope {
+    position: absolute;
+    right: var(--stage-chrome-inset, 20px);
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    max-width: 45%;
+    padding: 0.3em 0.9em;
+    border-radius: 999px;
+    border: 1px solid var(--stage-chrome-border);
+    background: var(--stage-overlay);
+    color: var(--stage-text);
+    font-weight: 550;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .take-scope.flip-x {
+    right: auto;
+    left: var(--stage-chrome-inset, 20px);
+  }
+
+  .take-scope-lead,
+  .take-scope-name,
+  .take-scope-done {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .take-scope-lead,
+  .take-scope-done {
+    flex: 0 1 auto;
+  }
+
+  .take-scope-sep {
+    flex: none;
+  }
+
+  .take-scope-name {
+    flex: 0 100 auto;
+    opacity: 0.8;
+  }
+
+  /*
    * The operator's safe rectangle.
    *
    * `pointer-events: none` like the presenter's, and for the same reason: a
@@ -3437,24 +3622,11 @@
   /*
    * One line directly above the dock, newest word at the right.
    *
-   * ------------------------------------------------------------------------
-   * IT USED TO RUN THE WHOLE WIDTH OF THE PANEL, AND THEN IT USED TO SIT IN A
-   * DIFFERENT CORNER FROM THE INSTRUMENT IT BELONGS WITH
-   * ------------------------------------------------------------------------
-   * First it was `left: 0; right: 0` with a gradient behind it, holding
-   * everything the recogniser had said since its last finalisation — the widest
-   * element on the glass, a strip of moving text under a script somebody is
-   * reading.
-   *
-   * Then it was a bounded box in the bottom RIGHT, lined up with a voice pill
-   * that lived in the mirrored plane. The old comment here was careful to say
-   * that the alignment was a convenience of the common rig rather than a
-   * relationship the code maintained — under `mirrorX` the two were in opposite
-   * physical corners, and under a hood their right margins were measured from
-   * different edges. That was an honest description of a defect.
-   *
-   * Both instruments are now in the same plane, in the same safe rectangle, on
-   * the same left edge, so the alignment IS a relationship the code maintains.
+   * The bar and the voice readout are in the same plane, in the same safe
+   * rectangle, on the same left edge, so their alignment IS a relationship the
+   * code maintains. When the bar sat in the opposite corner from a pill in the
+   * mirrored plane, `mirrorX` put the two in opposite physical corners and a
+   * hood measured their margins from different edges.
    *
    * The width cap and the ten-word crop in `transcript-tail.ts` still do
    * different halves of one job: ten long words are still wide, and a box with

@@ -1,6 +1,6 @@
 <!--
   Renders the pending promise-based confirmation (stores/confirm.ts) as a
-  dialog with F.19 destructive styling when requested.
+  dialog, with destructive styling when requested.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
@@ -18,8 +18,8 @@
       </Button>
       {#if request.danger}
         <!-- The confirming half of a destructive pair, so it is filled: this is
-             the click that cannot be taken back, and it used to carry exactly
-             the weight of the Cancel beside it. -->
+             the click that cannot be taken back, and it must not carry the
+             same weight as the Cancel beside it. -->
         <Button variant="danger-primary" onclick={() => settleConfirm(true)}>
           {request.confirmLabel}
         </Button>

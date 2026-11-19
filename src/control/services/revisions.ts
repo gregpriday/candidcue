@@ -1,10 +1,6 @@
 /**
- * Revision browser service (spec §21.4, §46.2) — `list_revisions`,
- * `get_revision`, `restore_revision`.
- *
- * These three commands have been implemented and tested in Rust since the
- * scripts repo landed and had NO TypeScript caller: every snapshot the app
- * took was write-only. This module is the doorway.
+ * Revision browser service — `list_revisions`, `get_revision`,
+ * `restore_revision`.
  *
  * Deliberately NOT routed through `invokeOrMock`. The mock backend has no
  * revision store, so a fallback could only invent history — and a fabricated
@@ -76,7 +72,7 @@ export async function getRevision(
  * `save_script` with `revisionReason: "before_restore"`, which snapshots the
  * PREIMAGE under the per-script lock before the replacement is written. Doing
  * it a second time here would both duplicate the snapshot and reopen the
- * window between snapshot and write that the Rust comment (H2) closed.
+ * window between snapshot and write that the Rust side closed.
  */
 export async function restoreRevision(
   scriptId: string,

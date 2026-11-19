@@ -1,15 +1,14 @@
 /**
- * Where a take begins (CCUX-014, CCUX-015, CCUX-016, CCUX-008).
+ * Where a take begins.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS NOT JUST A NUMBER
  * ---------------------------------------------------------------------------
- * `startTake` recorded `startTokenIndex: 0` on every session, and the session
- * record has carried the field since it was written. A creator who fumbled a
- * line six minutes into a script had two options: read the first six minutes
- * again, or launch and then navigate while the stage was already live and the
- * camera was already rolling. For a course creator working section by section
- * that is the difference between a usable tool and an unusable one.
+ * Without a start point, a creator who fumbled a line six minutes into a
+ * script has two options: read the first six minutes again, or launch and then
+ * navigate while the stage is already live and the camera already rolling.
+ * For a course creator working section by section that is the difference
+ * between a usable tool and an unusable one.
  *
  * The number itself is easy. What is not easy — and what this module owns — is
  * that an arbitrary token is a BAD place to start:
@@ -45,7 +44,7 @@ export interface StartPoint {
   excerpt?: string;
 }
 
-/** The beginning, which is what every take used to get whether it wanted it or not. */
+/** The beginning: where a take opens unless it asks for somewhere else. */
 export function beginning(): StartPoint {
   return { tokenIndex: 0, kind: 'beginning', label: 'the beginning' };
 }
@@ -146,6 +145,51 @@ export function snapToStart(token: number, input: SnapInput): StartPoint {
     label: describeSentence(sentence, headings, excerpt),
     excerpt,
   };
+}
+
+/**
+ * The start point for a caret at a SOURCE offset in the editor (#241).
+ *
+ * The rule for body text is the sentence the caret is at or after: the caret
+ * can sit in whitespace, a cue or a sentence's markup, so "the sentence
+ * containing it" is not always defined, and "the one it is at or after" is.
+ *
+ * A HEADING IS THE EXCEPTION, and the one that matters: clicking a section in
+ * the outline puts the caret at the start of its heading line. A heading that
+ * is not read aloud has no sentence of its own, so the body rule found the
+ * last sentence ABOVE it — in the previous section, and on a divided script in
+ * the previous part — and "From here" from the outline opened one section too
+ * early. A caret anywhere on a heading's line is a request for that section,
+ * so it starts at the section's first spoken words.
+ *
+ * A heading with nothing spoken after it at all, at the very end of a script,
+ * has no section start and falls back to the body rule. A caret above the
+ * first sentence — the synthetic "Opening" section's outline row puts it at
+ * offset 0, before any blank lines — is the beginning.
+ *
+ * Null when there is no compile to resolve against, so the menu leaves its
+ * "From here" rows out rather than pointing them at the top.
+ */
+export function startPointAtCaret(offset: number, input: SnapInput): StartPoint | null {
+  const sentences = input.sentences;
+  if (sentences.length === 0) return null;
+
+  const heading = input.blocks?.find(
+    (b) => b.kind === 'heading' && b.source.utf16Start <= offset && offset <= b.source.utf16End,
+  );
+  if (heading !== undefined) {
+    const node = flattenOutline(input.outline).find((n) => n.blockId === heading.id);
+    if (node !== undefined && node.startTokenIndex < input.totalTokens) {
+      return snapToStart(node.startTokenIndex, input);
+    }
+  }
+
+  let best: SentenceUnit | null = null;
+  for (const sentence of sentences) {
+    if (sentence.source.utf16Start <= offset) best = sentence;
+    else break;
+  }
+  return snapToStart(best === null ? 0 : best.startTokenIndex, input);
 }
 
 /**

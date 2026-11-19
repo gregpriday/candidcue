@@ -1,8 +1,7 @@
 <!--
-  Editor screen (spec §13): header with editable title, truthful save state
-  (F.8), Edit/Preview modes, minimal insert toolbar (§13.6), CodeMirror
-  Markdown editor full-bleed on its panel, outline panel
-  (§13.3/§13.4), readiness messages (F.9).
+  Editor screen: header with editable title, truthful save state, Edit /
+  Preview / Both layouts, minimal insert toolbar, CodeMirror Markdown editor
+  full-bleed on its panel, outline panel, readiness messages.
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
@@ -42,10 +41,10 @@ import SplitButton from '../components/SplitButton.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { scriptActionLabels } from '../lib/script-action-labels';
   import { presentMenuItems, type PresentMenuItem } from '../lib/present-menu';
-  import { NOUNS, PRACTICE_LABEL } from '../../shared/take-vocabulary';
+  import { NOUNS } from '../../shared/take-vocabulary';
 import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
-  import { startMenuItems } from '../lib/present-menu';
+  import { practiceMenuItems, startMenuItems } from '../lib/present-menu';
   import { checkThenStart } from '../lib/check-then-start';
   import { voiceModelFinding } from '../lib/take-readiness';
   import { openSettingsWindow } from '../lib/open-settings';
@@ -53,7 +52,7 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import {
     lastEndingFor,
     newestEnding,
-    snapToStart,
+    startPointAtCaret,
     type RecordedEnding,
     type StartPoint,
   } from '../lib/take-start-point';
@@ -142,9 +141,8 @@ import type { PresentationMode } from '../services/settings-types';
   /**
    * The layout, from the workspace store rather than from local state.
    *
-   * It was `let panelOpen = $state(true)` plus `$editor.mode`, both of which
-   * were forgotten the moment the route unmounted. §11.5 and §11.3 ask for both
-   * to persist, and the View menu has to be able to toggle them from outside
+   * Both the outline's visibility and the layout persist past the route
+   * unmounting, and the View menu has to be able to toggle them from outside
    * this component — which only works if the state lives somewhere the shell can
    * reach.
    */
@@ -216,7 +214,7 @@ import type { PresentationMode } from '../services/settings-types';
   });
 
   /*
-   * An image dropped on the window belongs to THIS script (§11.9, §20.2).
+   * An image dropped on the window belongs to THIS script.
    *
    * Registered while the editor holds a document and cleared on the way out, so
    * a drop on the Library has no target and is refused — rather than being filed
@@ -326,7 +324,7 @@ import type { PresentationMode } from '../services/settings-types';
    * listener, and there was no listener anywhere in the tree.
    */
   /*
-   * The native Insert menu (§11.4), answered by the same functions the
+   * The native Insert menu, answered by the same functions the
    * formatting row calls.
    *
    * One subscription for the whole family: the menu names them and gives them
@@ -414,7 +412,7 @@ import type { PresentationMode } from '../services/settings-types';
   const blockingCount = $derived(diagnostics.filter((d) => d.blocking).length);
   const cueCount = $derived(blocks.filter((b) => b.kind === 'cue').length);
   /*
-   * §parts. Derived by the COMPILER, not here: how a script divides is a
+   * The parts. Derived by the COMPILER, not here: how a script divides is a
    * property of the document, and a second derivation in the editor would
    * eventually disagree with the one the take actually runs on.
    */
@@ -478,7 +476,7 @@ import type { PresentationMode } from '../services/settings-types';
   const previewImages = $derived(previewImageStates(result?.script, imageResolution));
 
   /*
-   * A broken directive, drawn where it is (§23.8). Every directive problem the
+   * A broken directive, drawn where it is. Every directive problem the
    * compiler reports carries `fix_directive`; each is filed under the block its
    * source starts in. One that falls between blocks (a stray closing fence) has
    * no block to sit in and stays with the rail's list.
@@ -545,14 +543,14 @@ import type { PresentationMode } from '../services/settings-types';
    * it underneath the banner explaining that the compile failed.
    */
   /**
-   * The document's state, as a status bar (§11.7).
+   * The document's state, as a status bar.
    *
-   * The rules this follows, and each is a line from §11.7:
+   * The rules this follows:
    *
    *   - "Saved" is TRANSIENT and lives here, not in the toolbar. A permanent
    *     "Saved" is a claim the user stops reading; an error is not, and errors
    *     keep their place beside the title.
-   *   - errors and warnings carry an icon as well as a colour (§9.4).
+   *   - errors and warnings carry an icon as well as a colour.
    *   - the layout does not move as counts change — every item is present or
    *     absent for a reason, and the numbers are tabular (set on the bar).
    *   - an item is a button only when clicking it opens something.
@@ -623,7 +621,7 @@ import type { PresentationMode } from '../services/settings-types';
           parts,
           title: 'Show in the outline',
           // Clicking goes to the list of them, which is a meaningful
-          // destination — so, and only so, this one is a button (§11.7).
+          // destination — so, and only so, this one is a button.
           onclick: () => void showDiagnostics(errors > 0),
         });
       }
@@ -803,7 +801,7 @@ import type { PresentationMode } from '../services/settings-types';
     await navigate({ name: 'library', view: 'all' });
   }
 
-  /* ------------------------------------------------ CCUX-013 readiness */
+  /* ------------------------------------------------ readiness */
 
   /*
    * Why the speech model cannot follow a voice take, kept current (#301).
@@ -931,9 +929,11 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
-   * Present opens the stage. There is no screen in between — everything the
-   * old Preflight page asked for is in Settings, and the take reports its own
-   * microphone, display and connection from the stage (lib/start-take.ts).
+   * Present reshapes this window into the prompter or a reading window. There
+   * is no settings screen in between — a take is configured in Settings. The
+   * readiness check (lib/check-then-start.ts) only stops a script that cannot
+   * be followed, and the take reports its own microphone and display from the
+   * stage (lib/start-take.ts).
    *
    * `mode` is absent for the main button, which presents in whatever the saved
    * default is, and set when the choice came from the split menu — which also
@@ -957,16 +957,14 @@ import type { PresentationMode } from '../services/settings-types';
       // #448: a previous take's ending is only valid against its own source.
       ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }),
       /*
-       * §parts. A practice is deliberately never bounded to a part: nothing is
-       * reported at the end of one, so "you reached the end of part three" and
-       * "record part four next" would both be claims about a reading the app
-       * has already decided not to report on.
+       * A practice carries its part too (#241): the stage names the
+       * part being rehearsed. Nothing is reported at the end of either.
        */
-      ...(part === undefined || practice ? {} : { part }),
+      ...(part === undefined ? {} : { part }),
     });
   }
 
-  /* ------------------------------------------------- CCUX-014 start points */
+  /* ------------------------------------------------- start points */
 
   /**
    * The token the caret is sitting on, snapped to a whole sentence.
@@ -986,21 +984,19 @@ import type { PresentationMode } from '../services/settings-types';
     blocks: result?.blocks ?? [],
   });
 
-  const caretStartPoint = $derived.by(() => {
-    const sentences = snapInput.sentences;
-    if (sentences.length === 0) return null;
-    // The last sentence whose source span begins at or before the caret. The
-    // caret can legitimately sit in whitespace, a cue or a heading's markup,
-    // so "the sentence containing it" is not always defined — "the one it is
-    // at or after" always is, and matches how the snapping reads elsewhere.
-    let best: (typeof sentences)[number] | null = null;
-    for (const sentence of sentences) {
-      if (sentence.source.utf16Start <= caretOffset) best = sentence;
-      else break;
-    }
-    if (best === null) return null;
-    return snapToStart(best.startTokenIndex, snapInput);
-  });
+  // A caret on a heading (where an outline click puts it) means that section;
+  // anywhere else, the sentence it is at or after. See `startPointAtCaret`.
+  const caretStartPoint = $derived(startPointAtCaret(caretOffset, snapInput));
+
+  /*
+   * The part the caret is IN, shared by both "From here" rows.
+   *
+   * One answer for the take and the practice, so "Practise from here" and
+   * "From here" can never disagree about which part a place belongs to.
+   */
+  const caretPart = $derived(
+    caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
+  );
 
   /**
    * Where the last take of this script stopped, and the source it stopped in.
@@ -1029,7 +1025,9 @@ import type { PresentationMode } from '../services/settings-types';
     // Overlapping reads (two summaries, or A → B → A) must not land out of
     // order, which a script-id check alone cannot tell apart.
     let current = true;
-    void listSessionRecords(id, 20)
+    // Only rows with an ending: a run of rehearsals, which write none (#241),
+    // must not push the last recording off the page.
+    void listSessionRecords(id, 20, { withEnding: true })
       .then((records) => {
         if (!current || scriptId !== id) return;
         lastEndingRecord = newestEnding(records);
@@ -1072,7 +1070,7 @@ import type { PresentationMode } from '../services/settings-types';
         hereTokenIndex: caretStartPoint?.tokenIndex ?? null,
         hereLabel: startPlace(caretStartPoint),
         /*
-         * §parts: starting at the caret starts the part the caret is IN.
+         * Starting at the caret starts the part the caret is IN.
          *
          * Two reasons. The plainer one is that it is true — on a divided script
          * every token belongs to exactly one part, and a take opened in the
@@ -1083,7 +1081,7 @@ import type { PresentationMode } from '../services/settings-types';
          * unbounded take, so the parts a creator reached late in a long project
          * were exactly the ones the feature stopped working for.
          */
-        herePart: caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
+        herePart: caretPart,
         lastEnding:
           lastEndingPoint === null
             ? null
@@ -1136,32 +1134,22 @@ import type { PresentationMode } from '../services/settings-types';
      * `present-menu.ts` has said since it was written that the three choices at
      * launch are where to start, how to display, and whether this is a take or
      * a rehearsal — and that the third was not covered. It sits below the two
-     * shapes because it is a rarer choice than either, and it does not carry a
-     * start row of its own: a practice opens at the beginning of the script.
+     * shapes because it is a rarer choice than either.
      *
      * `SplitButton` runs the row it is given the moment it is chosen and
-     * closes, so no gesture picks a start row AND this one. The decision taken
-     * is the second of the two shapes that left open: a practice that opens at
-     * the caret, as its own row, offered only when the caret is somewhere a
-     * take could start — so working on one troublesome paragraph no longer
-     * means rehearsing from the top. Like every practice it is not bounded to
-     * a part; it simply begins there.
+     * closes, so no gesture picks a start row AND this one. So a practice has
+     * its own "from here", which carries the caret's part exactly as the
+     * take's does (#241) — rehearsing the section about to be filmed, and
+     * having the glass say which one it is. See `practiceMenuItems`.
      */
-    {
-      label: PRACTICE_LABEL,
-      description: 'A rehearsal in a window · nothing is reported',
-      group: {},
-      onselect: () => void checkThenPresent(undefined, undefined, true),
-    },
-    ...(caretStartPoint === null
-      ? []
-      : [
-          {
-            label: `${PRACTICE_LABEL} from here`,
-            description: startPlace(caretStartPoint) ?? 'From the cursor',
-            onselect: () => void checkThenPresent(undefined, caretStartPoint?.tokenIndex, true),
-          },
-        ]),
+    ...practiceMenuItems(
+      {
+        hereTokenIndex: caretStartPoint?.tokenIndex ?? null,
+        hereLabel: startPlace(caretStartPoint),
+        herePart: caretPart,
+      },
+      (tokenIndex, part) => void checkThenPresent(undefined, tokenIndex, true, part),
+    ),
     {
       label: 'Review take setup…',
       description: 'Speech model, microphone and display',
@@ -1173,7 +1161,7 @@ import type { PresentationMode } from '../services/settings-types';
   ]);
 
   /*
-   * WHERE PRESENT IS ACTUALLY GOING (CCUX-004).
+   * WHERE PRESENT IS ACTUALLY GOING.
    *
    * Kept current from the moment the editor mounts, because the readout is
    * worth nothing after the button is pressed — at that point the operator can
@@ -1215,11 +1203,9 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
-   * C10: "Insert image" used to type a hardcoded `./assets/image.png` — a file
-   * that never existed — while `import_image` had no caller at all, so the
-   * Rust picker and the MIME/size validation behind it were unreachable. The
-   * image is imported first; the path written into the document is the one the
-   * importer created.
+   * Insert image goes through Rust's picker and its MIME/size validation: the
+   * image is imported first, and the path written into the document is the one
+   * the importer created — never a guessed path to a file that may not exist.
    */
   async function insertImage(): Promise<void> {
     const view = editorRef?.getView();
@@ -1619,7 +1605,7 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /*
-   * ONE tab stop, like every source list in the app (Sidebar.svelte, §23.1).
+   * ONE tab stop, like every source list in the app (Sidebar.svelte).
    *
    * Tab lands on the current section and the arrows walk the rest. Eighteen
    * headings as eighteen tab stops was eighteen presses to get past the rail
@@ -1752,7 +1738,7 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /*
-   * §parts and cues, in the rail's head rather than under the list.
+   * Parts and cues, in the rail's head rather than under the list.
    *
    * Under the list they scrolled away with it on exactly the scripts long
    * enough to have parts worth counting. Parts rather than the take-marker
@@ -1771,14 +1757,13 @@ import type { PresentationMode } from '../services/settings-types';
   );
 
   /**
-   * Preview click returns to Edit mode at the block's source (§13.2).
+   * Preview click returns to Edit mode at the block's source.
    *
-   * It only switched modes before. `goToOffset` ran against an `editorRef` that
-   * Preview had already unmounted, so the one thing the handler exists to do —
-   * land the caret on the block you clicked — never happened in the one mode it
-   * was written for.
+   * The editor has to be shown and measured before the caret moves: running
+   * `goToOffset` while Preview still had the editor unmounted once made the
+   * click land nowhere.
    *
-   * Two things on top of that. The caret goes to the WORD that was clicked,
+   * The caret goes to the WORD that was clicked,
    * when the click was on a spoken one: the compiler knows where every spoken
    * token sits in the source, and a long paragraph is one long source line, so
    * "the start of the block" left the author hunting along it. And the source
@@ -1839,7 +1824,7 @@ import type { PresentationMode } from '../services/settings-types';
     }
   }
 
-  /* --- F.8 save-failure sheet ----------------------------------------- */
+  /* --- save-failure sheet --------------------------------------------- */
 
   /*
    * Every answer the sheet gives stays IN the sheet.
@@ -2023,7 +2008,7 @@ import type { PresentationMode } from '../services/settings-types';
     }
   }
 
-  /* --- F.8 external-conflict resolution ------------------------------- */
+  /* --- external-conflict resolution ----------------------------------- */
 
   /**
    * Run one arm of the conflict sheet.
@@ -2176,7 +2161,7 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
-   * Open the revision browser (spec §21.4). The pending autosave is flushed
+   * Open the revision browser. The pending autosave is flushed
    * first for two reasons: the compare-and-swap needs the revision the editor
    * actually holds, and the text about to be replaced should be on disk (and
    * therefore snapshottable) before a restore replaces it.
@@ -2198,7 +2183,7 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /*
-   * The Script actions menu, in the File menu's order and words (§18.3).
+   * The Script actions menu, in the File menu's order and words.
    *
    * Three short groups: what makes or recovers a version of this script, what
    * takes it out of the app, and — on its own, last, below a rule — the one
@@ -2410,11 +2395,11 @@ import type { PresentationMode } from '../services/settings-types';
     >
       {#snippet status()}
         <!--
-          Only EXCEPTIONAL save state is in the toolbar now.
-          §11.2 and §11.7: "Saved" is transient and belongs in the status bar,
+          Only EXCEPTIONAL save state is in the toolbar.
+          "Saved" is transient and belongs in the status bar,
           where it can appear and go without moving anything; a failed save and a
           conflict are things the operator has to act on, so they stay here, next
-          to the document's name, with an icon as well as a colour (§9.4).
+          to the document's name, with an icon as well as a colour.
         -->
         {#if $editor.saveState === 'error'}
           <button type="button" class="save-issue danger" onclick={() => (saveIssueOpen = true)}>
@@ -2449,14 +2434,14 @@ import type { PresentationMode } from '../services/settings-types';
         />
         <OverflowMenu items={overflowItems} label="Script actions" />
         <!--
-          THE DESTINATION, BESIDE THE BUTTON THAT USES IT (CCUX-004).
+          THE DESTINATION, BESIDE THE BUTTON THAT USES IT.
 
-          Settings' prompter-display section names the panel used for calibration,
-          preview and display tests. Single-window presentation fills whichever
-          monitor THIS window is on. Both are correct and they are not the same
-          panel, so a user could calibrate one, press Present from the other and
-          get behaviour that follows the architecture while contradicting the
-          interface.
+          A prompter take opens on the panel pinned in Settings › Prompter
+          display and rigs, or on the monitor THIS window is on when nothing
+          pinned is connected; a reading window opens in place or at the frame
+          it was last left at, fitted or moved onto a panel when that frame is
+          off-screen. None of that is visible from the editor, so
+          the line says where the take is going before anybody presses Present.
 
           IN A ROW, NOT A STACK. It was a two-line column, and a column inside a
           fixed-height toolbar does three ugly things at once: `align-items:
@@ -2557,7 +2542,7 @@ import type { PresentationMode } from '../services/settings-types';
       {#snippet secondary()}
         {#if layout !== 'preview'}
           <!--
-            GROUPED, per §11.4: text structure, then inline formatting, then
+            GROUPED: text structure, then inline formatting, then
             media, then the teleprompter's own semantics. They used to be one
             undifferentiated run of nine controls, so "insert a cue" sat beside
             "bold" with nothing to say they are different kinds of thing.
@@ -2737,10 +2722,8 @@ import type { PresentationMode } from '../services/settings-types';
 
       {#if $workspace.outlineVisible}
         <!--
-          A real divider, and a width that is remembered.
-          The rail was `flex: 0 0 264px` with no way to change it — §11.5 asks
-          for a draggable 220-420px range that persists, because how wide an
-          outline wants to be depends entirely on the script in it.
+          A real divider, and a width that is remembered: how wide an outline
+          wants to be depends entirely on the script in it.
         -->
         <PaneDivider
           orientation="vertical"
@@ -2879,7 +2862,7 @@ import type { PresentationMode } from '../services/settings-types';
     </div>
 
     <!--
-      The document's state, always visible, even with the outline closed (§11.7).
+      The document's state, always visible, even with the outline closed.
       That is the point of a status bar: the compile state and the issue count
       used to live only in the rail's footer, so closing the rail — which is what
       somebody does to concentrate — also silenced the one place that said
@@ -2889,7 +2872,7 @@ import type { PresentationMode } from '../services/settings-types';
   {/if}
 </div>
 
-<!-- §21.4 revision browser -->
+<!-- Revision browser -->
 <RevisionHistory
   open={revisionsOpen}
   {scriptId}
@@ -2900,7 +2883,7 @@ import type { PresentationMode } from '../services/settings-types';
 />
 
 <!--
-  F.8 save-failure sheet.
+  Save-failure sheet.
 
   It answers the person's first question before it explains anything: the text
   is still here, and what would lose it. Focus opens on that answer rather than
@@ -2959,7 +2942,7 @@ import type { PresentationMode } from '../services/settings-types';
 </Dialog>
 
 <!--
-  F.8 external-change conflict sheet.
+  External-change conflict sheet.
 
   The copy now names where each version actually goes. It promised a revision
   for "the other version" while the disk arm wrote nothing at all, which was
@@ -3000,7 +2983,7 @@ import type { PresentationMode } from '../services/settings-types';
    * The save issue, beside the title.
    *
    * A quiet inline control with an icon and a word — not a `StatusPill`.
-   * §9.4: pills are for short categorical states where the shape helps
+   * Pills are for short categorical states where the shape helps
    * scanning, and a single always-in-the-same-place status is not that. It also
    * has to keep the toolbar's height stable, which a pill's padding does not.
    */
@@ -3137,7 +3120,7 @@ import type { PresentationMode } from '../services/settings-types';
     min-height: 0;
     flex: 1 1 auto;
     /*
-     * View › Larger/Smaller Editor Text (§11.3).
+     * View › Larger/Smaller Editor Text.
      *
      * A `font-size` on the pane rather than a `zoom` or a `transform`: those
      * scale the whole box, including CodeMirror's own measurement of it, and
@@ -3161,7 +3144,7 @@ import type { PresentationMode } from '../services/settings-types';
     min-height: 0;
     overflow-y: auto;
     /* The reading inset, not the dense one: rendered script is the one surface
-       on this route that is genuinely reading material (§9.1). */
+       on this route that is genuinely reading material. */
     padding: var(--space-6) var(--page-x-wide);
     font-size: calc(1em * var(--doc-scale, 1));
     background: var(--bg-panel);
@@ -3195,11 +3178,11 @@ import type { PresentationMode } from '../services/settings-types';
     margin: calc(-1 * var(--space-5)) calc(-1 * var(--space-4)) 0;
   }
 
-  /* Outline / vocabulary rail — warm chrome, seam on the left via border on
+  /* Outline rail — warm chrome, seam on the left via border on
      the container (a straight panel edge, not a rounded box). */
   .panel {
     /* The width is an inline style now, from the persisted pane size — the
-       divider beside it is what changes it (§11.5). `flex: 0 0 auto` so the
+       divider beside it is what changes it. `flex: 0 0 auto` so the
        inline width is what decides, rather than being a basis flex can override. */
     flex: 0 0 auto;
     /* A flex item's automatic minimum is its CONTENT's minimum, and a heading
@@ -3630,9 +3613,9 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /*
-   * The Present destination line (CCUX-004).
+   * The Present destination line.
    *
-   * Stacked under the button rather than inside it: the button's label is the
+   * Beside the button rather than inside it: the button's label is the
    * ACTION and must stay one short word, while this is a statement of fact that
    * can run to a panel name. `--text-2xs` keeps it subordinate — it is there to
    * be checked, not read every time.
@@ -3679,8 +3662,8 @@ import type { PresentationMode } from '../services/settings-types';
     white-space: nowrap;
   }
   /*
-   * A mismatch is INFORMATION, not an error — presenting where the window is,
-   * is a deliberate supported behaviour — so it warms rather than alarms: the
+   * A mismatch is INFORMATION, not an error — the take still opens, sized
+   * from the panel it lands on — so it warms rather than alarms: the
    * attention colour, not the danger one, and never petrol, which is not a
    * status.
    */
@@ -3786,7 +3769,7 @@ import type { PresentationMode } from '../services/settings-types';
   /*
    * WHAT STANDS BESIDE PRESENT, BY THE TOOLBAR'S OWN WIDTH (#412).
    *
-   * §21.3: collapse optional things before compressing the core. The script's
+   * Collapse optional things before compressing the core. The script's
    * title and Present are the core and keep their room at every width; a
    * readout is optional, and a squeezed one that shows "Telepr…" is worse than
    * none — it looks like a fault rather than a readout. So each step below is

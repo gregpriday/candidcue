@@ -1,10 +1,9 @@
 <!--
-  Live following controls (companion §48; action copy in the primary
-  Appendix F.12 voice).
+  Live following controls.
 
-  Pausing *following* is deliberately separate from pausing the *session*
-  (§15.3): this stops automatic movement while transcription keeps running.
-  The transport in the footer still owns session pause.
+  Pausing *following* is deliberately separate from pausing the *session*:
+  this stops automatic movement while transcription keeps running. Session
+  pause is not one of these controls.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
@@ -29,14 +28,23 @@
      * Unwired callers keep the old reading of the store flag.
      */
     heldByUser?: boolean;
+    /**
+     * Whether the take listens at all (#243). A Read take does not, so it has
+     * no voice to hold or to follow, and the switch between the two is not
+     * offered. Nor is "Set my place": it asks the engine to find the presenter
+     * from what they say next, which a take that hears nothing never answers.
+     * The single steps stay — they are how a Read take is moved by hand, along
+     * with scrolling. Unwired callers keep everything.
+     */
+    voiceInput?: boolean;
   }
-  let { follow, part = 'all', heldByUser }: Props = $props();
+  let { follow, part = 'all', heldByUser, voiceInput = true }: Props = $props();
 
   const userHold = $derived(heldByUser ?? follow.followingPaused);
 </script>
 
 <!--
-  ONE VOCABULARY (CCUX-002).
+  ONE VOCABULARY.
 
   Every label here came from `take-vocabulary.ts` rather than being written in
   place, because writing them in place is how the app ended up with three names
@@ -52,7 +60,7 @@
 -->
 <div class="follow-controls">
   <!--
-    §48: offer the local candidates instead of guessing when lost.
+    Offer the local candidates instead of guessing when lost.
 
     The WHOLE line, wrapped. These are near-identical sentences by
     construction — that is why the tracker could not choose — and an ellipsis
@@ -90,14 +98,16 @@
   -->
   {#if part !== 'candidates'}
     <div class="routine">
-      <Button
-        variant={follow.followingPaused && userHold ? 'primary' : 'default'}
-        title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
-        onclick={() => smoothFollow.toggleFollowingPaused()}
-      >
-        {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
-      </Button>
-      <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
+      {#if voiceInput}
+        <Button
+          variant={follow.followingPaused && userHold ? 'primary' : 'default'}
+          title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
+          onclick={() => smoothFollow.toggleFollowingPaused()}
+        >
+          {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
+        </Button>
+        <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
+      {/if}
       <Button onclick={() => smoothFollow.nudge('back')}>{TAKE_ACTIONS.previousSentence}</Button>
       <Button onclick={() => smoothFollow.nudge('forward')}>{TAKE_ACTIONS.nextSentence}</Button>
     </div>

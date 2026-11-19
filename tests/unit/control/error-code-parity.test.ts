@@ -27,6 +27,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { APP_ERROR_CODES } from '../../../src/shared/contracts/errors';
+import { copyForErrorCode } from '../../../src/control/services/errors';
 
 const ROOT = resolve(__dirname, '../../..');
 
@@ -160,13 +161,9 @@ describe('the error registry and the code that raises errors agree', () => {
      * check. Copy that says otherwise is not merely stale — it is a diagnosis
      * pointing away from the actual fault.
      */
-    const source = readFileSync(join(ROOT, 'src/control/services/errors.ts'), 'utf8');
-    const copyOnly = source.slice(
-      source.indexOf('const ERROR_COPY'),
-      source.indexOf('\n};', source.indexOf('const ERROR_COPY')),
-    );
-    // Comments explain what was removed and why; the strings are the claims.
-    const strings = [...copyOnly.matchAll(/'([^']{20,})'/g)].map((m) => m[1]!).join(' ');
+    // The copy as it is rendered, getters and composed entries included, rather
+    // than the string literals in the source.
+    const strings = [...authoredCopy()].map((code) => copyForErrorCode(code)).join(' ');
 
     expect(strings, 'no API key: the app holds no secrets').not.toMatch(/API key/i);
     expect(strings, 'no account to check').not.toMatch(/\baccount\b/i);

@@ -91,6 +91,13 @@ pub async fn list_sessions(
     db: State<'_, Database>,
     script_id: Option<String>,
     limit: Option<u32>,
+    with_ending: Option<bool>,
 ) -> Result<Vec<SessionRecord>, AppError> {
-    sessions::list_sessions(db.pool(), script_id, limit.unwrap_or(100)).await
+    sessions::list_sessions_filtered(
+        db.pool(),
+        script_id,
+        limit.unwrap_or(100),
+        with_ending.unwrap_or(false),
+    )
+    .await
 }

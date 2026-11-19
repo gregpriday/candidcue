@@ -1,14 +1,14 @@
 /**
- * The one open context menu (desktop refinement §20.1).
+ * The one open context menu.
  *
  * A store rather than component-local state, because the menu is hosted once by
  * the shell and requested from anywhere. That arrangement makes two properties
  * true by construction rather than by everybody remembering them: at most one
  * menu is open in the window, and opening a second closes the first.
  *
- * It also keeps the FOCUS RESTORATION honest. §30.5 requires that closing a menu
- * returns focus to the control that opened it, and the only place that reliably
- * knows what that was is the moment of opening — so the trigger is captured here
+ * It also keeps the FOCUS RESTORATION honest. Closing a menu must return focus
+ * to the control that opened it, and the only place that reliably knows what
+ * that was is the moment of opening — so the trigger is captured here
  * rather than re-derived when the menu closes, by which time the row may have
  * been re-rendered, sorted away or deleted.
  */

@@ -1,7 +1,7 @@
 /**
  * Installing the speech model, as the control window sees it.
  *
- * The recogniser is no longer part of the app (#152). It is ~161 MB of ONNX
+ * The speech model is not shipped with the app (#152). It is ~161 MB of ONNX
  * graphs fetched after installation, verified against a SHA-256 the binary
  * compiles in, and unpacked into app data. All of that happens in Rust — this
  * window's CSP allows `connect-src 'self' ipc: http://ipc.localhost` and
@@ -249,7 +249,7 @@ export const MODEL_NOT_INSTALLED_CODE = 'STT_MODEL_NOT_INSTALLED';
 
 /* ------------------------------------------------------------ language choice
  *
- * §153: the user picks a LANGUAGE. Which model serves it is an implementation
+ * The user picks a LANGUAGE. Which model serves it is an implementation
  * detail of that choice, which is why everything above this line is addressed
  * by `modelId` and everything below it by a language tag.
  */
@@ -269,9 +269,9 @@ export interface SpeechDownloadOrigin {
 /**
  * The licence a model travels under.
  *
- * Shown, never gated on. §153 is explicit: this is an attribution obligation
- * the app carries, not a decision to put in front of the user, so there is no
- * accept step anywhere in this flow.
+ * Shown, never gated on. This is an attribution obligation the app carries,
+ * not a decision to put in front of the user, so there is no accept step
+ * anywhere in this flow.
  */
 export interface SpeechModelAttribution {
   title: string;
@@ -413,8 +413,8 @@ export function languageDisplayName(tag: string): string {
  *
  * Rust checks the url against the licence urls the model catalogue itself
  * declares, which is why the control capability no longer grants
- * `opener:default`. §153 makes attribution an obligation the app carries
- * rather than a decision to put in front of the user, so this is not gated on
+ * `opener:default`. Attribution is an obligation the app carries rather than
+ * a decision to put in front of the user, so this is not gated on
  * anything — it is the same link, opened safely.
  */
 export async function openModelLicence(url: string): Promise<void> {

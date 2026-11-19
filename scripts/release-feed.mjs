@@ -433,6 +433,28 @@ export function checkOrigin(stageDir, publicUrl) {
 }
 
 /**
+ * What staging says about the origin it wrote into every feed entry.
+ *
+ * A dry run never publishes, so this line in the `Stage the release` log is
+ * the one place a dry run shows which origin the `SPEAKING_GLASS_PUBLIC_URL`
+ * repository variable produced. Installed copies poll a base compiled into
+ * the app, which `DEFAULT_PUBLIC_URL` is held equal to, so any other origin
+ * gets a workflow warning: it would publish where no installed copy looks.
+ */
+export function originReport(publicUrl, { fromVariable }) {
+  const source = fromVariable ? 'from SPEAKING_GLASS_PUBLIC_URL' : 'the default; SPEAKING_GLASS_PUBLIC_URL is not set';
+  const lines = [`origin: ${releasesUrl(publicUrl)}/ (${source})`];
+  if (releasesUrl(publicUrl) !== releasesUrl(DEFAULT_PUBLIC_URL)) {
+    lines.push(
+      `::warning title=Unexpected update origin::this release is staged for ${releasesUrl(publicUrl)}/, ` +
+        `but installed copies poll ${releasesUrl(DEFAULT_PUBLIC_URL)}/. ` +
+        'Correct or delete the SPEAKING_GLASS_PUBLIC_URL repository variable unless that is deliberate.',
+    );
+  }
+  return lines;
+}
+
+/**
  * Refuse a version that is not newer than what each platform's feed already
  * serves; report when every platform already serves exactly this version.
  */
@@ -538,6 +560,126 @@ async function sha256OfResponse(response) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* ---------------------------------------------------------- cache lifetimes */
+
+/** What the upload asks R2 to serve each versioned file with. */
+export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+/** What the upload asks R2 to serve each feed entry with. */
+export const UNCACHED_CACHE_CONTROL = 'no-cache, no-store, must-revalidate';
+
+/** A directive given twice with different values: neither can be trusted. */
+export const CONFLICTING = Symbol('conflicting Cache-Control directive');
+
+const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+// A quoted-string: tabs and visible characters, no other control bytes.
+const QUOTED = /^"((?:[^"\\\x00-\x08\x0a-\x1f\x7f]|\\[^\x00-\x08\x0a-\x1f\x7f])*)"$/;
+/** Trim only what HTTP calls whitespace: spaces and tabs. */
+const ows = (text) => text.replace(/^[ \t]+|[ \t]+$/g, '');
+const MEMBERS = /(?:[^,"]|"(?:[^"\\]|\\.)*")+/g;
+
+/**
+ * The directives of a Cache-Control header: lower-cased names, each mapped to
+ * its value (unquoted, unescaped) or to `true` when it has none. A comma inside
+ * a quoted value does not split it. A directive repeated with a different
+ * value maps to `CONFLICTING`, so a second `max-age` can neither win nor hide.
+ *
+ * `null` when the header is not a list of directives at all: an unterminated
+ * quote, or a name or value that is not a token. Reading past a stray quote
+ * would let a malformed header pass for the policy it happens to contain.
+ */
+export function cacheDirectives(header) {
+  const text = header ?? '';
+  const members = text.match(MEMBERS) ?? [];
+  // Whatever the members did not cover must be only the commas and spaces
+  // between them; a stray quote is left behind here.
+  if (text.replace(MEMBERS, '').replace(/[, \t]/g, '') !== '') return null;
+  const directives = new Map();
+  for (const member of members) {
+    const eq = member.indexOf('=');
+    const name = ows(eq === -1 ? member : member.slice(0, eq)).toLowerCase();
+    if (!name) {
+      if (eq === -1 && ows(member) === '') continue;
+      return null;
+    }
+    if (!TOKEN.test(name)) return null;
+    let value = true;
+    if (eq !== -1) {
+      value = ows(member.slice(eq + 1));
+      const quoted = QUOTED.exec(value);
+      if (quoted) value = quoted[1].replace(/\\(.)/g, '$1');
+      else if (!TOKEN.test(value)) return null;
+    }
+    directives.set(name, directives.has(name) && directives.get(name) !== value ? CONFLICTING : value);
+  }
+  return directives;
+}
+
+/** A delta-seconds value, read as the number it spells, or `null`. */
+function seconds(value) {
+  return typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : null;
+}
+
+const ONE_YEAR = 31_536_000;
+
+/**
+ * Why a versioned file's Cache-Control is not the year-long, public,
+ * immutable lifetime the upload asked for, or `null` when it is. A missing or
+ * different lifetime means an upload that lost its `--cache-control`, or an
+ * edge rule rewriting it (Cloudflare strips `immutable` when the zone's Origin
+ * Cache Control is off). `s-maxage` outranks `max-age` for the edge, so one
+ * that is present must say the same. `immutable` takes no argument, and one
+ * given to it is ignored (RFC 8246), so only its presence counts.
+ */
+export function immutableCacheProblem(header) {
+  const directives = cacheDirectives(header);
+  const ok =
+    directives !== null &&
+    directives.get('public') === true &&
+    seconds(directives.get('max-age')) === ONE_YEAR &&
+    (!directives.has('s-maxage') || seconds(directives.get('s-maxage')) === ONE_YEAR) &&
+    directives.has('immutable') &&
+    !['no-cache', 'no-store', 'private'].some((name) => directives.has(name));
+  return ok ? null : `served with Cache-Control "${header ?? ''}", not "${IMMUTABLE_CACHE_CONTROL}"`;
+}
+
+/**
+ * Why a feed entry's Cache-Control is not the uncached policy the upload
+ * asked for, or `null` when it is. All three of the upload's directives,
+ * bare: `no-store` keeps it out of every cache, and a bare `no-cache` and
+ * `must-revalidate` make anything that kept it anyway ask again. A `no-cache`
+ * naming header fields (`no-cache="Set-Cookie"`) only drops those fields, so it
+ * does not count, and a lifetime or a licence to serve it stale contradicts
+ * the rest.
+ */
+export function uncachedProblem(header) {
+  const directives = cacheDirectives(header);
+  const zeroOrAbsent = (name) => !directives.has(name) || seconds(directives.get(name)) === 0;
+  const ok =
+    directives !== null &&
+    ['no-cache', 'no-store', 'must-revalidate'].every((name) => directives.get(name) === true) &&
+    zeroOrAbsent('max-age') &&
+    zeroOrAbsent('s-maxage') &&
+    !['public', 'immutable', 'stale-while-revalidate', 'stale-if-error'].some((name) => directives.has(name));
+  return ok
+    ? null
+    : `served with Cache-Control "${header ?? ''}", not "${UNCACHED_CACHE_CONTROL}", ` +
+        'which can let a stale entry outlive this release';
+}
+
+/**
+ * Cloudflare's word that the response is in its cache, or is going there. An
+ * edge that honours `no-store` reports `DYNAMIC` or `BYPASS`; `MISS` is kept
+ * for responses it is about to store. Any of these means a rule is caching
+ * the feed whatever its header says, and a later release could be hidden
+ * behind the copy it keeps.
+ */
+const EDGE_CACHED = new Set(['hit', 'miss', 'expired', 'stale', 'updating', 'revalidated']);
+
+/** Drop a rejected body without letting the drop fail or wait. */
+function discard(response) {
+  response.body?.cancel().catch(() => {});
+}
+
 /**
  * Every staged file is served at its public URL with the bytes that were
  * staged.
@@ -546,6 +688,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * the edge as immutable, so a re-run that rebuilt a payload under a version
  * that was already uploaded once would be served the OLD bytes beside a feed
  * entry carrying the NEW signature — and every client would reject it.
+ *
+ * And with the lifetime the upload set: `public, max-age=31536000,
+ * immutable`. Only the name of a file that never changes may be cached for a
+ * year, and nothing else reads the header back.
  */
 export async function verifyFiles(stageDir, { fetchFn = fetch, log = console.log, attempts = 5, delayMs = 10_000 } = {}) {
   const release = readRelease(stageDir);
@@ -558,8 +704,13 @@ export async function verifyFiles(stageDir, { fetchFn = fetch, log = console.log
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const response = await fetchWithTimeout(url, {}, fetchFn);
+        const cacheProblem = immutableCacheProblem(response.headers.get('cache-control'));
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;
+          discard(response);
+        } else if (cacheProblem) {
+          last = cacheProblem;
+          discard(response);
         } else {
           const actual = await sha256OfResponse(response);
           if (actual === expected) {
@@ -594,14 +745,23 @@ export async function verifyFeed(stageDir, { fetchFn = fetch, log = console.log,
     let last = '';
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        // Asked for as a client asks, with no cache-buster: what matters is
-        // what an installed copy is served.
-        const response = await fetchWithTimeout(url, { headers: { 'cache-control': 'no-cache' } }, fetchFn);
-        const cacheControl = response.headers.get('cache-control') ?? '';
+        // Asked for as a client asks, with no cache-buster and no request
+        // Cache-Control (the updater sends none): what matters is what an
+        // installed copy is served.
+        const response = await fetchWithTimeout(url, {}, fetchFn);
+        const cacheProblem = uncachedProblem(response.headers.get('cache-control'));
+        const edge = (response.headers.get('cf-cache-status') ?? '').trim().toLowerCase();
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;
-        } else if (!/no-cache/.test(cacheControl)) {
-          last = `served with Cache-Control "${cacheControl}", which lets a stale entry outlive this release`;
+          discard(response);
+        } else if (cacheProblem) {
+          last = cacheProblem;
+          discard(response);
+        } else if (EDGE_CACHED.has(edge)) {
+          last =
+            `Cloudflare is caching it (CF-Cache-Status ${edge.toUpperCase()}) although it says no-store: ` +
+            'a cache rule is keeping it, and a later release could be hidden behind the copy it keeps';
+          discard(response);
         } else if (!isDeepStrictEqual(await response.json(), expected)) {
           last = 'served content differs from the staged entry';
         } else {
@@ -661,6 +821,9 @@ async function main(argv) {
         pubkey,
       });
       console.log(`staged ${release.os} ${release.version} for the ${release.channel} channel`);
+      for (const line of originReport(publicUrl, { fromVariable: Boolean(process.env.SPEAKING_GLASS_PUBLIC_URL) })) {
+        console.log(line);
+      }
       for (const name of readdirSync(join(required(args, '--out'), 'files', version))) console.log(`  ${version}/${name}`);
       for (const name of readdirSync(join(required(args, '--out'), 'feed'))) console.log(`  ${name}`);
       return;

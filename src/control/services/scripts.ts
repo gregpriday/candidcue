@@ -1,7 +1,7 @@
 /**
- * Script library/document service — thin typed wrappers over the spec §46.2
- * commands. Command names are exact; payload keys are camelCase. While the
- * Rust side is unimplemented, calls fall through to the mock backend.
+ * Script library/document service — thin typed wrappers over the script
+ * commands. Command names are exact; payload keys are camelCase. Outside
+ * Tauri, calls fall through to the mock backend.
  */
 import type { ScriptDocument, ScriptSummary } from '../../shared/contracts';
 import { invokeOrMock } from './ipc';
@@ -89,7 +89,7 @@ export async function renameScript(
  * Trash and restore are optimistic-concurrency transitions like a save: Rust
  * requires the revision the caller believes it is acting on and returns the
  * one that follows, so a stale library row can never clobber a concurrent
- * edit (spec §48.4).
+ * edit.
  */
 
 export async function duplicateScript(scriptId: string): Promise<ScriptSummary> {
@@ -124,8 +124,8 @@ export async function permanentlyDeleteScript(scriptId: string): Promise<void> {
 
 /**
  * Import a script. Rust runs the native open dialog and imports what the
- * operator chose in one trusted operation, so this wrapper sends no path
- * (spec §50.7). `null` means the operator cancelled the dialog.
+ * operator chose in one trusted operation, so this wrapper sends no path.
+ * `null` means the operator cancelled the dialog.
  */
 export async function importScript(options: ImportOptions = {}): Promise<ImportResult | null> {
   return invokeOrMock<ImportResult | null>(

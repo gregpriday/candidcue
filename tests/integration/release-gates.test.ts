@@ -40,6 +40,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { fakeTool, homeAt } from '../helpers/fake-tool';
+import { IMMUTABLE_CACHE_CONTROL, UNCACHED_CACHE_CONTROL } from '../../scripts/release-feed.mjs';
 
 const REPO_ROOT = resolve(__dirname, '../..');
 const VERSION_SCRIPT = join(REPO_ROOT, 'scripts/version.mjs');
@@ -1822,12 +1823,115 @@ describe('the release workflow cannot publish an unverified build', () => {
      * an architecture mismatch. None of that is visible from source.
      */
     expect(uncommented).toContain('verify-signed-bundle.mjs');
-    expect(uncommented, 'and without the unsigned escape hatch').not.toMatch(
-      /verify-signed-bundle\.mjs[^\n]*--unsigned/,
-    );
-    // The DMG and the updater payload are artifacts too, and each is asked.
+    expect(uncommented, 'and without the unsigned escape hatch, on any line').not.toContain('--unsigned');
+    // The DMG is an artifact too, and is asked directly.
     expect(uncommented).toMatch(/stapler validate "\$DMG"/);
-    expect(uncommented).toMatch(/stapler validate "\$RUNNER_TEMP\/payload\/Speaking Glass\.app"/);
+  });
+
+  /*
+   * #189: the bundle that shipped was the linker's ad-hoc signature, with no
+   * hardened runtime and no entitlements. The inspection reads each slice's
+   * signer, Team ID, runtime flag and entitlements back off the signature,
+   * and the Team ID it holds them to is the release identity's — so both app
+   * copies (the one in the DMG and the one the updater installs) must be
+   * inspected, and each step must be handed the identity.
+   */
+  it('inspects both signed app copies against the release identity', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const targets = {
+      'Inspect the signed bundle': [
+        '"src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"',
+      ],
+      'Inspect the disk image and the updater payload': [
+        '"$MOUNT/Speaking Glass.app"',
+        '"$RUNNER_TEMP/payload/Speaking Glass.app"',
+      ],
+    };
+    for (const [name, apps] of Object.entries(targets)) {
+      const step = stepOf(build, name, RELEASE_WORKFLOWS.macos);
+      expect(step, name).not.toMatch(/^\s+if:/m);
+      expect(step, name).not.toContain('continue-on-error');
+      const joined = step.replace(/\\\n\s*/g, '');
+      const invocations = joined.split('\n').filter((line) => line.includes('verify-signed-bundle.mjs'));
+      expect(invocations.map((line) => line.trim()), name).toEqual(
+        apps.map((app) => `node scripts/verify-signed-bundle.mjs ${app}`),
+      );
+      expect(envMappings(step, 'secrets'), name).toEqual([['APPLE_SIGNING_IDENTITY', 'APPLE_SIGNING_IDENTITY']]);
+      expect(build.indexOf(`- name: ${name}`), `${name} runs before staging`).toBeLessThan(
+        build.indexOf('release-feed.mjs stage'),
+      );
+    }
+    // Each copy is in place before it is asked: the image mounted, the
+    // payload unpacked.
+    const media = stepOf(build, 'Inspect the disk image and the updater payload', RELEASE_WORKFLOWS.macos);
+    expect(media.indexOf('hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT"')).toBeGreaterThan(-1);
+    expect(media.indexOf('hdiutil attach')).toBeLessThan(media.indexOf('"$MOUNT/Speaking Glass.app"'));
+    expect(media.indexOf('tar -xzf')).toBeGreaterThan(-1);
+    expect(media.indexOf('tar -xzf')).toBeLessThan(media.indexOf('"$RUNNER_TEMP/payload/Speaking Glass.app"'));
+    expect(media).toMatch(/^\s+set -euo pipefail$/m);
+  });
+
+  it('stops before the build when the imported certificate is not the identity it will sign with', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const step = stepOf(build, 'Import the signing certificate', RELEASE_WORKFLOWS.macos);
+    expect(envMappings(step, 'secrets').map(([name]) => name)).toContain('APPLE_SIGNING_IDENTITY');
+    expect(step).toContain('security find-identity -p codesigning "$KEYCHAIN"');
+    expect(step).toMatch(/grep -Fq "\\"\$APPLE_SIGNING_IDENTITY\\""/);
+    expect(step).toMatch(/exit 1/);
+    expect(build.indexOf('- name: Import the signing certificate')).toBeLessThan(build.indexOf('pnpm tauri build'));
+  });
+
+  /*
+   * The guard itself, run: its lines from the step, with a `security` that
+   * prints a listing in the real tool's shape. A near miss (the same name, a
+   * different team) must stop the job; only the exact name may pass.
+   */
+  it.skipIf(process.platform === 'win32')('passes the keychain guard only for the exact identity', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const step = stepOf(build, 'Import the signing certificate', RELEASE_WORKFLOWS.macos);
+    const lines = step.split('\n');
+    const first = lines.findIndex((line) => line.includes('identities="$(security find-identity'));
+    const last = lines.findIndex((line, at) => at > first && line.trim() === 'fi');
+    expect(first, 'the guard').toBeGreaterThan(-1);
+    const guard = lines.slice(first, last + 1).join('\n');
+
+    const bin = mkdtempSync(join(tmpdir(), 'speaking-glass-keychain-'));
+    try {
+      fakeTool(
+        bin,
+        'security',
+        `if (process.argv[2] !== 'find-identity') process.exit(9);
+console.log('Policy: Code Signing');
+console.log('  Matching identities');
+console.log('  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Ada Lovelace (A1B2C3D4E5)"');
+console.log('     1 identities found');`,
+      );
+      const run = (identity: string) =>
+        spawnSync('bash', ['-c', `set -euo pipefail\n${guard}\necho reached`], {
+          encoding: 'utf8',
+          env: {
+            PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
+            KEYCHAIN: join(bin, 'signing.keychain-db'),
+            APPLE_SIGNING_IDENTITY: identity,
+          },
+        });
+      const exact = run('Developer ID Application: Ada Lovelace (A1B2C3D4E5)');
+      expect(exact.status, exact.stdout + exact.stderr).toBe(0);
+      expect(exact.stdout).toContain('reached');
+      for (const near of [
+        'Developer ID Application: Ada Lovelace (Z9Y8X7W6V5)',
+        'Developer ID Application: Ada Lovelace',
+        'Developer ID Application: Ada',
+      ]) {
+        const result = run(near);
+        expect(result.status, near).toBe(1);
+        expect(result.stdout, near).not.toContain('reached');
+        expect(result.stdout + result.stderr, near).toContain('::error::the imported certificate is not the identity');
+        expect(result.stdout + result.stderr, 'the listing is never printed').not.toContain('0123456789ABCDEF');
+      }
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   it('publishes only after everything else has run', () => {
@@ -1900,11 +2004,25 @@ describe('the release workflow cannot publish an unverified build', () => {
     expect(action.indexOf('gh release edit')).toBeGreaterThan(action.indexOf('gh release upload'));
   });
 
+  /*
+   * The same strings `verify-files` and `verify-feed` then read back from the
+   * public URL, so the upload and the check cannot drift apart.
+   */
   it('serves versioned files as immutable and the feed as uncached', () => {
-    const files = action.slice(action.indexOf('aws s3 cp verified/stage/files/'));
-    expect(files.slice(0, files.indexOf('\n\n'))).toContain('immutable');
-    const feedUpload = action.slice(action.indexOf('aws s3 cp verified/stage/feed/'));
-    expect(feedUpload.slice(0, feedUpload.indexOf('\n\n'))).toContain('no-cache, no-store, must-revalidate');
+    // The whole `aws s3 cp` command, continuation lines and all: a flag on a
+    // line the one before does not continue onto is a separate command.
+    const command = (start: string) => {
+      const from = action.slice(action.indexOf(start));
+      const lines = from.slice(0, from.indexOf('\n\n')).split('\n');
+      // Exactly a backslash at the end: one followed by a space escapes the
+      // space, and the next line becomes a command of its own.
+      const end = lines.findIndex((line) => !line.endsWith('\\'));
+      return lines.slice(0, end + 1).join('\n');
+    };
+    expect(command('aws s3 cp verified/stage/files/')).toContain(`--cache-control "${IMMUTABLE_CACHE_CONTROL}"`);
+    expect(command('aws s3 cp verified/stage/feed/')).toContain(`--cache-control "${UNCACHED_CACHE_CONTROL}"`);
+    expect(IMMUTABLE_CACHE_CONTROL).toBe('public, max-age=31536000, immutable');
+    expect(UNCACHED_CACHE_CONTROL).toBe('no-cache, no-store, must-revalidate');
   });
 
   it('records the provenance a release has to carry', () => {
@@ -2066,6 +2184,468 @@ describe('every operating system gates, verifies and stages before it publishes'
   });
 });
 
+/* ------------------------------------------- credentials, by name, first */
+
+/**
+ * A step's body, from its `- name:` line to the next step: the next line
+ * that starts a list item at the same indentation, whatever key it opens
+ * with (`- uses:`, `- id:`, `- if:` ...).
+ */
+function stepOf(text: string, name: string, label: string): string {
+  const start = text.indexOf(`- name: ${name}\n`);
+  expect(start, `${label} has no step named "${name}"`).toBeGreaterThan(-1);
+  const lineStart = text.lastIndexOf('\n', start) + 1;
+  const dash = ' '.repeat(start - lineStart);
+  const rest = text.slice(start);
+  const next = rest.slice(1).search(new RegExp(`\\n${dash}- [a-z][\\w-]*:`));
+  return next === -1 ? rest : rest.slice(0, next + 1);
+}
+
+/** The lines of a step's own `env:` block, and nothing after it. */
+function envBlockOf(step: string): string {
+  const header = /^( +)env:\n/m.exec(step);
+  expect(header, 'the step has no env: block').not.toBeNull();
+  const indent = header![1]!.length;
+  const lines: string[] = [];
+  for (const line of step.slice(header!.index + header![0].length).split('\n')) {
+    if (line.trim() === '' || line.search(/\S/) <= indent) break;
+    lines.push(line);
+  }
+  // Only the block's own keys: a mapping-shaped line nested inside one
+  // key's multi-line value (`CREDENTIALS: |`) is text, not a variable.
+  const own = lines[0]?.search(/\S/) ?? 0;
+  return lines.filter((line) => line.search(/\S/) === own).join('\n');
+}
+
+/** Every `NAME: ${{ <context>.<key> }}` a step's env block maps, as [NAME, key]. */
+const envMappings = (step: string, context: 'secrets' | 'inputs') =>
+  [
+    ...envBlockOf(step).matchAll(
+      new RegExp(`^\\s+([A-Z][A-Z_0-9]*): \\$\\{\\{ ${context}\\.([A-Za-z_0-9]+) \\}\\}$`, 'gm'),
+    ),
+  ].map((match) => [match[1]!, match[2]!] as const);
+
+/**
+ * A credential check that cannot be skipped or ignored: no condition, no
+ * `continue-on-error`, and exactly the one command.
+ */
+function expectEnforced(step: string, command: string, label: string) {
+  expect(step, `${label}: the check must run unconditionally`).not.toMatch(/^\s+if:/m);
+  expect(step, `${label}: a failed check must fail the job`).not.toContain('continue-on-error');
+  const runs = [...step.matchAll(/^\s+run: (.*)$/gm)].map((match) => match[1]);
+  expect(runs, label).toEqual([command]);
+  // And nothing folded onto it: YAML joins a deeper-indented next line
+  // (`|| true`) into the same plain scalar.
+  const lines = step.split('\n');
+  const at = lines.findIndex((line) => /^\s+run: /.test(line));
+  const indent = lines[at]!.search(/\S/);
+  const folded = lines.slice(at + 1).filter((line) => line.trim() !== '' && line.search(/\S/) > indent);
+  expect(folded, `${label}: the command must be the whole run value`).toEqual([]);
+}
+
+/** Each composite R2 input, and the repository secret every caller fills it from. */
+const R2_INPUTS = {
+  r2_access_key_id: 'R2_ACCESS_KEY_ID',
+  r2_secret_access_key: 'R2_SECRET_ACCESS_KEY',
+  r2_endpoint: 'R2_ENDPOINT',
+  r2_bucket: 'SPEAKING_GLASS_R2_BUCKET',
+} as const;
+
+describe('a release names every missing credential before it spends anything', () => {
+  /*
+   * GitHub hands a workflow an empty string for a secret nobody has added.
+   * Before this gate, the only one checked was APPLE_CERTIFICATE, in the
+   * build job after four test runners had finished; every other missing
+   * secret surfaced as a codesign, notarytool or S3 error an hour in.
+   */
+  it.each(Object.entries(RELEASE_WORKFLOWS))('%s checks its signing secrets in the gates and again in the build', async (os, relPath) => {
+    const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
+    const required = [...REQUIRED.build[os as keyof typeof REQUIRED.build]].sort();
+    const uncommented = stripComments(readWorkflow(relPath));
+
+    const checks: Array<[string, string]> = [
+      ['gates', 'Every signing credential must be present'],
+      // Re-running only a failed build job does not run the gates again.
+      ['build', 'Every signing credential must still be present'],
+    ];
+    for (const [job, name] of checks) {
+      const body = jobOf(uncommented, job, relPath);
+      const step = stepOf(body, name, `${relPath} ${job}`);
+      expectEnforced(step, `node scripts/release-credentials.mjs build ${os}`, `${relPath} ${job}`);
+      // Each from the secret of the same name, and exactly the script's list:
+      // a secret the script requires but the step never maps reads as missing
+      // on every run, and one mapped but not required is checked by nobody.
+      const mapped = envMappings(step, 'secrets');
+      expect(mapped.filter(([env, secret]) => env !== secret), 'each env name is its secret name').toEqual([]);
+      expect(mapped.map(([env]) => env).sort(), `${relPath} ${job}`).toEqual(required);
+      // Before anything that takes time in the same job.
+      const at = body.indexOf('release-credentials.mjs');
+      for (const later of ['release-verify.mjs', 'rustup', 'pnpm install', 'pnpm tauri build']) {
+        if (body.includes(later)) expect(at, `${relPath} ${job}: before ${later}`).toBeLessThan(body.indexOf(later));
+      }
+    }
+  });
+
+  it.each(Object.values(RELEASE_WORKFLOWS))('%s starts no other runner until the gates pass', (relPath) => {
+    const uncommented = stripComments(readWorkflow(relPath));
+    const jobs = uncommented.slice(uncommented.indexOf('\njobs:\n'));
+    const names = [...jobs.matchAll(/\n {2}([a-z][\w-]*):\n/g)].map((match) => match[1]!);
+    expect(names).toContain('gates');
+    expect(names).toContain('publish');
+    for (const name of names.filter((job) => job !== 'gates' && job !== 'publish')) {
+      expect(jobOf(uncommented, name, relPath), `${relPath}: ${name} must wait for the gates`).toMatch(
+        /^ {4}needs: (gates\n|\[gates[,\]])/m,
+      );
+    }
+  });
+
+  it('builds macOS only with every Apple secret it checked', async () => {
+    const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
+    const uncommented = stripComments(readWorkflow(RELEASE_WORKFLOWS.macos));
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const step = build.slice(build.indexOf('- name: Import the signing certificate'));
+    const used = new Set([...step.matchAll(/secrets\.([A-Z_0-9]+)/g)].map((match) => match[1]!));
+    // The password is the one secret the build uses and the gate does not
+    // require, because a key generated without one has an empty password.
+    used.delete('TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
+    expect([...used].sort()).toEqual([...REQUIRED.build.macos].sort());
+  });
+
+  /*
+   * R2 is checked where it is used: only the publish job names the release
+   * environment, so only it can see secrets kept there, and re-running only a
+   * failed publish job never runs the gates again.
+   */
+  it('checks every R2 credential as the first thing publishing does', async () => {
+    const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
+    const action = stripComments(readWorkflow(PUBLISH_ACTION));
+    const steps = action.slice(action.indexOf('\n  steps:\n') + '\n  steps:\n'.length);
+    expect(steps.trimStart(), 'the first step').toMatch(/^- name: Every publishing credential must be present\n/);
+
+    const step = stepOf(action, 'Every publishing credential must be present', PUBLISH_ACTION);
+    expect(step).toMatch(/^\s+shell: bash$/m);
+    expectEnforced(step, 'node scripts/release-credentials.mjs publish', PUBLISH_ACTION);
+    const mapped = envMappings(step, 'inputs');
+    expect(mapped.map(([name]) => name).sort()).toEqual([...REQUIRED.publish].sort());
+    for (const [name, input] of mapped) {
+      expect(R2_INPUTS[input as keyof typeof R2_INPUTS], `${name} comes from inputs.${input}`).toBe(name);
+    }
+
+    // And every caller fills each input from the secret of that name, so the
+    // name the gate reports is the one to add.
+    for (const relPath of Object.values(RELEASE_WORKFLOWS)) {
+      const publish = jobOf(stripComments(readWorkflow(relPath)), 'publish', relPath);
+      for (const [input, secret] of Object.entries(R2_INPUTS)) {
+        expect(publish, relPath).toMatch(new RegExp(`^\\s+${input}: \\$\\{\\{ secrets\\.${secret} \\}\\}$`, 'm'));
+      }
+    }
+  });
+});
+
+/* -------------------------------------- the settings, by their current names */
+
+describe('the release settings are read, checked and documented under one set of names', () => {
+  /*
+   * The app was renamed from CandidCue on 2026-10-21 and the workflows moved
+   * to `SPEAKING_GLASS_*` settings, while the repository still held the old
+   * ones (#451). Only the owner can create settings, so the names the
+   * workflows read, the names the gate reports and the names the runbook
+   * tells the owner to create must be the same names.
+   */
+  const OBSOLETE = ['CANDIDCUE_PUBLIC_URL', 'CANDIDCUE_R2_BUCKET', 'CANDIDCUE_UPDATER_PUBKEY'];
+  const sources = [...Object.values(RELEASE_WORKFLOWS), PUBLISH_ACTION, RECEIVE_ACTION];
+  const referenced = (kind: 'secrets' | 'vars') =>
+    new Set(
+      sources.flatMap((relPath) =>
+        [...stripComments(readWorkflow(relPath)).matchAll(new RegExp(`\\b${kind}\\.([A-Z_0-9]+)`, 'g'))].map(
+          (match) => match[1]!,
+        ),
+      ),
+    );
+  const runbook = readWorkflow('docs/release-runbook.md');
+  const sectionStart = runbook.indexOf('### The credentials, by name');
+  const sectionEnd = runbook.indexOf('### The dry run');
+  const credentials = runbook.slice(sectionStart, sectionEnd);
+
+  it('reads every secret the gate checks, and no other but the optional key password', async () => {
+    const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
+    const checked = new Set([...Object.values(REQUIRED.build).flat(), ...REQUIRED.publish]);
+    expect([...referenced('secrets')].sort()).toEqual([...checked, 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'].sort());
+  });
+
+  it('reads one repository variable, the public origin, in both the staging and the publishing of each workflow', () => {
+    expect([...referenced('vars')]).toEqual(['SPEAKING_GLASS_PUBLIC_URL']);
+    for (const relPath of Object.values(RELEASE_WORKFLOWS)) {
+      const publish = jobOf(stripComments(readWorkflow(relPath)), 'publish', relPath);
+      expect(publish, relPath).toMatch(/^\s+public_url: \$\{\{ vars\.SPEAKING_GLASS_PUBLIC_URL \}\}$/m);
+    }
+  });
+
+  it('documents every setting the release reads where the runbook lists them', () => {
+    expect(sectionStart, 'the runbook lost its credentials heading').toBeGreaterThan(-1);
+    expect(sectionEnd, 'the credentials section must end at the dry run').toBeGreaterThan(sectionStart);
+    for (const name of [...referenced('secrets'), ...referenced('vars')]) {
+      expect(credentials, name).toContain(`\`${name}\``);
+    }
+  });
+
+  it('reads none of the CandidCue-era settings, and the runbook names them only to delete them', () => {
+    const scripts = ['scripts/release-credentials.mjs', 'scripts/release-feed.mjs', 'scripts/release-notes.mjs'];
+    for (const relPath of [...sources, ...scripts]) {
+      expect(readWorkflow(relPath), relPath).not.toMatch(/\bCANDIDCUE_[A-Z_]+/);
+    }
+    // Exactly one line names them, and it is the whole deletion step: an old
+    // name anywhere else could read as setup advice.
+    const mentions = runbook.split('\n').filter((line) => /\bCANDIDCUE_[A-Z_]+/.test(line));
+    expect(mentions).toEqual([
+      `- [ ] Delete ${OBSOLETE.slice(0, -1).map((name) => `\`${name}\``).join(', ')} and \`${OBSOLETE.at(-1)}\`; ` +
+        'nothing reads them, and the updater\'s public key is `plugins.updater.pubkey` in `tauri.conf.json`.',
+    ]);
+  });
+});
+
+/* --------------------------------------- what the GitHub Release carries */
+
+describe('the files a release attaches beside the stage are declared once and checked on receipt', () => {
+  /*
+   * macOS attaches its SBOMs and provenance to the GitHub Release. The build
+   * checks they survived its own handover, and publishing checks again when
+   * it receives the artifact, before anything is written to R2.
+   */
+  it('passes the same extras to the build handover, the publish receipt and the attach step', () => {
+    const macos = stripComments(readWorkflow(RELEASE_WORKFLOWS.macos));
+    const build = jobOf(macos, 'build', RELEASE_WORKFLOWS.macos);
+    const publish = jobOf(macos, 'publish', RELEASE_WORKFLOWS.macos);
+    expect(publish).toMatch(/^\s+extra_assets: 'sbom\/\* provenance\/\*'$/m);
+    const handover = build.slice(build.indexOf('./.github/actions/receive-speaking-glass'));
+    expect(handover).toMatch(/^\s+extra_files: 'sbom\/\* provenance\/\*'$/m);
+
+    const action = stripComments(readWorkflow(PUBLISH_ACTION));
+    const receive = action.slice(action.indexOf('./.github/actions/receive-speaking-glass'));
+    expect(receive.slice(0, receive.indexOf('\n\n'))).toMatch(/^\s+extra_files: \$\{\{ inputs\.extra_assets \}\}$/m);
+    expect(action.indexOf('./.github/actions/receive-speaking-glass')).toBeLessThan(action.indexOf('aws s3 cp'));
+
+    const attach = stepOf(action, 'Attach the files to the GitHub Release', PUBLISH_ACTION);
+    expect(attach).toMatch(/^\s+shell: bash$/m);
+    expect(envBlockOf(attach)).toMatch(/^\s+EXTRA_ASSETS: \$\{\{ inputs\.extra_assets \}\}$/m);
+
+    const check = stepOf(
+      stripComments(readWorkflow(RECEIVE_ACTION)),
+      'Every declared extra file must have survived it too',
+      RECEIVE_ACTION,
+    );
+    expect(check).toMatch(/^\s+shell: bash$/m);
+    expect(check, 'the receipt check must run unconditionally').not.toMatch(/^\s+if:/m);
+    expect(check, 'a missing extra must fail the job').not.toContain('continue-on-error');
+    expect(envBlockOf(check)).toMatch(/^\s+EXTRA_FILES: \$\{\{ inputs\.extra_files \}\}$/m);
+  });
+});
+
+/**
+ * A composite step's bash body, run in a scratch directory with `gh` faked.
+ * String assertions could not see what the attach step was missing: it
+ * expanded `sbom/*` against the CHECKOUT, where only the committed SBOM
+ * inputs live, so the SBOMs the build generated were never attached and the
+ * attachment check checked the shortened list.
+ */
+describe.skipIf(process.platform === 'win32')('the GitHub Release carries what was staged', () => {
+  function runBlock(relPath: string, stepName: string): string {
+    const lines = readWorkflow(relPath).split('\n');
+    const named = lines.findIndex((line) => line.trim() === `- name: ${stepName}`);
+    expect(named, `${relPath} has no step "${stepName}"`).toBeGreaterThan(-1);
+    const stepIndent = lines[named]!.search(/\S/);
+    const runAt = lines.findIndex((line, at) => at > named && line.trim() === 'run: |');
+    expect(runAt).toBeGreaterThan(named);
+    // The run block belongs to this step: no other list item in between.
+    for (const line of lines.slice(named + 1, runAt)) {
+      expect(line.search(/\S/) > stepIndent || line.trim() === '', `${stepName}: run: | is not its own`).toBe(true);
+    }
+    const indent = lines[runAt]!.search(/\S/);
+    const body: string[] = [];
+    for (const line of lines.slice(runAt + 1)) {
+      if (line.trim() !== '' && line.search(/\S/) <= indent) break;
+      body.push(line.slice(indent + 2));
+    }
+    return body.join('\n');
+  }
+
+  const GH = `
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
+const state = process.env.FAKE_GH_STATE;
+const read = () => (existsSync(state) ? JSON.parse(readFileSync(state, 'utf8')) : { created: false, assets: [] });
+const save = (s) => writeFileSync(state, JSON.stringify(s));
+const args = process.argv.slice(2);
+const s = read();
+if (args[0] !== 'release') process.exit(3);
+switch (args[1]) {
+  case 'view':
+    if (args.includes('--json')) {
+      for (const a of s.assets) console.log(a.name + ' ' + a.size);
+      process.exit(0);
+    }
+    process.exit(s.created ? 0 : 1);
+  case 'create':
+    s.created = true;
+    s.notes = readFileSync(args[args.indexOf('--notes-file') + 1], 'utf8');
+    save(s);
+    process.exit(0);
+  case 'upload':
+    for (const file of args.slice(3).filter((a) => a !== '--clobber')) {
+      s.assets.push({ path: file, name: basename(file), size: statSync(file).size });
+    }
+    save(s);
+    process.exit(0);
+  case 'list':
+  case 'edit':
+    process.exit(0);
+  default:
+    process.exit(3);
+}
+`;
+
+  /** A checkout beside a received artifact, as the publish job has them. */
+  function scratchRelease(version: string, publicUrl: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-attach-'));
+    workspaces.push(dir);
+    const write = (rel: string, text: string) => {
+      mkdirSync(dirname(join(dir, rel)), { recursive: true });
+      writeFileSync(join(dir, rel), text);
+    };
+    // The checkout: committed SBOM inputs only, as in the repository.
+    write('sbom/native-components.json', '{"committed":true}');
+    write('sbom/native-inputs.json', '{"committed":true}');
+    write('scripts/release-notes.mjs', "console.log('## the notes\\n\\nWhat changed.');\n");
+    write('scripts/release-feed.mjs', "console.log('');\n");
+    // The received artifact: what the build staged and generated.
+    write('verified/stage/release.json', JSON.stringify({ version, os: 'macos', publicUrl }));
+    write(`verified/stage/files/${version}/Speaking Glass_${version}_universal.dmg`, 'dmg bytes');
+    write(`verified/stage/files/${version}/SHA256SUMS-macos.txt`, 'sums');
+    write('verified/sbom/native-components.json', '{"committed":true}');
+    write('verified/sbom/native-inputs.json', '{"committed":true}');
+    write('verified/sbom/javascript.json', '{"generated":true}');
+    write('verified/sbom/rust-app.txt', 'generated');
+    write('verified/provenance/toolchain.txt', 'rustc 1.x');
+    // A directory, not a file: no pattern may count it as a match.
+    mkdirSync(join(dir, 'verified/licences/nested'), { recursive: true });
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    fakeTool(bin, 'gh', GH);
+    mkdirSync(join(dir, 'tmp'));
+    return dir;
+  }
+
+  /**
+   * The child's environment, allow-listed: nothing from the runner's own
+   * environment (`SHELLOPTS`, a stray `PUBLIC_URL`) may change the outcome.
+   */
+  function bash(dir: string, script: string, env: Record<string, string>) {
+    const result = spawnSync('bash', ['-c', script], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: {
+        PATH: [join(dir, 'bin'), dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
+        HOME: dir,
+        ...env,
+      },
+    });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  }
+
+  function attach({ extraAssets, version = '1.2.3', publicUrl }: { extraAssets: string; version?: string; publicUrl: string }) {
+    const dir = scratchRelease(version, publicUrl);
+    const { status, output } = bash(dir, runBlock(PUBLISH_ACTION, 'Attach the files to the GitHub Release'), {
+      FAKE_GH_STATE: join(dir, 'gh.json'),
+      GITHUB_REF_NAME: `v${version}`,
+      RUNNER_TEMP: join(dir, 'tmp'),
+      GH_TOKEN: 'not-a-token',
+      EXTRA_ASSETS: extraAssets,
+      // What the step used to read. It must not be what the notes say.
+      PUBLIC_URL: 'https://stale.example.test',
+    });
+    const state = existsSync(join(dir, 'gh.json'))
+      ? (JSON.parse(readFileSync(join(dir, 'gh.json'), 'utf8')) as { notes?: string; assets: Array<{ path: string }> })
+      : { assets: [] };
+    return {
+      status,
+      output,
+      notes: state.notes ?? '',
+      attached: state.assets.map((asset) => asset.path).sort(),
+    };
+  }
+
+  function receiveExtras(extraFiles: string) {
+    const dir = scratchRelease('1.2.3', 'https://updates.speakingglass.com');
+    return bash(dir, runBlock(RECEIVE_ACTION, 'Every declared extra file must have survived it too'), {
+      RECEIVED: 'verified',
+      EXTRA_FILES: extraFiles,
+    });
+  }
+
+  it('attaches the SBOMs and provenance the build generated, not the checkout’s', () => {
+    const { status, output, attached } = attach({
+      extraAssets: 'sbom/* provenance/*',
+      publicUrl: 'https://updates.speakingglass.com',
+    });
+    expect(status, output).toBe(0);
+    expect(attached).toEqual(
+      [
+        'verified/provenance/toolchain.txt',
+        'verified/sbom/javascript.json',
+        'verified/sbom/native-components.json',
+        'verified/sbom/native-inputs.json',
+        'verified/sbom/rust-app.txt',
+        'verified/stage/files/1.2.3/SHA256SUMS-macos.txt',
+        'verified/stage/files/1.2.3/Speaking Glass_1.2.3_universal.dmg',
+      ].sort(),
+    );
+  });
+
+  it('attaches only the staged files when there are no extras, as on Windows and Linux', () => {
+    const { status, output, attached } = attach({ extraAssets: '', publicUrl: 'https://updates.speakingglass.com' });
+    expect(status, output).toBe(0);
+    expect(attached).toEqual([
+      'verified/stage/files/1.2.3/SHA256SUMS-macos.txt',
+      'verified/stage/files/1.2.3/Speaking Glass_1.2.3_universal.dmg',
+    ]);
+  });
+
+  it('receives an artifact that carries every declared extra, and one that declares none', () => {
+    const declared = receiveExtras('sbom/* provenance/*');
+    expect(declared.status, declared.output).toBe(0);
+    expect(declared.output).toContain('sbom/*: received');
+    expect(declared.output).toContain('provenance/*: received');
+    const none = receiveExtras('');
+    expect(none.status, none.output).toBe(0);
+  });
+
+  it('refuses, on receipt, an extra that matches no file, or only a directory', () => {
+    const absent = receiveExtras('sbom/* attestations/*');
+    expect(absent.status).toBe(1);
+    expect(absent.output).toContain("::error::'attestations/*' matches no file in the received artifact");
+
+    const directory = receiveExtras('licences/*');
+    expect(directory.status).toBe(1);
+    expect(directory.output).toContain("::error::'licences/*' matches no file in the received artifact");
+  });
+
+  /*
+   * An unset `SPEAKING_GLASS_PUBLIC_URL` variable arrives empty, and the feed
+   * script falls back to its default origin. The notes used the raw input and
+   * pointed readers at `/releases/<version>/`, with no host.
+   */
+  it('links the release notes to the origin and version the files were staged for', () => {
+    const fallback = attach({ extraAssets: '', publicUrl: 'https://updates.speakingglass.com' });
+    expect(fallback.status, fallback.output).toBe(0);
+    expect(fallback.notes).toContain('served from https://updates.speakingglass.com/releases/1.2.3/.');
+    expect(fallback.notes).toContain('What changed.');
+
+    const custom = attach({ extraAssets: '', version: '2.0.0-rc.1', publicUrl: 'https://cdn.example.test//' });
+    expect(custom.status, custom.output).toBe(0);
+    expect(custom.notes).toContain('served from https://cdn.example.test/releases/2.0.0-rc.1/.');
+  });
+});
+
 /* ------------------------------------------------ the release notes */
 
 /**
@@ -2164,6 +2744,15 @@ describe('the release notes gate refuses what it exists to refuse', () => {
     expect(notesFor('# Changelog\n\n## v1.0.0\n').status).toBe(1);
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTODO: ${WRITTEN}\n`).status).toBe(1);
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTBD. ${WRITTEN}\n`).status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\nDRAFT. ${WRITTEN}\n`).status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\n### Draft notes\n\n${WRITTEN}\n`).status).toBe(1);
+  });
+
+  // A draft is something this app's users write, so the word is a release
+  // note; only the capitalised marker is a stub.
+  it('reads "draft" in ordinary prose as prose', () => {
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\nRecovers a draft script. ${WRITTEN}\n`).status).toBe(0);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\n### Draft recovery\n\n${WRITTEN}\n`).status).toBe(0);
   });
 
   /*
@@ -2214,6 +2803,25 @@ describe('the release notes gate refuses what it exists to refuse', () => {
     );
   });
 
+  /*
+   * The whole section and nothing else, byte for byte, on a fixture: a
+   * section cut short at its first sub-heading, or one that ran on into the
+   * next version's body without its heading, would still pass every check on
+   * the real notes, which test facts and not length.
+   */
+  it('publishes exactly the section, sub-headings included', () => {
+    const body =
+      `The second release. ${WRITTEN}\n\n### Known limitations\n\n` +
+      `Something a reader should know before downloading, stated plainly.`;
+    const changelog =
+      `# Changelog\n\n## v2.0.0\n\n${body}\n\n## v1.0.0\n\nThe first body. ${WRITTEN}\n`;
+    const dir = scratchRepo(NEEDS);
+    writeFileSync(join(dir, 'CHANGELOG.md'), changelog);
+    const printed = run(join(dir, 'scripts/release-notes.mjs'), ['v2.0.0'], dir);
+    expect(printed.status, printed.output).toBe(0);
+    expect(printed.output.trim()).toBe(body);
+  });
+
   it('refuses two sections for the same version', () => {
     const twice = `# Changelog\n\n## v1.0.0\n\n${WRITTEN}\n\n## v1.0.0\n\nSomething else. ${WRITTEN}\n`;
     const refused = notesFor(twice);
@@ -2228,6 +2836,12 @@ describe('the release notes gate refuses what it exists to refuse', () => {
   });
 });
 
+/*
+ * The promise: the section the release workflow publishes for this version
+ * exists, and every figure it quotes from the shipping configuration — the
+ * model's download and installed sizes, the minimum macOS version, the update
+ * host — is the figure that configuration declares. Wording is free.
+ */
 describe('the notes this tree would actually publish', () => {
   const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version;
 
@@ -2253,51 +2867,22 @@ describe('the notes this tree would actually publish', () => {
   });
 
   /*
-   * The contract, as a test. Each of these is a fact somebody needs before
-   * downloading: where it runs, what it needs, and what it does on its own.
+   * What the notes SAY is not under test. Release notes are prose, and a test
+   * that required particular words in them (it once required "probabilistic",
+   * "MIT", "English only" and a dozen more) turned every rewrite of the notes
+   * into a regex edit. What is under test is the handful of facts the notes
+   * quote from the shipping configuration, because those drift silently: the
+   * configuration changes and prose does not.
    */
-  it('states the contract a user needs before downloading', () => {
-    for (const fact of [
-      /macOS 12/,
-      /Apple Silicon and Intel/i,
-      /Windows 11/,
-      /Linux/,
-      /AppImage/,
-      /English only/i,
-      /separate download|not in the installer/i,
-      /no cloud/i,
-      /probabilistic/i,
-      /MIT/,
-    ]) {
-      expect(extracted.output, `the notes must state: ${fact}`).toMatch(fact);
-    }
-  });
-
-  /*
-   * The exclusions and the behaviours a user would not guess, stated rather
-   * than merely unclaimed. What a test CAN check is that each is present and
-   * specific — which is the thing that goes missing when notes are rewritten
-   * in a hurry. It cannot be a blacklist of overclaims.
-   */
-  it('states each exclusion and each automatic behaviour', () => {
-    expect(extracted.output, 'the unsigned Windows build must be explicit').toMatch(/not code-signed/i);
-    expect(extracted.output, 'and what SmartScreen will say about it').toMatch(/SmartScreen/);
-    expect(extracted.output, 'the update check must be disclosed').toMatch(/checks for updates/i);
-    expect(extracted.output, 'and that it never interrupts a take').toMatch(/never prompts[^.]*during a take/i);
-    expect(extracted.output, 'and that it can be turned off').toMatch(/automatic check off/i);
-    // The host the app actually polls, read from where it is compiled in, so
-    // the notes cannot keep naming an old one after the feed moves.
+  it('names the host the updater actually contacts', () => {
+    // Read from where it is compiled in, so the notes cannot keep naming an
+    // old host after the feed moves.
     const updater = readFileSync(join(REPO_ROOT, 'src-tauri/src/updater.rs'), 'utf8');
     const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(updater)?.[1];
     expect(base, 'UPDATE_BASE_URL could not be read out of updater.rs').toBeDefined();
-    expect(extracted.output, 'and where it goes').toContain(new URL(base!).hostname);
-    expect(extracted.output, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
-
-    // The delivery analysis (choppy-delivery detection, the variety score) was
-    // removed with the coaching era. Notes that still list it as a limitation
-    // describe a product that no longer exists.
-    expect(extracted.output).not.toMatch(/choppy/i);
-    expect(extracted.output).not.toMatch(/variety score/i);
+    expect(extracted.output, 'the notes must name the update host').toContain(
+      new URL(base!).hostname,
+    );
   });
 
   /*

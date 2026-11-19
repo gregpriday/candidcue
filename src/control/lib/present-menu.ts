@@ -8,7 +8,7 @@
  * window"), and has one line to say what will happen to the window.
  */
 import type { ScriptPart } from '../../shared/contracts';
-import { NOUNS } from '../../shared/take-vocabulary';
+import { NOUNS, PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import type { PresentationMode } from '../services/settings-types';
 import type { TakePartRequest } from './start-take';
 
@@ -44,13 +44,12 @@ export interface PresentMenuItem {
  * take, not editing a preference.
  */
 /**
- * Where a take can begin — and, since §parts, where it ends (CCUX-014,
- * CCUX-015, CCUX-016).
+ * Where a take can begin — and, for a part, where it ends.
  *
  * The three questions somebody answers at launch are where to start, how to
  * display, and whether this is a take or a rehearsal. This covers the first;
  * `presentMenuItems` below covers the second; the third is the Practise row the
- * Editor appends beneath them (`file.practise`, §practice). Deliberately NOT a
+ * Editor appends beneath them (`file.practise`). Deliberately NOT a
  * place for microphone, font or calibration settings — those belong in
  * Settings, and a launch menu that grew them would become the Preflight page
  * this product removed on purpose.
@@ -60,12 +59,10 @@ export interface PresentMenuItem {
  * does what the other two do.
  *
  * ---------------------------------------------------------------------------
- * PART ROWS REPLACED MARKER ROWS
+ * PART ROWS
  * ---------------------------------------------------------------------------
- * This used to offer one row per authored `[Take: …]` marker, and each of them
- * started a take that ran to the end of the script. A part row starts the same
- * take and also carries the part's end, so the take knows what it is recording
- * — which is the whole of what §parts added. A script with no markers now gets
+ * A part row starts a take and also carries the part's end, so the take knows
+ * what it is recording. A script with no `[Take: …]` markers gets
  * rows too, divided on its own headings, so the feature is reachable without
  * having to learn a directive first.
  */
@@ -199,6 +196,55 @@ export function startMenuItems(
     });
   }
 
+  return items;
+}
+
+/** What the practice rows need to know about the caret. */
+export interface PracticeMenuInput {
+  /** Snapped caret position, or null when the editor has no caret. */
+  hereTokenIndex: number | null;
+  /** Where the caret position is: a quoted opening phrase or a heading. */
+  hereLabel: string | null;
+  /** The part the caret sits in, or null on an undivided script. */
+  herePart: ScriptPart | null;
+}
+
+/**
+ * The rehearsal rows: the whole script, and a single section (#241).
+ *
+ * A rehearsal is most useful for the section about to be filmed, so "Practise
+ * from here" is the take's "From here" told it is a rehearsal: it opens at the
+ * caret, and on a divided script it carries the part the caret is in, so the
+ * stage can say which part is being practised. That is also how ANY part is
+ * reached — a caret on a heading (an outline click) or on a part's first
+ * words — without a second list of part rows doubling the menu.
+ *
+ * A part bounds nothing here either: reading carries on past its end, and a
+ * practice reports nothing when it stops, so the part is a label and an "end
+ * reached" mark on the glass and nothing more.
+ */
+export function practiceMenuItems(
+  input: PracticeMenuInput,
+  practise: (tokenIndex?: number, part?: TakePartRequest) => void,
+): PresentMenuItem[] {
+  const items: PresentMenuItem[] = [
+    {
+      label: PRACTICE_LABEL,
+      description: 'A rehearsal in a window · nothing is reported',
+      group: {},
+      onselect: () => practise(),
+    },
+  ];
+  // At the beginning of an undivided script it would be the row above again.
+  if (input.hereTokenIndex !== null && (input.hereTokenIndex > 0 || input.herePart !== null)) {
+    const token = input.hereTokenIndex;
+    const part = input.herePart;
+    items.push({
+      label: `${PRACTICE_LABEL} from here`,
+      description: locate(input.hereLabel ?? 'From the cursor', part),
+      onselect: () => practise(token, part === null ? undefined : { id: part.id }),
+    });
+  }
   return items;
 }
 

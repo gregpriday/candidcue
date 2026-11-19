@@ -1,16 +1,15 @@
 <!--
-  Right-click menus (desktop refinement §10.6, §20.1).
+  Right-click menus.
 
   ---------------------------------------------------------------------------
   WHY NOT A NATIVE MENU
   ---------------------------------------------------------------------------
-  §10.6 asks for native menus "where feasible", and this is the case where it is
-  not. Tauri can pop a native menu at a point, but doing so would mean: a new IPC
+  A native menu is not feasible here. Tauri can pop a native menu at a point, but doing so would mean: a new IPC
   command taking screen coordinates and an item list from the webview; a menu
   rebuilt per right-click because the items depend on the row; and a second
   dispatch path back into `runCommand` with its own id vocabulary. That is a
-  meaningful widening of the ACL surface (§49's rule is that every command is
-  granted deliberately) in exchange for a menu the user cannot tell apart at a
+  meaningful widening of the ACL surface (every command is granted
+  deliberately) in exchange for a menu the user cannot tell apart at a
   glance from this one.
 
   What actually makes a context menu feel native is its BEHAVIOUR, and that is
@@ -49,9 +48,8 @@
   /**
    * Hidden until it has been measured and placed.
    *
-   * The comment here used to CLAIM this and the style did not implement it, so a
-   * menu opened near the right or bottom edge painted one frame out of bounds
-   * before `tick()` moved it. `visibility` rather than `display`, because the
+   * Without it a menu opened near the right or bottom edge paints one frame
+   * out of bounds before `tick()` moves it. `visibility` rather than `display`, because the
    * element still has to be laid out for `getBoundingClientRect` to mean
    * anything.
    */
@@ -171,7 +169,7 @@
       closeContextMenu(false);
       return;
     }
-    // Arrows, then first-letter navigation (§18.3, §7.4) — the arithmetic
+    // Arrows, then first-letter navigation — the arithmetic
     // lives in `menu-nav.ts`, shared with the row's ⋯ menu, which is what keeps
     // the two answering a letter the same way.
     const next =
@@ -255,7 +253,7 @@
         }}
       >
         <!--
-          A checkmark column, not a pill (§18.3). A menu row that carries its
+          A checkmark column, not a pill. A menu row that carries its
           state as a coloured capsule is a menu row pretending to be a chip; the
           platform convention is a tick in a reserved leading column, and
           reserving it unconditionally keeps every label on the same left edge
@@ -366,7 +364,7 @@
     color: inherit;
   }
   /*
-   * Disabled items stay VISIBLE. §10.6: a command whose absence would be
+   * Disabled items stay VISIBLE: a command whose absence would be
    * confusing should remain in the menu, greyed — a Restore that vanishes
    * outside Trash leaves somebody wondering whether the app can restore at all.
    */
@@ -385,7 +383,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Right-aligned, muted, tabular — the platform convention (§18.3). */
+  /* Right-aligned, muted, tabular — the platform convention. */
   .shortcut {
     flex: 0 0 auto;
     color: var(--text-faint);

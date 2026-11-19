@@ -366,7 +366,7 @@
        the edge of peripheral vision registers as a flicker and pulls the eye
        off the line — the exact cost the ladder exists to avoid paying. Rides
        the same variable every other stage tween does, so frame pressure
-       (§61 step 1) removes it along with the rest. */
+       (companion §61 step 1) removes it along with the rest. */
     transition: fill-opacity var(--stage-fx-ms, 200ms) linear;
   }
 
