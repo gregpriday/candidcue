@@ -17,7 +17,7 @@
  * is free text, though, so keep recogniser output out of the errors this
  * reports.
  *
- * On by default in a dev build; see {@link initConnectTrace}.
+ * On by default in a dev build; see {@link initAudioTrace}.
  */
 import { ipcInvoke } from './ipc';
 

@@ -1367,7 +1367,7 @@ export function startLiveSession(input: StartSessionInput): string {
         // The remedy named here is one the Live screen can actually perform —
         // `switchMicrophone` below drives the pipeline's input switch, and the
         // take controls grow an input picker while the input is lost or a
-        // fallback is in use.
+        // fallback input was chosen for it.
         /*
          * No toast: `micState: 'disconnected'` is what the take controls
          * render, and they grow the input picker that fixes it. The toast said
