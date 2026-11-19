@@ -756,15 +756,19 @@ not change.
 
 What the command actually checks: both results carry provenance and a scoring
 table, those tables cover the same 18 scoring runs (each once) across all eight
-families, both tiers were replayed under the same alignment config by the same
-cc-bench build, the Tier C evidence was rendered at the as-shipped rig alone (the
+families, both tiers were replayed under the same alignment config, against the
+same script text, by the same clean build of a commit (a dirty build is refused:
+two of one commit carry the same stamp and can be different programs), the Tier
+C evidence was rendered at the as-shipped rig alone (the
 `60hz` preset with `--focus-lead 0`, compared field by field), every gated
 metric is present and a possible measurement, and each clears its limit. It also
 holds the claim — `--label` — to what the results recorded: every scoring
 fixture has a capture record, the same one in both tiers; all of them were
 captured under one set of conditions; their language and the engine's compile
 language are the claimed one; the model transcribes it; and the weights it
-loaded are the bytes `src-tauri/models/catalogue.json` lists for that model.
+loaded — every graph and the token table — are the bytes
+`src-tauri/models/catalogue.json` lists for that model, as compiled into
+cc-bench rather than read from whichever checkout the gate runs in.
 English results labelled `fr` fail. A result saved before scoring tables or
 provenance existed is refused; re-capture and re-run the tier. What it does
 **not** check is in "Known gaps" below.
