@@ -657,47 +657,51 @@
   );
 
   /*
-   * Which edge the label takes: the one AWAY from the reading band.
+   * Which edge the label takes: the edge of the safe rectangle FARTHER from
+   * the reading band, and flush with it.
    *
    * The band is placed by the lens, not by convention — a camera below the
-   * screen puts it in the bottom tenth of the glass, and optics allow anywhere
-   * from 5% to 95% — so a label fixed to the bottom edge would sit on the words
-   * being read on exactly those rigs. Measured in the talent plane's own
-   * coordinates, like the band.
-   *
-   * On the top edge it sits below the row the hold chip, the acknowledgement
-   * and the Escape prompt share, so a transient prompt never lands on it. On
-   * an edge that is PHYSICALLY the top — the bottom edge under a vertical
-   * mirror — it clears the host's "Take controls" tab by the same measure the
-   * acknowledgement chip uses.
-   */
-  /*
-   * The bottom edge's inset: the dock's baseline, or — when a vertical mirror
-   * makes that edge the physical top — clear of the host's tab (16px down,
-   * 32px tall), measured from the safe rectangle's BOTTOM inset, which is the
-   * one that sits above it on the panel.
-   */
-  const takeScopeBottomPx = $derived.by(() => {
-    if (!(embedded && settings?.mirrorY)) return 16;
-    const safeBottomInsetPx = (vh * (100 - safeInsets.y - safeInsets.height)) / 100;
-    return Math.max(16, Math.round(16 + 32 + 12 - safeBottomInsetPx));
-  });
-  /*
-   * Bottom unless the band leaves no room under it. Measured, not a midline:
-   * a band at 55% has nearly half the glass below it, and moving the label to
-   * the top there would only bring it nearer the words. The label's height is
-   * its own line plus its padding and border.
+   * screen puts it in the bottom tenth of the glass — so a label fixed to the
+   * bottom edge would sit on the words being read on exactly those rigs.
+   * Compared in the safe rectangle's own terms, which is what the calibrated
+   * `readingBandY` is already in; the flat `readingBandCenterPercent` is of the
+   * viewport and is converted. The farther edge is at least half the safe
+   * rectangle from the band's centre, and the label sits ON that edge rather
+   * than inset into the reading area — the transient prompts that share an
+   * edge with it are drawn after it and paint over it.
    */
   const takeScopeAtTop = $derived.by(() => {
-    if (!settings || vh === 0) return false;
-    const center = settings.optics ? settings.optics.readingBandY * 100 : settings.readingBandCenterPercent;
-    const bandBottomPx = (vh * (center + settings.readingBandHalfHeightPercent)) / 100;
-    const safeBottomPx = (vh * (safeInsets.y + safeInsets.height)) / 100;
-    const labelPx = overlayFontSizePx * 1.9 + 2;
-    return bandBottomPx + 8 > safeBottomPx - takeScopeBottomPx - labelPx;
+    if (!settings) return false;
+    const band = settings.optics
+      ? settings.optics.readingBandY
+      : safeInsets.height > 0
+        ? (settings.readingBandCenterPercent - safeInsets.y) / safeInsets.height
+        : settings.readingBandCenterPercent / 100;
+    return band > 0.5;
   });
-  const takeScopeTop = $derived(takeScopeAtTop ? `calc(${ackTopPx}px + 2.6em)` : undefined);
-  const takeScopeBottom = $derived(takeScopeAtTop ? undefined : `${takeScopeBottomPx}px`);
+  /*
+   * Each edge's inset. Whichever edge is PHYSICALLY the top — the top without
+   * a vertical mirror, the bottom with one — clears the host's "Take controls"
+   * tab (16px down, 32px tall), measured from the safe rectangle's inset on
+   * that physical side, as the acknowledgement chip does. The physical bottom
+   * sits on the dock's baseline; the label is on the other side from the dock.
+   */
+  const tabClearPx = (insetPx: number): number =>
+    embedded ? Math.max(16, Math.round(16 + 32 + 12 - insetPx)) : 16;
+  const takeScopeTop = $derived(
+    !takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? '16px'
+        : `${tabClearPx((vh * safeInsets.y) / 100)}px`,
+  );
+  const takeScopeBottom = $derived(
+    takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? `${tabClearPx((vh * (100 - safeInsets.y - safeInsets.height)) / 100)}px`
+        : '16px',
+  );
 
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');

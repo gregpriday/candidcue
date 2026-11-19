@@ -197,23 +197,28 @@ describe('the take-scope label', () => {
     expect(label(flippedX.container)?.classList.contains('flip-x')).toBe(true);
   });
 
-  it('takes the edge away from the reading band', async () => {
+  it('takes the safe rectangle’s edge farther from the reading band, flush with it', async () => {
     const usual = await mount({ practice: true }, envelope({ readingBandCenterPercent: 38 }));
     expect(label(usual.container)?.dataset['edge']).toBe('bottom');
-    expect(label(usual.container)?.style.bottom).not.toBe('');
+    expect(label(usual.container)?.style.bottom).toBe('16px');
     expect(label(usual.container)?.style.top).toBe('');
     document.body.innerHTML = '';
 
-    // Below the middle but with room under it: the bottom is still the far edge.
-    const lowish = await mount({ practice: true }, envelope({ readingBandCenterPercent: 70 }));
-    expect(label(lowish.container)?.dataset['edge']).toBe('bottom');
+    // A camera below the screen puts the band low on the glass.
+    const low = await mount({ practice: true }, envelope({ readingBandCenterPercent: 70 }));
+    expect(label(low.container)?.dataset['edge']).toBe('top');
+    // Clear of the host's Take controls tab, which is 16px down and 32px tall.
+    expect(label(low.container)?.style.top).toBe('60px');
+    expect(label(low.container)?.style.bottom).toBe('');
     document.body.innerHTML = '';
 
-    // A camera below the screen puts the band in the bottom tenth of the glass.
-    const low = await mount({ practice: true }, envelope({ readingBandCenterPercent: 92 }));
-    expect(label(low.container)?.dataset['edge']).toBe('top');
-    expect(label(low.container)?.style.top).not.toBe('');
-    expect(label(low.container)?.style.bottom).toBe('');
+    // Under a vertical mirror the bottom edge is the physical top, by the tab.
+    const flipped = await mount(
+      { practice: true },
+      envelope({ readingBandCenterPercent: 38, mirrorY: true }),
+    );
+    expect(label(flipped.container)?.dataset['edge']).toBe('bottom');
+    expect(label(flipped.container)?.style.bottom).toBe('60px');
   });
 
   it('is not a live region: the drawer already announces the part', async () => {
