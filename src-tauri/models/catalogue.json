@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "mirrorBaseUrl": null,
+  "mirrorBaseUrl": "https://updates.speakingglass.com/models",
   "defaultModelId": "x-asr-480ms",
   "models": [
     {

@@ -1,0 +1,65 @@
+name: Mirror speech models
+
+# Fills the mirror `src-tauri/models/catalogue.json` names (`mirrorBaseUrl`)
+# with every archive the catalogue pins, on the R2 bucket that already serves
+# the update feed. The app asks that mirror first and the model publisher's
+# own release second, hash-checking both, so this is what keeps a new install
+# working when upstream's mutable `asr-models` tag changes under a build.
+#
+# `scripts/mirror-models.mjs` does the work and says what it refuses: an
+# archive goes up only after its bytes match the pinned SHA-256, only to a key
+# that is absent (`If-None-Match: *`), and the run passes only once the public
+# URL a client uses serves the pinned bytes in full. Re-running is safe — an
+# archive already there is verified, not rewritten.
+#
+# Runs when the catalogue, its notices or this tooling change on the two
+# long-lived branches, and on demand from them. Nothing else can start it: a
+# pull request never sees the bucket credentials.
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - src-tauri/models/catalogue.json
+      - src-tauri/models/*/ATTRIBUTION.md
+      - legal/licenses/**
+      - scripts/mirror-models.mjs
+      - .github/workflows/mirror-models.yml
+  workflow_dispatch:
+
+# One writer at a time; a second waits rather than racing the first to a key.
+concurrency:
+  group: mirror-speech-models
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror the catalogue's archives
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Upload what is missing, then read every archive back
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.SPEAKING_GLASS_R2_BUCKET }}
+          SPEAKING_GLASS_PUBLIC_URL: ${{ vars.SPEAKING_GLASS_PUBLIC_URL }}
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET SPEAKING_GLASS_PUBLIC_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name} is empty. The R2 secrets and SPEAKING_GLASS_PUBLIC_URL must be set on the repository, not only on a release environment."
+              exit 1
+            fi
+          done
+          node scripts/mirror-models.mjs sync

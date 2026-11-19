@@ -4026,6 +4026,26 @@ mod tests {
         assert_eq!(urls[1], model.archive.upstream_url);
     }
 
+    /// The shipped catalogue asks the mirror first (#198). The exact URL is
+    /// pinned because `scripts/mirror-models.mjs` writes the bucket key it
+    /// serves; `tests/integration/mirror-models.test.ts` pins the same string
+    /// on that side, so the two cannot drift apart unnoticed.
+    #[test]
+    fn the_shipped_catalogue_asks_the_mirror_before_upstream() {
+        let catalogue = crate::speech::catalogue::catalogue();
+        let model = catalogue.get("x-asr-480ms").expect("bundled entry");
+        assert_eq!(
+            archive_urls(catalogue, model),
+            vec![
+                format!(
+                    "https://updates.speakingglass.com/models/sha256/{}/{}",
+                    model.archive.sha256, model.archive.file_name
+                ),
+                model.archive.upstream_url.clone(),
+            ]
+        );
+    }
+
     #[test]
     fn with_no_mirror_configured_only_upstream_is_tried() {
         let files = fixture_files();

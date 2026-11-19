@@ -2436,7 +2436,13 @@ describe('third-party actions are pinned to immutable commits', () => {
    * standard practice was of a widely-used action, and "we trust the owner" is
    * the assumption it broke.
    */
-  const WORKFLOWS = ['.github/workflows/ci.yml', ...Object.values(RELEASE_WORKFLOWS), PUBLISH_ACTION, RECEIVE_ACTION];
+  const WORKFLOWS = [
+    '.github/workflows/ci.yml',
+    '.github/workflows/mirror-models.yml',
+    ...Object.values(RELEASE_WORKFLOWS),
+    PUBLISH_ACTION,
+    RECEIVE_ACTION,
+  ];
 
   it('has workflows to check', () => {
     expect(WORKFLOWS.length).toBeGreaterThan(1);
