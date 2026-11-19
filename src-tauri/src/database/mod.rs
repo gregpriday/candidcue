@@ -255,7 +255,7 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
     // Integrity BEFORE migrations. Migrations are the single most destructive
     // thing the app does to the database, and running them against a corrupt
     // file can turn a recoverable problem into an unrecoverable one — so this
-    // check has to come first, not after (H7).
+    // check has to come first, not after.
     let check: String = sqlx::query_scalar("PRAGMA quick_check")
         .fetch_one(&pool)
         .await

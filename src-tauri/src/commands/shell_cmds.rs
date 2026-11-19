@@ -1,5 +1,5 @@
 //! Desktop-shell commands: the native menu's state, the window's identity, and
-//! where the window sits (desktop refinement §5, §6, §20.4).
+//! where the window sits.
 //!
 //! These exist because three things a desktop application is judged on cannot be
 //! done from a webview at all:
@@ -144,7 +144,7 @@ mod macos_document_edited {
     }
 }
 
-/// Tell Rust which script a dropped image belongs to (§11.9, §20.2).
+/// Tell Rust which script a dropped image belongs to.
 ///
 /// Pushed by the editor when it opens a script and cleared when it leaves. See
 /// `windows::drag_drop::DropTargetScript` for why Rust has to be told, and why
@@ -167,7 +167,7 @@ pub fn set_drop_target_script<R: tauri::Runtime>(
     Ok(())
 }
 
-/// Open the Preferences window, or bring it forward (§14.1).
+/// Open the Preferences window, or bring it forward.
 ///
 /// The window's lifecycle is entirely Rust's — see `windows/preferences.rs`.
 /// The frontend asks; it does not get to create a second one.
@@ -333,7 +333,7 @@ pub fn close_control_window<R: tauri::Runtime>(
 /// Open the log directory in the platform file browser (Help › Reveal Logs).
 ///
 /// Points at the logs directory specifically rather than the data root, which
-/// `reveal_data_folder` already covers. §20.3's rule is that a reveal command
+/// `reveal_data_folder` already covers. The rule is that a reveal command
 /// shows exactly what its name says and never a parent that happens to contain
 /// the database.
 #[tauri::command]

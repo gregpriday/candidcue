@@ -275,7 +275,7 @@ pub async fn list_scripts(
     let page_size = page.page_size.clamp(1, 500);
     let offset = (page.page as i64) * (page_size as i64);
 
-    // C7: these keys are the ones `ScriptSort` in
+    // These keys are the ones `ScriptSort` in
     // src/control/services/scripts-types.ts actually emits, plus the
     // `last_opened` the Recent view maps onto. The arms used to be
     // `title_asc`/`opened_desc`, which no caller has ever sent, so every sort
@@ -296,7 +296,7 @@ pub async fn list_scripts(
         }
     };
 
-    // C3: `status` is what the control window's library *view* maps onto —
+    // `status` is what the control window's library *view* maps onto —
     // `trash` for the Trash view, absent everywhere else. It used to be
     // impossible to set, because control sent a `view` field that this struct
     // does not have and serde dropped on the floor, so the Trash view listed
@@ -476,8 +476,8 @@ pub async fn save_script(
     // External-change detection (spec §21.3). The preimage is read once, here,
     // immediately before the replacement, and is the value both the conflict
     // check and the revision snapshot use — so the content that is about to be
-    // destroyed is the content that gets preserved (H2), and the check cannot
-    // be separated from the write by a wider TOCTOU window (H1).
+    // destroyed is the content that gets preserved, and the check cannot
+    // be separated from the write by a wider TOCTOU window.
     let canonical = paths.canonical_file(script_id);
     let preimage: Option<String> = if canonical.exists() {
         Some(fs::read_to_string(&canonical)?)
@@ -612,7 +612,7 @@ pub async fn save_script(
     }
 
     // The save is durable from here on. Retention thinning is maintenance:
-    // its failure must never be reported as a failed save (H2).
+    // its failure must never be reported as a failed save.
     if let Err(err) = prune_revisions(pool, paths, script_id).await {
         tracing::warn!(
             script_id = script_id.as_str(),
@@ -680,7 +680,7 @@ async fn commit_save(
     .execute(&mut *tx)
     .await?;
     // A lost compare-and-swap used to commit anyway and report the new
-    // revision while the row still described the old content (H1).
+    // revision while the row still described the old content.
     expect_single_row(updated.rows_affected(), c.expected_revision)?;
     update_fts(&mut tx, script_id, c.title, c.plain, c.source).await?;
     tx.commit().await?;
@@ -997,7 +997,7 @@ pub async fn permanently_delete_script(
     // References cascade with the script row; delete asset rows housed in
     // this script's directory first (they are per-script copies). The prefix
     // is compared with `substr` rather than `LIKE` so that `%` and `_` can
-    // never behave as wildcards, independently of id validation (C1).
+    // never behave as wildcards, independently of id validation.
     let prefix = format!("scripts/{}/", script_id.as_str());
     let commit = async {
         let mut tx = pool.begin().await?;
@@ -1174,8 +1174,7 @@ pub async fn create_revision_snapshot(
 /// Spec §21.4: a session start captures a revision of the script as it is
 /// about to be performed, so the text that was on stage stays recoverable
 /// even if the script is edited afterwards. This is a Rust-owned step of
-/// session start — it was previously specified but never implemented, so no
-/// `pre_session` revision has ever existed (H2).
+/// session start.
 ///
 /// Returns the revision id, or `None` when the script has no canonical file.
 pub async fn snapshot_pre_session(
@@ -1280,7 +1279,7 @@ pub async fn restore_revision(
     // `save_script` snapshots the preimage — the content this restore
     // destroys — under the per-script lock. Doing it here as well would both
     // duplicate the snapshot and reintroduce a window between the snapshot
-    // and the replacement (H2).
+    // and the replacement.
     save_script(
         pool,
         paths,
@@ -1393,7 +1392,7 @@ pub async fn purge_expired_trash(
     for id in ids {
         // Ids come from our own table, but a row whose id is not a canonical
         // UUID (hand-edited database, restored backup) must never be turned
-        // into a filesystem path (C1).
+        // into a filesystem path.
         let Ok(script_id) = ScriptId::parse(&id) else {
             tracing::error!(script_id = %id, "refusing to purge a script whose id is not a UUID");
             continue;
@@ -1716,7 +1715,7 @@ pub async fn restore_canonical_from_latest_revision(
 ///
 /// This is the "atomic rename landed, database commit did not" crash state.
 /// It is invisible to an existence check, which is why it used to survive
-/// every startup untouched (H3).
+/// every startup untouched.
 pub async fn repair_row_from_canonical_file(
     pool: &SqlitePool,
     paths: &DataPaths,

@@ -130,7 +130,7 @@ pub fn run() {
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
-            // Speech-model install (§152): the recogniser is downloaded after
+            // Speech-model install: the recogniser is downloaded after
             // installation rather than bundled.
             commands::get_speech_model_status,
             commands::start_speech_model_download,
@@ -166,7 +166,7 @@ pub fn run() {
             commands::log_client_diagnostic,
             commands::export_support_bundle,
             commands::reveal_support_bundle,
-            // Desktop shell (refinement §5, §6)
+            // Desktop shell: menu state, window title, drop target
             commands::set_menu_state,
             commands::set_window_title,
             commands::set_drop_target_script,
@@ -324,8 +324,8 @@ pub fn run() {
             handle.manage(crate::updater::UpdaterState::default());
 
             // No credential store. The OS keychain entry existed for exactly one
-            // secret — the speech provider's API key — and the recogniser is now
-            // a bundled resource. The app holds no secrets at all.
+            // secret — the speech provider's API key — and the recogniser now
+            // runs on-device. The app holds no secrets at all.
 
             // Rust-owned recogniser: it holds the loaded model and the take's
             // streaming session. It stays in Rust because the alignment engine
@@ -349,7 +349,7 @@ pub fn run() {
             // have to cross a process boundary to meet.
             handle.manage(AlignmentState::new());
 
-            // Asset protocol scope (spec §47.8, M2).
+            // Asset protocol scope (spec §47.8).
             //
             // The scripts root used to be granted RECURSIVELY here, which put
             // every script's canonical `script.md` and its whole revision
@@ -362,19 +362,19 @@ pub fn run() {
             // Nothing is granted at runtime any more. The one exception was the
             // bundled Listener pack directory, which in a dev build lived in the
             // repo, outside `$RESOURCE`, and so could not be expressed as a
-            // static pattern. The Listener is gone (§106) and the exception with
+            // static pattern. The Listener is gone and the exception with
             // it, which leaves the static config as the whole story.
 
             register_stage_event_bridge(&handle);
 
             // Notice monitors being plugged, unplugged, or rearranged so
-            // Preflight can revalidate its display selection (spec §52.5).
+            // Settings can refresh its display list (spec §52.5).
             crate::windows::spawn_display_watcher(&handle);
 
             // Startup reconciliation (spec §47.6). This runs to completion
             // HERE, synchronously, before `setup` returns and therefore before
             // the event loop dispatches the first IPC message — reconciliation
-            // repairs and a user command must never interleave (H3). It also
+            // repairs and a user command must never interleave. It also
             // uses the MANAGED lock set: a private `ScriptLocks::default()`
             // locks nothing that a command would respect, which is exactly how
             // a repair could race a save.
@@ -521,7 +521,7 @@ pub fn run() {
         });
 }
 
-/// Remember where the control window rests (desktop refinement §5.3).
+/// Remember where the control window rests.
 ///
 /// A desktop application that reopens 1240 × 820 in the middle of the screen
 /// every launch, no matter how the user last arranged it, is one of the plainest
@@ -792,13 +792,13 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     // Periodic stage motion report (companion §54): diagnostics and recovery
     // for control, never a feedback loop into the aligner.
     //
-    // M1: these two used to be relayed VERBATIM, with no generation check at
+    // These two used to be relayed VERBATIM, with no generation check at
     // all — the only stage-originated events that were not gated. A motion
     // report or an escape press from a stage generation that is already gone
     // therefore reached control and was acted on, which for escape means
     // tearing down the take that is running now.
     //
-    // S1: they also used to be relayed under the SAME name the stage emits.
+    // They also used to be relayed under the SAME name the stage emits.
     // A webview emit is a broadcast, so control's listener fired once directly
     // from the stage (bypassing the check right below) and once from this
     // relay. The stage now emits `escape-pressed`/`motion-report`; control
@@ -817,7 +817,7 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     // §62 recoverable stage-layout failure. The stage holds motion rather than
     // move on guessed line positions, so the operator has to be told — this is
     // the only path by which control learns. Relayed under its own name for the
-    // S1 reason above, and generation-checked like every other stage-originated
+    // broadcast reason above, and generation-checked like every other stage-originated
     // event: a held layout from a stage lifetime that is already gone is not a
     // problem with the take running now.
     let handle = app.clone();

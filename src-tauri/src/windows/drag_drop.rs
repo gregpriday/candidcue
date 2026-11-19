@@ -1,4 +1,4 @@
-//! Dropping Markdown onto the window (desktop refinement §10.5, §20.2).
+//! Dropping Markdown onto the window.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY THIS IS IN RUST, WHEN THE OBVIOUS IMPLEMENTATION IS FOUR LINES OF JS
@@ -54,15 +54,15 @@
 //! Turning `dragDropEnabled` off is NOT the fix: it disables the
 //! `WindowEvent::DragDrop` this module needs *and* hands drops back to the
 //! webview's own default, which on WKWebView means navigating to the file URL —
-//! the exact behaviour §20.2 asks to prevent. Closing this properly needs an
+//! the exact behaviour a drop must never cause. Closing this properly needs an
 //! upstream option to suppress the renderer emission, and is worth raising
 //! there rather than worked around here.
 //!
 //! ---------------------------------------------------------------------------
 //! WHAT IS ACCEPTED, AND WHAT HAPPENS TO THE REST
 //! ---------------------------------------------------------------------------
-//! Markdown and plain text, by extension. §10.5: reject unsupported files with a
-//! concise notice rather than silently ignoring them — a drop that does nothing
+//! Markdown and plain text, by extension. Unsupported files are rejected with a
+//! concise notice rather than silently ignored — a drop that does nothing
 //! and says nothing is indistinguishable from a drop the app failed to notice.
 //! Directories are skipped without comment, because dragging a folder onto a
 //! document app is an ordinary mistake and not worth a scolding.
@@ -172,7 +172,7 @@ fn is_image(path: &Path) -> bool {
     has_extension(path, &IMPORTABLE_IMAGES)
 }
 
-/// The script an image drop belongs to (§11.9, §20.2).
+/// The script an image drop belongs to.
 ///
 /// ---------------------------------------------------------------------------
 /// WHY RUST HAS TO BE TOLD, AND WHY A SCRIPT ID IS SAFE TO TELL IT

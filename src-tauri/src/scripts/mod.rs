@@ -219,7 +219,7 @@ pub struct ScriptSummary {
     pub title: String,
     /// Optimistic-concurrency revision. Carried on every summary so the
     /// library can perform compare-and-swap transitions (rename, trash,
-    /// restore) without first re-reading the document (M4, spec §48.4).
+    /// restore) without first re-reading the document (spec §48.4).
     pub script_revision: i64,
     pub status: ScriptStatus,
     pub language: String,
@@ -324,7 +324,7 @@ pub struct ScriptPage {
 /// Twin of the wire filter built by `listScripts` in
 /// src/control/services/scripts.ts.
 ///
-/// C3: `deny_unknown_fields` is the point of this struct now. Control used to
+/// `deny_unknown_fields` is the point of this struct now. Control used to
 /// send `{ view: 'trash' }`; serde silently discarded `view`, `status` stayed
 /// `None`, and the Trash view listed live scripts — which the per-row
 /// "Delete permanently" and "Empty Trash" controls then acted on. The library

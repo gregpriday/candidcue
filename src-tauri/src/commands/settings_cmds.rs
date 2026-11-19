@@ -105,11 +105,9 @@ pub(crate) fn broadcast_settings<R: tauri::Runtime>(
 /// picker in Rust, because the dialog plugin is deliberately not granted to
 /// JavaScript (§50.7), and validates the destination before handing it on.
 ///
-/// C5: this used to take `destination: String` from the webview. Nothing could
-/// supply it, so `exportAllData()` invoked with `{ destination: undefined }`,
-/// the key was dropped from the JSON, deserialization failed, and the
-/// un-`catch`ed promise meant the operator saw no export, no toast and no
-/// error. `Ok(None)` means the operator cancelled.
+/// A `destination` taken from the webview could never be supplied, for the
+/// same reason: JavaScript has no picker to obtain one from. `Ok(None)` means
+/// the operator cancelled.
 #[tauri::command]
 pub async fn export_all_data<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
@@ -174,19 +172,13 @@ pub async fn restore_all_data<R: tauri::Runtime>(
 pub struct ClearResult {
     pub kind: String,
     pub removed_files: u32,
-    /// Bytes actually reclaimed. The UI reports a size; it used to report
-    /// `removedFiles` under the name `clearedBytes` (C6).
+    /// Bytes actually reclaimed. The UI reports a size, not a file count.
     pub removed_bytes: u64,
 }
 
 /// The directories a `clear_cache` kind empties.
 ///
-/// C6: the control window's "Clear logs" mapped onto `all`, which deleted the
-/// compiled-script, vocabulary, thumbnail and download caches and left every
-/// log file in place — then reported "Logs cleared." `logs` became its own
-/// kind.
-///
-/// It is now the only one (#219). Nothing ever wrote `cache/compiled`,
+/// `logs` is the only kind (#219). Nothing ever wrote `cache/compiled`,
 /// `cache/vocabulary` or `cache/thumbnails`, and once the Settings button that
 /// asked for `all` was gone nothing asked for them either; a request naming one
 /// is refused like any other unknown kind.
@@ -292,7 +284,7 @@ pub struct SupportBundleResult {
 /// handing it to a stranger, and "reveal it" is how a Mac user inspects a
 /// folder. The obvious implementation — pass the path back to the webview and
 /// let it ask Rust to reveal that path — is the one thing this codebase does
-/// not do (C5, spec §50.7): a reveal command taking a path from JavaScript is
+/// not do (spec §50.7): a reveal command taking a path from JavaScript is
 /// an arbitrary-directory reveal, and the webview would only be handing back a
 /// string Rust gave it a moment ago anyway.
 ///
@@ -329,12 +321,9 @@ impl LastSupportBundle {
 /// this list to the operator before they send it to anyone. Anything added to
 /// the bundle has to be added there too.
 ///
-/// Same C5 shape as `export_all_data`: this used to take `destination: String`
-/// from the webview, which had no way to obtain one — the dialog plugin is
-/// deliberately not granted to JavaScript — so any caller would have sent
-/// `undefined`, the key would have been dropped from the JSON, and the command
-/// would have failed to deserialize before running a line. The picker runs
-/// here, in the same trusted operation as the write (spec §50.7).
+/// As with `export_all_data`, the picker runs here, in the same trusted
+/// operation as the write (spec §50.7): the dialog plugin is deliberately not
+/// granted to JavaScript, so the webview has no destination to supply.
 /// `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_support_bundle<R: tauri::Runtime>(

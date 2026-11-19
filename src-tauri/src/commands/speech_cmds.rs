@@ -1,7 +1,7 @@
 //! Live transcription commands.
 //!
 //! There is no key lifecycle here any more, and that absence is the point. The
-//! recogniser is a bundled resource: nothing to paste, nothing to validate,
+//! recogniser runs on-device: nothing to paste, nothing to validate,
 //! nothing to store, nothing to revoke, and no reason for a take to fail that
 //! is not visible on the machine it runs on. The commands that used to save,
 //! validate, test and delete an API key are gone along with the credential
@@ -36,7 +36,7 @@ async fn selected_model(db: &Database) -> Result<&'static BundledModel, AppError
 
 /// What Settings shows in place of "is the key still good?".
 ///
-/// The honest questions about a bundled recogniser are whether its files are
+/// The honest questions about an on-device recogniser are whether its files are
 /// present and whether it has been loaded, so those are the questions this
 /// answers.
 #[derive(Debug, Clone, Serialize)]
