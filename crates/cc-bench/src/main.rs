@@ -1095,7 +1095,19 @@ fn main() -> anyhow::Result<()> {
             // catalogue the app's downloader verifies an install against, as
             // compiled into this build.
             let catalogue = cc_bench::provenance::WeightCatalogue::shipped()?;
-            let report = language_gate::evaluate_saved(&language, &tier_b, &tier_c, &catalogue)?;
+            let mut report =
+                language_gate::evaluate_saved(&language, &tier_b, &tier_c, &catalogue)?;
+            // The catalogue the weights were judged against is this binary's
+            // own, so the binary has to be one somebody else can rebuild.
+            let gate = cc_bench::provenance::Revision::current();
+            if !gate.is_reproducible() {
+                report.corpus_problems.push(format!(
+                    "this gate is cc-bench {}, which is not a clean build of a \
+                     commit, so the model catalogue it judged the weights against \
+                     is not one anybody can name",
+                    gate.describe()
+                ));
+            }
             print!("{}", report.render());
             if !report.passed() {
                 anyhow::bail!(

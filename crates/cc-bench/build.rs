@@ -72,7 +72,10 @@ fn main() {
     if commit.is_empty() {
         return;
     }
-    for name in ["HEAD", "packed-refs"] {
+    // `logs/HEAD` is this worktree's reflog, appended on every commit,
+    // checkout and reset — including a commit to a branch that only existed in
+    // `packed-refs`, which creates a loose ref nothing was watching.
+    for name in ["HEAD", "logs/HEAD", "packed-refs"] {
         if let Some(path) = git_path(&manifest, name) {
             watch(&path);
         }

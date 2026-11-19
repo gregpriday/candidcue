@@ -156,6 +156,13 @@ fn replay(runs: &Path, layouts: &[cc_bench::stage::Layout]) -> (SuiteResult, Tie
         serde_json::from_str(&serde_json::to_string(&tier_b).unwrap()).unwrap();
     let mut tier_c: TierCResult =
         serde_json::from_str(&serde_json::to_string(&tier_c).unwrap()).unwrap();
+    // The build really was stamped: without it every result would record an
+    // unknown revision, and the assertions below would compare two unknowns.
+    assert!(
+        Revision::current().commit.is_some_and(|c| c.len() >= 40),
+        "cc-bench was built without a commit stamp: {:?}",
+        Revision::current()
+    );
     let clean = Revision {
         commit: Some("0123456789abcdef".into()),
         dirty: false,

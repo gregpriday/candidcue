@@ -662,14 +662,29 @@ fn provenance_problems(
                 "Tier B and {tier} compiled scripts differently (CC_BENCH_APP_TOKENS)"
             ));
         }
-        // Scripts are read from the checkout, not the build, so one binary can
-        // replay against two different texts.
-        for (script, digest) in &prov.scripts {
-            if first.scripts.get(script).is_some_and(|d| d != digest) {
-                note(format!(
-                    "Tier B and {tier} replayed different text for the script {script}"
-                ));
-            }
+    }
+
+    // Scripts are read from the checkout, not the build, so one binary can
+    // replay against two different texts. Every scoring fixture's script must
+    // be recorded by both tiers, with the same text; a diagnostic's script is
+    // not the claim's business, exactly as its capture record is not.
+    let scoring_scripts: std::collections::BTreeSet<&str> = tiers
+        .iter()
+        .flat_map(|(_, _, runs)| runs.iter())
+        .map(|run| role_of(run))
+        .collect();
+    for script in scoring_scripts {
+        let digests: Vec<Option<&String>> =
+            tiers.iter().map(|(_, prov, _)| prov.scripts.get(script)).collect();
+        if digests.iter().any(Option::is_none) {
+            note(format!(
+                "the replay did not record the text of the script {script}, so \
+                 nothing says what its fixtures were scored against"
+            ));
+        } else if digests.windows(2).any(|w| w[0] != w[1]) {
+            note(format!(
+                "Tier B and Tier C replayed different text for the script {script}"
+            ));
         }
     }
 
@@ -739,7 +754,12 @@ fn check_record(
     catalogue: &WeightCatalogue,
     note: &mut impl FnMut(String),
 ) {
-    if primary_subtag(&record.language) != claim {
+    if !is_language_tag(&record.language) {
+        note(format!(
+            "the corpus was captured as {:?}, which is not a language tag",
+            record.language
+        ));
+    } else if primary_subtag(&record.language) != claim {
         note(format!(
             "the corpus was captured as {}, not {claim}",
             record.language
@@ -1321,9 +1341,19 @@ mod tests {
             app_tokens: false,
             source,
             layouts,
-            scripts: [("starter".to_string(), "digest of starter".to_string())]
-                .into_iter()
-                .collect(),
+            scripts: [
+                "brands",
+                "figures",
+                "longform",
+                "names",
+                "product-update",
+                "refrain",
+                "starter",
+                "technical",
+            ]
+            .into_iter()
+            .map(|s| (s.to_string(), format!("digest of {s}")))
+            .collect(),
         }
     }
 
@@ -1853,6 +1883,33 @@ mod tests {
             .scripts
             .insert("starter".into(), "an edited starter".into());
         assert!(problems_of("en", &b, &c).contains("different text for the script starter"));
+
+        // Not recorded at all — by one tier, or by both.
+        for both in [false, true] {
+            let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+            c.provenance.as_mut().unwrap().scripts.remove("names");
+            if both {
+                b.provenance.as_mut().unwrap().scripts.clear();
+            }
+            assert!(problems_of("en", &b, &c).contains("did not record the text of the script names"));
+        }
+
+        // A diagnostic's script may differ, as its fixtures may.
+        let (mut b, c) = saved(&english_corpus(), &m, &m);
+        b.provenance
+            .as_mut()
+            .unwrap()
+            .scripts
+            .insert("fuzzy-follow".into(), "one text".into());
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
+    }
+
+    #[test]
+    fn a_capture_language_that_is_not_a_tag_is_refused() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |_, r| r.language = "en-".into());
+        assert!(problems_of("en", &b, &c).contains("which is not a language tag"));
     }
 
     /// `EN-US` and `en-US` are one tag, not two capture conditions.
