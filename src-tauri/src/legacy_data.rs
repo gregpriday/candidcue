@@ -169,6 +169,9 @@ impl Outcome {
     pub fn notice(&self) -> Option<Notice> {
         match self {
             Outcome::NotNeeded | Outcome::Copied { .. } => None,
+            // Published after all: the copy is in place and only syncing its
+            // parent failed. The log says so; the library is there to see.
+            Outcome::Failed { to, .. } if to.join(COPIED_MARKER).exists() => None,
             Outcome::Failed { from, error, .. } => Some(Notice {
                 kind: NoticeKind::Failed,
                 old_folder: from.clone(),
@@ -858,6 +861,16 @@ mod tests {
         assert_eq!(json["kind"], "abandoned");
         assert!(json.get("reason").is_none());
         assert!(run(data_dir.path()).notice().is_none(), "and not again");
+    }
+
+    #[test]
+    fn a_copy_that_landed_before_its_sync_failed_is_not_reported_as_missing() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let from = legacy_folder(data_dir.path());
+        let to = data_dir.path().join(IDENTIFIER);
+        write(&to.join(COPIED_MARKER), "copied\n");
+        let outcome = Outcome::Failed { from, to, error: std::io::Error::other("sync failed") };
+        assert!(outcome.notice().is_none());
     }
 
     #[test]
