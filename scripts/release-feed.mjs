@@ -549,7 +549,10 @@ export const UNCACHED_CACHE_CONTROL = 'no-cache, no-store, must-revalidate';
 export const CONFLICTING = Symbol('conflicting Cache-Control directive');
 
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const QUOTED = /^"((?:[^"\\]|\\.)*)"$/s;
+// A quoted-string: tabs and visible characters, no other control bytes.
+const QUOTED = /^"((?:[^"\\\x00-\x08\x0a-\x1f\x7f]|\\[^\x00-\x08\x0a-\x1f\x7f])*)"$/;
+/** Trim only what HTTP calls whitespace: spaces and tabs. */
+const ows = (text) => text.replace(/^[ \t]+|[ \t]+$/g, '');
 const MEMBERS = /(?:[^,"]|"(?:[^"\\]|\\.)*")+/g;
 
 /**
@@ -567,21 +570,21 @@ export function cacheDirectives(header) {
   const members = text.match(MEMBERS) ?? [];
   // Whatever the members did not cover must be only the commas and spaces
   // between them; a stray quote is left behind here.
-  if (text.replace(MEMBERS, '').replace(/[,\s]/g, '') !== '') return null;
+  if (text.replace(MEMBERS, '').replace(/[, \t]/g, '') !== '') return null;
   const directives = new Map();
   for (const member of members) {
     const eq = member.indexOf('=');
-    const name = (eq === -1 ? member : member.slice(0, eq)).trim().toLowerCase();
+    const name = ows(eq === -1 ? member : member.slice(0, eq)).toLowerCase();
     if (!name) {
-      if (eq === -1) continue;
+      if (eq === -1 && ows(member) === '') continue;
       return null;
     }
     if (!TOKEN.test(name)) return null;
     let value = true;
     if (eq !== -1) {
-      value = member.slice(eq + 1).trim();
+      value = ows(member.slice(eq + 1));
       const quoted = QUOTED.exec(value);
-      if (quoted) value = quoted[1].replace(/\\(.)/gs, '$1');
+      if (quoted) value = quoted[1].replace(/\\(.)/g, '$1');
       else if (!TOKEN.test(value)) return null;
     }
     directives.set(name, directives.has(name) && directives.get(name) !== value ? CONFLICTING : value);
@@ -642,11 +645,13 @@ export function uncachedProblem(header) {
 }
 
 /**
- * Cloudflare's own word that it answered from its cache. A feed entry served
- * `no-store` is never stored, so a hit means a rule is caching it whatever
- * the header says, and the next release would be hidden behind this one.
+ * Cloudflare's word that the response is in its cache, or is going there. An
+ * edge that honours `no-store` reports `DYNAMIC` or `BYPASS`; `MISS` is kept
+ * for responses it is about to store. Any of these means a rule is caching
+ * the feed whatever its header says, and a later release could be hidden
+ * behind the copy it keeps.
  */
-const EDGE_HITS = new Set(['hit', 'stale', 'updating', 'revalidated']);
+const EDGE_CACHED = new Set(['hit', 'miss', 'expired', 'stale', 'updating', 'revalidated']);
 
 /** Drop a rejected body without letting the drop fail or wait. */
 function discard(response) {
@@ -730,10 +735,10 @@ export async function verifyFeed(stageDir, { fetchFn = fetch, log = console.log,
         } else if (cacheProblem) {
           last = cacheProblem;
           discard(response);
-        } else if (EDGE_HITS.has(edge)) {
+        } else if (EDGE_CACHED.has(edge)) {
           last =
-            `served from Cloudflare's cache (CF-Cache-Status ${edge.toUpperCase()}) although it says no-store: ` +
-            'a cache rule is keeping it, and the next release would be hidden behind it';
+            `Cloudflare is caching it (CF-Cache-Status ${edge.toUpperCase()}) although it says no-store: ` +
+            'a cache rule is keeping it, and a later release could be hidden behind the copy it keeps';
           discard(response);
         } else if (!isDeepStrictEqual(await response.json(), expected)) {
           last = 'served content differs from the staged entry';

@@ -511,6 +511,7 @@ describe('nothing is announced until it is readable', () => {
     ['no-store as well', 'public, max-age=31536000, immutable, no-store'],
     ['private as well', 'public, max-age=31536000, immutable, private'],
     ['an unterminated quote hiding a lifetime', 'public, max-age=31536000", immutable'],
+    ['a lifetime that is not whole seconds', 'public, max-age=3.1536e7, immutable'],
     ["the feed's lifetime", feed.UNCACHED_CACHE_CONTROL],
   ])('fails on a file served with %s', async (_label, cacheControl) => {
     const { out } = stageMac();
@@ -645,6 +646,7 @@ describe('the feed is verified as clients will read it', () => {
     ['a valued must-revalidate', 'no-cache, no-store, must-revalidate=1'],
     ['a lifetime as well', 'no-cache, no-store, must-revalidate, max-age=60'],
     ['a lifetime for the edge as well', 'no-cache, no-store, must-revalidate, s-maxage=60'],
+    ['a zero that is not whole seconds', 'no-cache, no-store, must-revalidate, max-age=0x0'],
     ['a licence to serve it stale while revalidating', 'no-cache, no-store, must-revalidate, stale-while-revalidate=60'],
     ['a licence to serve it stale on error', 'no-cache, no-store, must-revalidate, stale-if-error=60'],
     ['public as well', 'no-cache, no-store, must-revalidate, public'],
@@ -669,8 +671,8 @@ describe('the feed is verified as clients will read it', () => {
     await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(/latest-macos\.json: HTTP 503/);
   });
 
-  it.each(['HIT', 'STALE', 'UPDATING', 'REVALIDATED'])(
-    'fails on an entry Cloudflare answered from its cache (%s), whatever its header says',
+  it.each(['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'hit'])(
+    'fails on an entry Cloudflare is caching (%s), whatever its header says',
     async (status) => {
       const { out } = stageMac();
       const routes = servedFeed(out);
@@ -681,14 +683,14 @@ describe('the feed is verified as clients will read it', () => {
       };
       const { fetchFn } = fakeFetch(routes);
       await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(
-        new RegExp(`latest-macos\\.json: served from Cloudflare's cache \\(CF-Cache-Status ${status}\\)`),
+        new RegExp(`latest-macos\\.json: Cloudflare is caching it \\(CF-Cache-Status ${status.toUpperCase()}\\)`),
       );
     },
   );
 
   it('accepts an entry Cloudflare passed through', async () => {
     const { out } = stageMac();
-    for (const status of ['BYPASS', 'DYNAMIC', 'MISS']) {
+    for (const status of ['BYPASS', 'DYNAMIC']) {
       const { fetchFn } = fakeFetch(
         servedFeed(out, { 'cache-control': feed.UNCACHED_CACHE_CONTROL, 'cf-cache-status': status }),
       );
@@ -739,8 +741,8 @@ describe('Cache-Control is read as directives, not as text', () => {
     return directives;
   };
 
-  it('lower-cases names, trims, and unquotes values', () => {
-    expect([...read(' Public,MAX-AGE="60" , immutable')]).toEqual([
+  it('lower-cases names, trims spaces and tabs, and unquotes values', () => {
+    expect([...read(' Public,\tMAX-AGE="60" , immutable')]).toEqual([
       ['public', true],
       ['max-age', '60'],
       ['immutable', true],
@@ -781,6 +783,8 @@ describe('Cache-Control is read as directives, not as text', () => {
     ['a value with no name', '=60, no-store'],
     ['a name that is not a token', 'no store, max-age=60'],
     ['a value that is not a token', 'max-age=6 0'],
+    ['a control byte in a quoted value', 'ext="a\x7f", no-store'],
+    ['a directive behind a non-breaking space', '\u00a0no-store'],
   ])('refuses %s rather than reading past it', (_label, header) => {
     expect(feed.cacheDirectives(header)).toBeNull();
   });

@@ -1910,7 +1910,9 @@ describe('the release workflow cannot publish an unverified build', () => {
     const command = (start: string) => {
       const from = action.slice(action.indexOf(start));
       const lines = from.slice(0, from.indexOf('\n\n')).split('\n');
-      const end = lines.findIndex((line) => !line.trimEnd().endsWith('\\'));
+      // Exactly a backslash at the end: one followed by a space escapes the
+      // space, and the next line becomes a command of its own.
+      const end = lines.findIndex((line) => !line.endsWith('\\'));
       return lines.slice(0, end + 1).join('\n');
     };
     expect(command('aws s3 cp verified/stage/files/')).toContain(`--cache-control "${IMMUTABLE_CACHE_CONTROL}"`);

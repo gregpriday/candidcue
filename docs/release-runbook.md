@@ -269,7 +269,7 @@ order, and stops at the first failure:
    download page reads. Both are served `no-cache, no-store,
    must-revalidate`, and both are read back as the updater asks for them,
    with those three directives, no lifetime, and no `CF-Cache-Status` saying
-   Cloudflare answered from its cache.
+   Cloudflare is caching them (only `DYNAMIC` and `BYPASS` pass).
 8. Creates the GitHub Release (empty, so no draft is ever left for another
    OS to lose its files in), or finds the one another OS created, then
    attaches its files and checks each one arrived.
