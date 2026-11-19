@@ -71,6 +71,11 @@ impl Site {
 /// is the right amount of friction for widening what an application can launch
 /// a browser at.
 ///
+/// `user-guide` is the guide for people using the app — first run, take
+/// shortcuts, where the data folder is, microphone and display trouble — and it
+/// is published on the website, not in the repository, because that is where
+/// someone who downloaded a build will look for it.
+///
 /// `guide` is the README on its own, not the repository's front page scrolled
 /// down to it: `website` is for finding your way around the project, `guide` is
 /// for reading about the app, and two menu items that open the same page teach
@@ -86,6 +91,7 @@ impl Site {
 /// pointing at the same new-issue page.
 const DESTINATIONS: &[(&str, Site, &str)] = &[
     ("website", Site::Repository, ""),
+    ("user-guide", Site::Website, "/docs"),
     ("guide", Site::Repository, "/blob/HEAD/README.md"),
     ("support", Site::Repository, "/issues/new"),
     ("release-notes", Site::Repository, "/releases"),
@@ -136,6 +142,7 @@ mod tests {
     fn each_destination_opens_the_page_its_menu_item_promises() {
         let expected = [
             ("website", "https://github.com/gregpriday/candidcue"),
+            ("user-guide", "https://speakingglass.com/docs"),
             ("guide", "https://github.com/gregpriday/candidcue/blob/HEAD/README.md"),
             ("support", "https://github.com/gregpriday/candidcue/issues/new"),
             ("release-notes", "https://github.com/gregpriday/candidcue/releases"),
