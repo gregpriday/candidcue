@@ -1285,9 +1285,10 @@ describe('starting a practice', () => {
 
   it('writes an ordinary session row, in the ordinary place', async () => {
     /*
-     * A rehearsal is a real reading and its ending is a real place in the
-     * script — "From last ending" is offered on it. Nothing about the row says
-     * practice, which is also why the feature needs no migration.
+     * A rehearsal is a real reading, so it opens a real row. Nothing about the
+     * row says practice, which is also why the feature needs no migration; the
+     * one difference is at the other end, where it is closed without an ending
+     * (#241) — see the session store's tests.
      */
     await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
     expect(calls.startSessionRecord).toHaveBeenCalledWith(
@@ -1548,17 +1549,37 @@ describe('recording one part of a script', () => {
       expect(glass()).toBe(40);
     });
 
-    it('lets a practice keep its token and drop the part', async () => {
-      // A practice is never bounded (§practice), so the part is not there to
-      // confine the token — and it is not "missing" either, so nothing is said.
+    it('gives a practice its part, so the stage can say which one is rehearsed (#241)', async () => {
+      await expect(
+        startTake(SCRIPT.id, { practice: true, startTokenIndex: 25, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      expect(opened().practice).toBe(true);
+      expect(opened().startTokenIndex).toBe(20);
+      expect(opened().part).toMatchObject({ id: 'p2', startTokenIndex: 20, endTokenIndex: 49 });
+      expect(calls.showToast).not.toHaveBeenCalled();
+    });
+
+    it('confines a practice’s token to its part exactly as a take’s (#241)', async () => {
+      // The caret's sentence moved out of the part between drawing the menu
+      // and choosing the row: the practice is still of the part, from its start.
       await expect(
         startTake(SCRIPT.id, { practice: true, startTokenIndex: 55, part: { id: 'p2' } }),
       ).resolves.toBe(true);
-      expect(opened().startTokenIndex).toBe(50);
-      expect(glass()).toBe(50);
+      expect(opened().startTokenIndex).toBe(20);
+      expect(glass()).toBe(20);
+      expect(opened().part).toMatchObject({ id: 'p2' });
+    });
+
+    it('says when a practice’s part has gone, in a practice’s words (#241)', async () => {
+      await expect(
+        startTake(SCRIPT.id, { practice: true, startTokenIndex: 55, part: { id: 'renamed' } }),
+      ).resolves.toBe(true);
       expect(opened().part).toBeNull();
-      expect(opened().nextPart).toBeNull();
-      expect(calls.showToast).not.toHaveBeenCalled();
+      expect(opened().startTokenIndex).toBe(50);
+      expect(calls.showToast).toHaveBeenCalledWith(
+        expect.stringContaining('the practice runs without one'),
+        'info',
+      );
     });
 
     it.each([
