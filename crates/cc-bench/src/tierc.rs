@@ -1041,4 +1041,40 @@ mod tests {
             deficit.value
         );
     }
+
+    /// The gate's Tier C rows: macro-averages over headline-layout runs with
+    /// non-finite values dropped, and medians of the pooled samples handed in
+    /// — never per-run medians, and never another layout's runs.
+    #[test]
+    fn headline_gate_rows_average_runs_and_pool_samples() {
+        let run = |layout: &str, unread: f64, availability: f64| PerceptualMetrics {
+            layout: layout.to_string(),
+            unread_never_spoken: unread,
+            readable_availability: availability,
+            ..Default::default()
+        };
+        let runs = vec![
+            run(HEADLINE_LAYOUT, 1.0, 50.0),
+            run(HEADLINE_LAYOUT, 3.0, f64::NAN),
+            run("30hz", 100.0, 0.0),
+        ];
+        let samples = PerceptualSamples {
+            temporal_err_ms: vec![900.0, 100.0, 200.0, 300.0, 800.0],
+            readable_recovery_ms: vec![5000.0, 1000.0, 2000.0],
+            ..Default::default()
+        };
+        let rows = HeadlineGateRows::of(&runs, &samples);
+        assert_eq!(rows.unread_never_spoken, 2.0);
+        assert_eq!(rows.readable_availability, 50.0);
+        assert_eq!(rows.lag_p50, 300.0);
+        assert_eq!(rows.readable_recovery_p50, 2000.0);
+
+        // The ordinary table's copies come from the same helper.
+        let result = finish("t", &AlignmentConfig::default(), runs, samples, PerceptualSamples::default());
+        let value = |name: &str| result.table.iter().find(|e| e.name == name).unwrap().value;
+        assert_eq!(value("gate.unread_never_spoken"), 2.0);
+        assert_eq!(value("outcome.readable_availability"), 50.0);
+        assert_eq!(value("time.lag_p50"), 300.0);
+        assert_eq!(value("recover.readable_p50"), 2000.0);
+    }
 }

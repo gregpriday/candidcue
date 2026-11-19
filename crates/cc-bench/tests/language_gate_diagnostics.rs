@@ -30,31 +30,51 @@ fn scripts_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/scripts")
 }
 
+/// What each diagnostic fixture is replayed from.
+///
+/// The fixture is a diagnostic because of its NAME (`fuzzy-follow__…`), which
+/// is all the gate reads. Its content is chosen to move every pooled Tier C
+/// row: the real `fuzzy-follow` plan is a contiguous read with no skip or
+/// retake, so it contributes no readable-recovery samples at all, and a
+/// scoring table that wrongly pooled every run's recoveries would still pass.
+/// These plans each contain a discontinuity the stage has to recover from.
+const DIAGNOSTIC_CONTENT: &[(&str, &str)] = &[
+    ("starter", "retake"),
+    ("starter", "skip_forward"),
+    ("names", "names_cold_jump"),
+];
+
 /// Write one capture-shaped fixture directory per selected Tier B run.
 fn write_corpus(dir: &Path, include: impl Fn(&str) -> bool) {
     let suite = build_suite(&scripts_dir()).expect("Tier A suite");
+    let mut diagnostics = DIAGNOSTIC_CONTENT.iter();
     for live in tier_b_selection() {
         let name = format!("{}__{}__{}", live.script, live.scenario, live.engine.slug());
         if !include(&name) {
             continue;
         }
+        let (script, scenario) = if is_scoring_run(&name) {
+            (live.script, live.scenario)
+        } else {
+            *diagnostics.next().expect("one content plan per diagnostic")
+        };
         let item = suite
             .iter()
-            .find(|s| s.plan.script == live.script && s.plan.scenario == live.scenario)
-            .unwrap_or_else(|| panic!("no Tier A scenario for {name}"));
+            .find(|s| s.plan.script == script && s.plan.scenario == scenario)
+            .unwrap_or_else(|| panic!("no Tier A scenario for {script}/{scenario}"));
         let performance = expand(&item.plan, &item.script);
         let gold = synthetic_timing(&performance, item.wpm);
         // A per-fixture seed, so the three engines of one plan do not replay
         // identical events.
-        let seed = item.plan.seed ^ (live.voice_index as u64 + 1);
+        let seed = item.plan.seed ^ ((live.voice_index as u64 + 1) << 16);
         let events = generate_events(&gold, &item.plan.corruption, seed);
 
         let run_dir = dir.join(&name);
         std::fs::create_dir_all(&run_dir).unwrap();
         let manifest = RunManifest {
             name: name.clone(),
-            script: live.script.to_string(),
-            scenario: live.scenario.to_string(),
+            script: script.to_string(),
+            scenario: scenario.to_string(),
             engine: live.engine.slug().to_string(),
             voice_index: live.voice_index,
             words: performance.words.len(),
@@ -154,6 +174,17 @@ fn gate_values_and_verdict_are_invariant_to_diagnostics() {
     };
     moved("Tier B", &core.tier_b.table, &with.tier_b.table);
     moved("Tier C", &core.tier_c.table, &with.tier_c.table);
+    // Tier C's two percentile rows are the ones a saved file cannot recompute,
+    // so each must be shown to move on its own: a scoring table that pooled
+    // the wrong samples for either would otherwise go unseen.
+    for pooled in ["time.lag_p50", "recover.readable_p50"] {
+        assert_ne!(
+            row(&core.tier_c.table, pooled).to_bits(),
+            row(&with.tier_c.table, pooled).to_bits(),
+            "the diagnostics do not move {pooled}, so this test cannot tell \
+             whether the scoring table pooled only the core's samples"
+        );
+    }
 
     // The scoring tables reproduce the core-only corpus's own numbers exactly,
     // with or without the diagnostics alongside.

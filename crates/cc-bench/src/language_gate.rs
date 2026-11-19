@@ -131,8 +131,9 @@ impl Threshold {
 /// Eight script families crossed with performance plans and three TTS engines,
 /// which is the shape the English corpus already has. The count is fixed rather
 /// than a minimum because `dim_never` is an absolute count, not a rate: it means
-/// "runs where the display never caught up at all", and comparing 1-in-18
-/// against 1-in-9 is not comparing anything. Diagnostic fixtures may exist
+/// "words the display never reached at all", summed over the corpus, and
+/// comparing that count over 18 runs against one over 9 is not comparing
+/// anything. Diagnostic fixtures may exist
 /// alongside these (the English corpus carries three `fuzzy-follow` runs) but
 /// are excluded from scoring.
 pub const REQUIRED_CORE_RUNS: usize = 18;
@@ -216,8 +217,8 @@ pub const SHIP_BAR: &[Threshold] = &[
         unit: "ms",
         why: "The delay a presenter actually perceives between finishing a \
               word and the display passing it. Every other accuracy row is a \
-              distance, and the same 3-word lag is half a second at 150 wpm \
-              and a second at 75.",
+              distance, and the same 3-word lag is 1.2 seconds at 150 wpm \
+              and 2.4 at 75.",
     },
     Threshold {
         metric: "live.dim_never",
@@ -444,15 +445,17 @@ pub fn evaluate_saved(
     tier_b: &SuiteResult,
     tier_c: &TierCResult,
 ) -> anyhow::Result<LanguageGateReport> {
-    // The bar's Tier C numbers were measured on the as-shipped rig. A
-    // whole-sweep result averages seven layouts and a corridor the product
-    // does not have, so it is not the same measurement.
+    // The bar's Tier C numbers were measured on the as-shipped rig, and the
+    // evidence has to be that rig alone: a sweep is a different run, made for
+    // a different question, even though its headline rows are 60 Hz.
     //
     // This catches the wrong LAYOUT set. It cannot catch a 60 Hz run made with
     // a non-zero `focus_lead_atoms`, because `Layout` is not serialised into
     // the result — see bench/README.md, "Known gaps".
-    let layouts: Vec<&String> = tier_c.by_layout.keys().collect();
-    if layouts != vec![&"60hz".to_string()] {
+    let mut layouts: std::collections::BTreeSet<&str> =
+        tier_c.by_layout.keys().map(|l| l.as_str()).collect();
+    layouts.extend(tier_c.runs.iter().map(|r| r.layout.as_str()));
+    if layouts.iter().ne(["60hz"].iter()) {
         anyhow::bail!(
             "Tier C evidence must be the as-shipped rig alone \
              (--layouts 60hz --focus-lead 0); this result carries {:?}",
@@ -464,11 +467,16 @@ pub fn evaluate_saved(
         anyhow::anyhow!(
             "the {tier} result has no scoring table, so its only numbers are \
              aggregated over every fixture including diagnostics. Re-run \
-             `cc-bench {command} --runs DIR` on the captured corpus to produce one"
+             `cc-bench {command} --out FILE` on the captured corpus to produce one"
         )
     };
-    let b = tier_b.scoring.as_ref().ok_or_else(|| missing("Tier B", "tier-b"))?;
-    let c = tier_c.scoring.as_ref().ok_or_else(|| missing("Tier C", "tier-c"))?;
+    let b = tier_b
+        .scoring
+        .as_ref()
+        .ok_or_else(|| missing("Tier B", "tier-b --runs DIR"))?;
+    let c = tier_c.scoring.as_ref().ok_or_else(|| {
+        missing("Tier C", "tier-c --runs DIR --layouts 60hz --focus-lead 0")
+    })?;
 
     // A scoring table is only meaningful if it covers exactly the result's own
     // scoring runs. Anything else is a file that was edited or assembled by
@@ -484,25 +492,38 @@ pub fn evaluate_saved(
             .map(|r| r.run.as_str()),
     )?;
 
-    // The two tiers use disjoint metric prefixes today, so merging them is
-    // safe. It is not safe BY CONSTRUCTION, though, and a collision would
-    // silently judge a Tier B threshold against a Tier C value — so refuse one
-    // rather than let the last writer win.
+    // Each row is read from the tier its threshold names, so a value can
+    // never be judged against the other tier's threshold, and one metric
+    // cannot be supplied twice.
     let mut metrics: BTreeMap<String, f64> = BTreeMap::new();
-    for entry in b.table.iter().chain(&c.table) {
-        if metrics.insert(entry.name.clone(), entry.value).is_some() {
-            anyhow::bail!(
-                "{} appears more than once across the Tier B and Tier C scoring \
-                 tables; the gate cannot tell which one a threshold means",
-                entry.name
-            );
+    for (tier, table) in [(Tier::B, b), (Tier::C, c)] {
+        for entry in &table.table {
+            if !SHIP_BAR
+                .iter()
+                .any(|t| t.tier == tier && t.metric == entry.name)
+            {
+                anyhow::bail!(
+                    "the {} scoring table carries {}, which is not one of its \
+                     tier's gated metrics",
+                    tier.label(),
+                    entry.name
+                );
+            }
+            if metrics.insert(entry.name.clone(), entry.value).is_some() {
+                anyhow::bail!("{} appears twice in the {} scoring table", entry.name, tier.label());
+            }
         }
     }
 
     let mut report = evaluate(language, &metrics, &b.runs);
 
-    // Both halves of a verdict have to describe the same fixtures. Diagnostics
-    // may differ between the two directories; the scoring runs may not.
+    // Both halves of a verdict have to describe the same fixtures, each
+    // counted once. Diagnostics may differ between the two directories; the
+    // scoring runs may not. (`evaluate` has already checked Tier B's list for
+    // duplicates.)
+    if let Some(problem) = duplicate_problem(&c.runs) {
+        report.corpus_problems.push(format!("Tier C {problem}"));
+    }
     let in_b: std::collections::BTreeSet<&String> = b.runs.iter().collect();
     let in_c: std::collections::BTreeSet<&String> = c.runs.iter().collect();
     if in_b != in_c {
@@ -520,7 +541,32 @@ pub fn evaluate_saved(
             only(&in_c, &in_b)
         ));
     }
+
+    // Nor may they come from two engine configurations: a verdict whose Tier B
+    // half was replayed under one config and its Tier C half under another is
+    // not a measurement of anything that exists. (Which recogniser produced
+    // the events is not recorded in either result; see #227.)
+    if serde_json::to_value(&tier_b.config).ok() != serde_json::to_value(&tier_c.config).ok() {
+        report.corpus_problems.push(
+            "Tier B and Tier C were replayed under different alignment configs, \
+             so the verdict would combine two engines"
+                .to_string(),
+        );
+    }
     Ok(report)
+}
+
+/// `Some(description)` when a scoring list names a fixture more than once.
+fn duplicate_problem(runs: &[String]) -> Option<String> {
+    let distinct: std::collections::BTreeSet<&String> = runs.iter().collect();
+    (distinct.len() != runs.len()).then(|| {
+        format!(
+            "names {} scoring runs but only {} distinct ones; a fixture scored \
+             twice is not two pieces of evidence",
+            runs.len(),
+            distinct.len()
+        )
+    })
 }
 
 fn check_scoring_runs<'a>(
@@ -561,14 +607,9 @@ pub fn evaluate(
         .filter(|r| is_scoring_run(r))
         .collect();
 
-    let distinct: std::collections::BTreeSet<&String> = core.iter().copied().collect();
-    if distinct.len() != core.len() {
-        corpus_problems.push(format!(
-            "corpus names {} scoring runs but only {} distinct ones; a fixture \
-             scored twice is not two pieces of evidence",
-            core.len(),
-            distinct.len()
-        ));
+    let core_names: Vec<String> = core.iter().map(|r| (*r).clone()).collect();
+    if let Some(problem) = duplicate_problem(&core_names) {
+        corpus_problems.push(format!("corpus {problem}"));
     }
 
     if core.len() != REQUIRED_CORE_RUNS {
@@ -1109,15 +1150,52 @@ mod tests {
     fn a_scoring_table_that_disagrees_with_its_own_runs_is_refused() {
         let m = english_baseline_metrics();
 
+        let refused_by = |b: &SuiteResult, c: &TierCResult| -> String {
+            evaluate_saved("en", b, c).unwrap_err().to_string()
+        };
+
         // A diagnostic counted into the scoring set.
         let (mut b, c) = saved(&english_corpus(), &m, &m);
         b.scoring.as_mut().unwrap().runs.push("fuzzy-follow__fuzzy_voice__xai".into());
-        assert!(evaluate_saved("en", &b, &c).is_err());
+        assert!(refused_by(&b, &c).contains("Tier B scoring table"));
 
         // A core fixture the result scored, missing from the set.
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.scoring.as_mut().unwrap().runs.pop();
-        assert!(evaluate_saved("en", &b, &c).is_err());
+        assert!(refused_by(&b, &c).contains("Tier C scoring table"));
+
+        // Same length, different fixture: a count comparison would miss it.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.scoring.as_mut().unwrap().runs[0] = "brands__exact__gemini".into();
+        assert!(refused_by(&b, &c).contains("Tier C scoring table"));
+    }
+
+    /// A fixture duplicated in one tier's directory is weighted twice there,
+    /// and a set comparison between the tiers cannot see it.
+    #[test]
+    fn a_fixture_scored_twice_by_tier_c_alone_is_not_evidence() {
+        let m = english_baseline_metrics();
+        let (b, _) = saved(&english_corpus(), &m, &m);
+        let mut doubled = english_corpus();
+        doubled.push("refrain__exact__gemini".into());
+        let (_, c) = saved(&doubled, &m, &m);
+        let report = evaluate_saved("en", &b, &c).unwrap();
+        assert!(!report.passed());
+        assert!(
+            report.corpus_problems.iter().any(|p| p.starts_with("Tier C") && p.contains("distinct")),
+            "{:?}",
+            report.corpus_problems
+        );
+    }
+
+    #[test]
+    fn both_tiers_must_be_replayed_under_one_config() {
+        let m = english_baseline_metrics();
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.config.lead_margin_atoms += 1.0;
+        let report = evaluate_saved("en", &b, &c).unwrap();
+        assert!(!report.passed());
+        assert!(report.corpus_problems.iter().any(|p| p.contains("config")));
     }
 
     /// Two different 18-fixture corpora would each pass the count and the
@@ -1168,16 +1246,42 @@ mod tests {
         let m = english_baseline_metrics();
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.by_layout.insert("30hz".into(), Vec::new());
-        assert!(evaluate_saved("en", &b, &c).is_err());
+        assert!(evaluate_saved("en", &b, &c).is_err(), "an extra layout");
+
+        // One layout, but the wrong one.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.by_layout = [("30hz".to_string(), Vec::new())].into_iter().collect();
+        for r in &mut c.runs {
+            r.layout = "30hz".into();
+        }
+        assert!(evaluate_saved("en", &b, &c).is_err(), "a lone 30hz rig");
+
+        // A sweep with its other layouts trimmed from the summary only.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        let mut extra = c.runs[0].clone();
+        extra.layout = "120hz".into();
+        c.runs.push(extra);
+        assert!(evaluate_saved("en", &b, &c).is_err(), "runs at another layout");
     }
 
+    /// A row is judged only from the tier its threshold names, and only once.
     #[test]
-    fn a_metric_in_both_scoring_tables_is_refused() {
+    fn a_row_in_the_wrong_tier_or_twice_is_refused() {
         let m = english_baseline_metrics();
+
+        // Tier C's rows supplied by Tier B, with Tier C's table empty: every
+        // metric is still present exactly once, which a merged lookup accepts.
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        let moved = std::mem::take(&mut c.scoring.as_mut().unwrap().table);
+        b.scoring.as_mut().unwrap().table.extend(moved);
+        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        assert!(err.contains("Tier B scoring table carries gate."), "{err}");
+
         let (b, mut c) = saved(&english_corpus(), &m, &m);
-        let shadow = b.scoring.as_ref().unwrap().table[0].clone();
-        c.scoring.as_mut().unwrap().table.push(shadow);
-        assert!(evaluate_saved("en", &b, &c).is_err());
+        let again = c.scoring.as_ref().unwrap().table[0].clone();
+        c.scoring.as_mut().unwrap().table.push(again);
+        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        assert!(err.contains("twice"), "{err}");
     }
 
     #[test]

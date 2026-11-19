@@ -692,8 +692,9 @@ three `fuzzy-follow` runs, so `bench/runs-local` has 21 directories for an
 18-run core — but are excluded from scoring: from the fixture count AND from
 every gated value. Captured `tier-b` and `tier-c` write a `scoring` table beside
 their ordinary one, aggregated over the core fixtures alone, and the gate reads
-only that. It has to be computed while the tier runs, because the percentile
-rows pool raw samples a saved result does not keep. The difference is not
+only that. It has to be computed while the tier runs, because Tier C's
+`time.lag_p50` and `recover.readable_p50` pool raw samples a saved result does
+not keep. The difference is not
 small: the three English diagnostics score ~0 unread exposure and ~12% readable
 availability, so averaging them in took `gate.unread_never_spoken` from 3.067
 to 2.629 and `outcome.readable_availability` from 81.1% to 71.2%.
@@ -741,8 +742,9 @@ English, 1.69% below); the other six anchors barely moved and their limits did
 not change.
 
 What the command actually checks: both results carry a scoring table, those
-tables cover the same 18 scoring runs across all eight families, the Tier C
-evidence is the lone `60hz` layout, every gated metric is present and a possible
+tables cover the same 18 scoring runs (each once) across all eight families,
+both tiers were replayed under the same alignment config, the Tier C evidence is
+the lone `60hz` layout, every gated metric is present and a possible
 measurement, and each clears its limit. A result saved before scoring tables
 existed is refused; re-run the tier. What it does
 **not** check is in "Known gaps" below — most importantly, it takes the operator's
