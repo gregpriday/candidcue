@@ -219,13 +219,14 @@ gh secret list --env release-prerelease
 ```
 
 A secret cannot be read back, and nothing before a real publish uses
-`SPEAKING_GLASS_R2_BUCKET`. A wrong one fails at `Upload the release files`
+`SPEAKING_GLASS_R2_BUCKET`. A wrong one can fail at `Upload the release files`
 (a bucket that does not exist, or one the token cannot write), or when
 publishing reads its upload back from the public origin (`Every file must be
 readable at its public URL`, before the feed goes up, then `The feed must
-serve what was announced`). Those read-backs check what the origin serves,
-not which bucket was written: a re-run after a partial publish to the right
-bucket can find the files already there. The only check of the bucket itself
+serve what was announced`), but it need not fail at all. Those read-backs
+check what the origin serves, not which bucket was written: a re-run of a
+publish that already reached the right bucket finds the files and the feed
+there, and passes while writing somewhere else. The only check of the bucket itself
 is in Cloudflare, so copy the name from there (R2, the bucket whose Settings ›
 Custom Domains lists `updates.speakingglass.com`) rather than from memory.
 
