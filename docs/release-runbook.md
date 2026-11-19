@@ -260,12 +260,15 @@ order, and stops at the first failure:
    under `releases/<version>/` must be byte for byte the one staged.
 5. Uploads the installers, the updater payload and its `.sig`, and
    `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
-   bucket, cached as immutable.
-6. Downloads every one of them back from `https://updates.speakingglass.com` and
-   compares the bytes.
+   bucket, with `Cache-Control: public, max-age=31536000, immutable`.
+6. Downloads every one of them back from `https://updates.speakingglass.com`,
+   compares the bytes, and checks each is served with exactly that
+   `Cache-Control`.
 7. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
    which installed copies poll, and `releases/<channel>-<os>.json`, which a
-   download page reads. Both are served `no-cache`, and both are read back.
+   download page reads. Both are served `no-cache, no-store,
+   must-revalidate`, and both are read back, asked for as the updater asks,
+   with those three directives and no lifetime.
 8. Creates the GitHub Release (empty, so no draft is ever left for another
    OS to lose its files in), or finds the one another OS created, then
    attaches its files and checks each one arrived.
@@ -279,6 +282,13 @@ build that was staged, so step 4 passes and the rest repairs whatever the
 first attempt left undone. Re-running the whole workflow rebuilds every
 file with new bytes under the same names, and step 4 refuses that once any
 of them is published: release a new version instead.
+
+A step 6 or step 7 failure that names `Cache-Control` means the bytes are
+right and the edge is serving them with another lifetime. Cloudflare drops
+`immutable` when the zone's Origin Cache Control is off, and a Cache Rule
+can rewrite the header outright. Fix that on the zone and then re-run the
+`publish` job, which uploads the same files again with the right headers.
+Step 6 fails before the feed is touched, so nothing points at those files yet.
 
 `scripts/release-feed.mjs` is the whole layout, with the reasons.
 

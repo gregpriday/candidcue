@@ -73,7 +73,10 @@ export declare function newestStable(tags: readonly string[]): string | null;
 export declare function rustLines(text: string): string[];
 export declare const IMMUTABLE_CACHE_CONTROL: string;
 export declare const UNCACHED_CACHE_CONTROL: string;
-export declare function cacheDirectives(header: string | null | undefined): Map<string, string | true>;
+export declare const CONFLICTING: unique symbol;
+export declare function cacheDirectives(
+  header: string | null | undefined,
+): Map<string, string | true | typeof CONFLICTING>;
 export declare function immutableCacheProblem(header: string | null | undefined): string | null;
 export declare function uncachedProblem(header: string | null | undefined): string | null;
 export declare function verifyFiles(stageDir: string, options?: NetworkOptions): Promise<void>;

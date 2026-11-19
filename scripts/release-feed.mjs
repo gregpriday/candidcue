@@ -545,60 +545,75 @@ export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 /** What the upload asks R2 to serve each feed entry with. */
 export const UNCACHED_CACHE_CONTROL = 'no-cache, no-store, must-revalidate';
 
+/** A directive given twice with different values: neither can be trusted. */
+export const CONFLICTING = Symbol('conflicting Cache-Control directive');
+
 /**
  * The directives of a Cache-Control header: lower-cased names, each mapped to
- * its value (unquoted) or to `true` when it has none. A comma inside a quoted
- * value does not split it.
+ * its value (unquoted, unescaped) or to `true` when it has none. A comma inside
+ * a quoted value does not split it. A directive repeated with a different
+ * value maps to `CONFLICTING`, so a second `max-age` can neither win nor hide.
  */
 export function cacheDirectives(header) {
   const directives = new Map();
-  for (const part of (header ?? '').match(/(?:[^,"]|"[^"]*")+/g) ?? []) {
+  for (const part of (header ?? '').match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g) ?? []) {
     const eq = part.indexOf('=');
     const name = (eq === -1 ? part : part.slice(0, eq)).trim().toLowerCase();
     if (!name) continue;
-    directives.set(name, eq === -1 ? true : part.slice(eq + 1).trim().replace(/^"(.*)"$/s, '$1'));
+    let value = true;
+    if (eq !== -1) {
+      value = part.slice(eq + 1).trim();
+      const quoted = /^"((?:[^"\\]|\\.)*)"$/s.exec(value);
+      if (quoted) value = quoted[1].replace(/\\(.)/gs, '$1');
+    }
+    directives.set(name, directives.has(name) && directives.get(name) !== value ? CONFLICTING : value);
   }
   return directives;
 }
 
+const ONE_YEAR = '31536000';
+
 /**
- * Why a versioned file's Cache-Control is not the year-long, immutable
- * lifetime the upload asked for, or `null` when it is. A shorter or missing
- * lifetime means an upload that lost its `--cache-control`, or an edge rule
- * rewriting it; either way the file is not being served as the issue (#293)
- * and the release notes promise.
+ * Why a versioned file's Cache-Control is not exactly the year-long, public,
+ * immutable lifetime the upload asked for, or `null` when it is. A missing or
+ * different lifetime means an upload that lost its `--cache-control`, or an
+ * edge rule rewriting it (Cloudflare strips `immutable` when Origin Cache
+ * Control is off). `s-maxage` outranks `max-age` for the edge, so one that is
+ * present must say the same.
  */
 export function immutableCacheProblem(header) {
   const directives = cacheDirectives(header);
-  const maxAge = directives.get('max-age');
-  const refusing = ['no-cache', 'no-store', 'private'].filter((name) => directives.has(name));
-  if (
-    !directives.has('immutable') ||
-    typeof maxAge !== 'string' ||
-    !/^\d+$/.test(maxAge) ||
-    Number(maxAge) < 31_536_000 ||
-    refusing.length > 0
-  ) {
-    return `served with Cache-Control "${header ?? ''}", not "${IMMUTABLE_CACHE_CONTROL}"`;
-  }
-  return null;
+  const sMaxAge = directives.get('s-maxage');
+  const ok =
+    directives.get('public') === true &&
+    directives.get('max-age') === ONE_YEAR &&
+    (sMaxAge === undefined || sMaxAge === ONE_YEAR) &&
+    directives.has('immutable') &&
+    directives.get('immutable') !== CONFLICTING &&
+    !['no-cache', 'no-store', 'private'].some((name) => directives.has(name));
+  return ok ? null : `served with Cache-Control "${header ?? ''}", not "${IMMUTABLE_CACHE_CONTROL}"`;
 }
 
 /**
- * Why a feed entry's Cache-Control lets a cache keep it, or `null` when it
- * does not. `no-store` keeps it out of every cache; a bare `no-cache` makes
- * anything that kept it anyway revalidate. A `no-cache` naming header fields
- * (`no-cache="Set-Cookie"`) only drops those fields, so it does not count.
+ * Why a feed entry's Cache-Control lets a cache keep or reuse it, or `null`
+ * when it does not. All three of the upload's directives, bare: `no-store`
+ * keeps it out of every cache, and a bare `no-cache` and `must-revalidate`
+ * make anything that kept it anyway ask again. A `no-cache` naming header
+ * fields (`no-cache="Set-Cookie"`) only drops those fields, so it does not
+ * count, and a lifetime or a licence to serve it stale contradicts the rest.
  */
 export function uncachedProblem(header) {
   const directives = cacheDirectives(header);
-  if (directives.get('no-cache') !== true || !directives.has('no-store')) {
-    return (
-      `served with Cache-Control "${header ?? ''}", not "${UNCACHED_CACHE_CONTROL}", ` +
-      'which lets a stale entry outlive this release'
-    );
-  }
-  return null;
+  const zeroOrAbsent = (name) => !directives.has(name) || directives.get(name) === '0';
+  const ok =
+    ['no-cache', 'no-store', 'must-revalidate'].every((name) => directives.get(name) === true) &&
+    zeroOrAbsent('max-age') &&
+    zeroOrAbsent('s-maxage') &&
+    !['public', 'immutable', 'stale-while-revalidate', 'stale-if-error'].some((name) => directives.has(name));
+  return ok
+    ? null
+    : `served with Cache-Control "${header ?? ''}", not "${UNCACHED_CACHE_CONTROL}", ` +
+        'which lets a stale entry outlive this release';
 }
 
 /**
@@ -666,9 +681,10 @@ export async function verifyFeed(stageDir, { fetchFn = fetch, log = console.log,
     let last = '';
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        // Asked for as a client asks, with no cache-buster: what matters is
-        // what an installed copy is served.
-        const response = await fetchWithTimeout(url, { headers: { 'cache-control': 'no-cache' } }, fetchFn);
+        // Asked for as a client asks, with no cache-buster and no request
+        // Cache-Control (the updater sends none): what matters is what an
+        // installed copy is served.
+        const response = await fetchWithTimeout(url, {}, fetchFn);
         const cacheProblem = uncachedProblem(response.headers.get('cache-control'));
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;

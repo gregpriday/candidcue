@@ -254,10 +254,12 @@ type Route = { status: number; body?: string | Buffer; headers?: Record<string, 
 function fakeFetch(routes: Record<string, Route | (() => Route)>) {
   const seen: string[] = [];
   const asked: string[] = [];
-  const fetchFn = async (url: string) => {
+  const requests: { url: string; headers: Headers }[] = [];
+  const fetchFn = async (url: string, init: RequestInit = {}) => {
     const path = url.replace(/[?&]cb=[^&]+/, '');
     seen.push(path);
     asked.push(url);
+    requests.push({ url, headers: new Headers(init.headers) });
     const entry = routes[path];
     const route = typeof entry === 'function' ? entry() : entry ?? { status: 404 };
     const body = typeof route.body === 'string' ? route.body : new Uint8Array(route.body ?? []);
@@ -266,7 +268,7 @@ function fakeFetch(routes: Record<string, Route | (() => Route)>) {
       headers: route.headers,
     });
   };
-  return { fetchFn, seen, asked };
+  return { fetchFn, seen, asked, requests };
 }
 
 const quiet = { log: () => {}, attempts: 2, delayMs: 0 };
@@ -484,7 +486,12 @@ describe('nothing is announced until it is readable', () => {
   it.each([
     ['no Cache-Control at all', undefined],
     ['a short lifetime', 'public, max-age=3600, immutable'],
-    ['a year without immutable', 'public, max-age=31536000'],
+    ['a longer lifetime than was set', 'public, max-age=63072000, immutable'],
+    ['a year without immutable, as Cloudflare strips it', 'public, max-age=31536000'],
+    ['a year without public', 'max-age=31536000, immutable'],
+    ['a shorter lifetime for the edge', 'public, max-age=31536000, s-maxage=60, immutable'],
+    ['two lifetimes that disagree', 'public, max-age=31536000, max-age=60, immutable'],
+    ['lookalike directives', 'x-public, max-age=31536000, x-immutable'],
     ['a lifetime nothing may keep', 'no-store, max-age=31536000, immutable'],
     ['a lifetime only the browser may keep', 'private, max-age=31536000, immutable'],
     ['the feed\'s lifetime', feed.UNCACHED_CACHE_CONTROL],
@@ -497,6 +504,30 @@ describe('nothing is announced until it is readable', () => {
     await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(
       /SpeakingGlass_0\.1\.0_universal\.dmg: served with Cache-Control/,
     );
+  });
+
+  it('checks the signature and the checksums, not just the installer', async () => {
+    for (const name of ['SpeakingGlass_0.1.0_universal.app.tar.gz.sig', 'SHA256SUMS-macos.txt']) {
+      const { out } = stageMac();
+      const url = `${PUBLIC}/releases/0.1.0/${name}`;
+      const routes = servedFiles(out);
+      routes[url] = { ...routes[url], headers: { 'cache-control': 'public, max-age=300' } };
+      const { fetchFn } = fakeFetch(routes);
+      await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(`${name}: served with Cache-Control`);
+    }
+  });
+
+  it('retries a file whose edge copy still carries an old lifetime', async () => {
+    const { out } = stageMac();
+    const url = `${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`;
+    const routes = servedFiles(out);
+    const good = routes[url];
+    let calls = 0;
+    routes[url] = (() =>
+      ++calls === 1 ? { ...good, headers: { 'cache-control': 'max-age=60' } } : good) as unknown as Route;
+    const { fetchFn } = fakeFetch(routes);
+    await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).resolves.toBeUndefined();
+    expect(calls).toBe(2);
   });
 
   it('accepts the immutable lifetime however the edge spells it', async () => {
@@ -535,11 +566,28 @@ describe('the feed is verified as clients will read it', () => {
     ['no-cache alone, which a cache may still store', 'no-cache'],
     ['no-cache naming only a header field', 'no-cache="Set-Cookie", no-store'],
     ['no-store alone', 'no-store'],
+    ['no must-revalidate', 'no-cache, no-store'],
+    ['a valued no-store', 'no-cache, no-store=1, must-revalidate'],
+    ['a lifetime as well', 'no-cache, no-store, must-revalidate, max-age=60'],
+    ['a licence to serve it stale', 'no-cache, no-store, must-revalidate, stale-while-revalidate=60'],
+    ['lookalike directives', 'x-no-cache, x-no-store, x-must-revalidate'],
     ['no Cache-Control at all', undefined],
   ])('fails on an entry served with %s', async (_label, cacheControl) => {
     const { out } = stageMac();
     const { fetchFn } = fakeFetch(servedFeed(out, cacheControl === undefined ? {} : { 'cache-control': cacheControl }));
     await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(/served with Cache-Control/);
+  });
+
+  it('asks as the updater does, with nothing that could make a cache answer differently', async () => {
+    const { out } = stageMac();
+    const { fetchFn, requests } = fakeFetch(servedFeed(out));
+    await feed.verifyFeed(out, { fetchFn, ...quiet });
+    expect(requests.length).toBeGreaterThan(0);
+    for (const { url, headers } of requests) {
+      expect(url).not.toContain('cb=');
+      expect(headers.has('cache-control')).toBe(false);
+      expect(headers.has('pragma')).toBe(false);
+    }
   });
 
   it('accepts the uncached lifetime however the edge spells it', async () => {
@@ -575,6 +623,18 @@ describe('Cache-Control is read as directives, not as text', () => {
       ['no-cache', 'Set-Cookie, Vary'],
       ['no-store', true],
     ]);
+  });
+
+  it('unescapes a quoted value and keeps its escaped quote inside it', () => {
+    expect([...feed.cacheDirectives('ext="a\\"b, c", no-store')]).toEqual([
+      ['ext', 'a"b, c'],
+      ['no-store', true],
+    ]);
+  });
+
+  it('marks a directive given twice with different values as conflicting', () => {
+    expect(feed.cacheDirectives('max-age=60, max-age=31536000').get('max-age')).toBe(feed.CONFLICTING);
+    expect(feed.cacheDirectives('no-store, no-store').get('no-store')).toBe(true);
   });
 
   it('reads nothing from an absent header', () => {
