@@ -14,9 +14,10 @@ window on a single screen too.
 
 ## Download
 
-The current release is on the
-[releases page](https://github.com/gregpriday/candidcue/releases/latest), and
-every file is also served from `https://updates.speakingglass.com/releases/`:
+Each release's installers are published on the
+[releases page](https://github.com/gregpriday/candidcue/releases), and the
+installers and update files are also served from
+`https://updates.speakingglass.com/releases/<version>/`:
 
 - **macOS** (12 or later, Apple Silicon and Intel): the universal `.dmg`,
   signed and notarised.
@@ -24,9 +25,10 @@ every file is also served from `https://updates.speakingglass.com/releases/`:
   so SmartScreen asks first: choose **More info**, then **Run anyway**.
 - **Linux** (64-bit, Ubuntu 22.04 or newer): the `.AppImage`, or the `.deb`.
 
-After that, Speaking Glass checks for updates itself and installs one when you
-choose to. Each update is signed and checked against the key the app was built
-with, and it is never offered or installed during a take.
+After that, Speaking Glass checks for updates itself and installs one only when
+you choose to (a `.deb` install is pointed at the download page instead). Each
+update is signed and checked against the key the app was built with, and it is
+never offered or installed during a take.
 
 ## What it does
 
@@ -44,7 +46,8 @@ with, and it is never offered or installed during a take.
   - `[Pause]`, `[Beat]` and `[Breathe]` are shorthand cues.
   - `[Take: Intro]` starts a part you can record on its own.
   - `GUI{say="gooey"}` shows one thing and follows the voice saying another.
-  - `:::silent` and `:::stage` blocks are shown but skipped by the follower.
+  - `:::silent` and `:::stage` blocks are shown but skipped by the follower,
+    except for anything inside a nested `:::spoken` block.
 - **Your files.** Scripts are Markdown files on disk, with revision history and
   an Export all data backup.
 
@@ -55,8 +58,8 @@ audio and your script are not uploaded anywhere. The app uses the network for
 the speech model download you start yourself (about 128 MB, checked against a
 pinned SHA-256), an update check against `updates.speakingglass.com` shortly
 after launch and every six hours, which you can turn off in Settings, and the
-update download when you choose to install one, never during a take
-([`docs/updates.md`](docs/updates.md)).
+update download when you choose to install one; nothing is installed during a
+take ([`docs/updates.md`](docs/updates.md)).
 [`docs/network-inventory.md`](docs/network-inventory.md) lists every network
 path in the app and exactly what each one sends.
 
@@ -141,8 +144,8 @@ pnpm check                   # svelte-check, the authoritative typecheck
 pnpm test                    # unit and integration tests (node)
 pnpm test:dom                # component tests (jsdom)
 pnpm test:e2e                # browser journeys (Playwright)
-(cd src-tauri && cargo test) # the app's Rust core
-(cd crates && cargo test)    # alignment engine, recogniser, benchmarks
+cargo test --manifest-path src-tauri/Cargo.toml  # the app's Rust core
+cargo test --manifest-path crates/Cargo.toml     # engine, recogniser, benchmarks
 ```
 
 ```
@@ -178,6 +181,7 @@ there (see [`docs/release-runbook.md`](docs/release-runbook.md)).
 Speaking Glass is free and open source under the [MIT licence](LICENSE).
 Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Report a bug or ask a question through **Help › Report a Problem** or
-[GitHub Issues](https://github.com/gregpriday/candidcue/issues). Security
+Report a bug or ask a question in
+[GitHub Issues](https://github.com/gregpriday/candidcue/issues); **Help › Report
+a Problem** opens a new issue there in your browser. Security
 reports go privately, through [`.github/SECURITY.md`](.github/SECURITY.md).

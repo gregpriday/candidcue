@@ -30,8 +30,8 @@ engine decides where in the script you are.
 - **Linux, 64-bit**, as an AppImage or a `.deb`, built on Ubuntu 22.04 and
   needing that release's libraries or newer (WebKitGTK 4.1). Tested under X11;
   Wayland is untested.
-- **A microphone**, and **a second display** for prompter mode. A reading
-  window works on one screen.
+- **A microphone**, and **a second display** for a prompter rig. A reading
+  window, or a full-screen prompter on the same screen, works on one display.
 
 ### Speech recognition
 
@@ -56,7 +56,7 @@ engine decides where in the script you are.
 Speaking Glass checks for updates by itself: shortly after it opens and every six
 hours while it runs. When one is available it says so in the main window and
 installs it only when you choose **Install and Restart**. It never prompts,
-downloads or restarts during a take, and never draws on the glass. Every update
+installs or restarts during a take, and never draws on the glass. Every update
 is signed, and Speaking Glass refuses one that does not verify against the key it
 was built with. Turn the automatic check off in Settings; **Help › Check for
 Updates…** still works when you want it. On Linux, the AppImage installs
@@ -78,12 +78,12 @@ a `.deb` install is pointed at the download page instead.
   lists exactly what each request sends.
 - **Back up your own work.** **Export all data** writes a checksummed backup
   folder of your scripts, their revisions and images, settings, calibrations
-  and session history, which Speaking Glass can restore.
+  and session history. A complete export can be restored from Settings.
 
 ### Known limitations
 
 - Voice following is English only.
-- The speech model is downloaded separately, on first use.
+- The speech model is a separate download, which you start yourself.
 - No cloud backup or sync.
 - The Windows build is not code-signed.
 - Dragging a reading window to a display with different optics mid-take
@@ -97,7 +97,7 @@ or email [greg@siteorigin.com](mailto:greg@siteorigin.com). The full policy is
 in [SECURITY.md](https://github.com/gregpriday/candidcue/blob/HEAD/.github/SECURITY.md).
 
 **Everything else** goes to
-[GitHub Issues](https://github.com/gregpriday/candidcue/issues), which
-**Help › Report a Problem** opens. It helps to
+[GitHub Issues](https://github.com/gregpriday/candidcue/issues);
+**Help › Report a Problem** opens a new issue there in your browser. It helps to
 include the version (About Speaking Glass, or Settings), your operating system, your
 microphone and display setup, and what the prompter actually did.

@@ -8,7 +8,8 @@ start with `CONTRIBUTING.md`.
 
 A voice-following teleprompter. You write Markdown in the **control** window;
 pressing Present reshapes that window into the prompter on your chosen display
-(single-window is the production path — `src/control/lib/start-take.ts` — and
+or into a reading window (single-window is the production path —
+`src/control/lib/start-take.ts` — and
 the separate **stage** window is opened only for Settings' preview and "Show
 test" and for Calibrate); an
 on-device model transcribes your speech; a deterministic Rust engine decides
@@ -31,8 +32,8 @@ pnpm test               # node vitest (the bulk): src/**/*.test.ts + tests/{unit
 pnpm test:dom           # jsdom vitest, tests/dom/** only (separate config)
 pnpm test:all           # both vitest projects
 pnpm test:e2e           # Playwright against the Vite dev server
-(cd src-tauri && cargo test)
-(cd crates && cargo test)  # separate workspace: cc-align / cc-stt / cc-bench
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path crates/Cargo.toml  # separate workspace: cc-align / cc-stt / cc-bench
 ```
 
 Single test file / single test:
@@ -81,8 +82,9 @@ by `.spotexec/cargo.sh`. Editing `.spotexec/Dockerfile` rebuilds the image on
 the next run; the scripts beside it do not.
 
 No test reaches a remote host (the model downloader's tests serve their own
-archive over loopback). Transcription is on-device, so cc-bench replays real
-speech through the real recogniser offline instead of a live smoke test.
+archive over loopback). Transcription is on-device, so there is no live smoke
+test: `cc-bench capture-local` runs fixture audio through the real recogniser,
+and Tier B/C replay the captured event logs offline.
 
 Alignment benchmarks (`bench/README.md` has the full story):
 
@@ -100,8 +102,8 @@ cargo run --release -p cc-bench -- robustness --budget 2000
 ```
 
 `bench/runs*/` `events.jsonl` and `gold.json` are in **Git LFS**. Without a fetch
-they are ~130-byte pointers and a Tier B/C run simply finds no events rather than
-failing loudly — check `git lfs ls-files` first if a corpus looks empty.
+they are ~130-byte pointers, and a replay stops with an error naming the pointer
+file — run `git lfs pull` (`git lfs ls-files` lists what should be there).
 
 There is no lint script and no ESLint/Prettier config in the tree. Conventions:
 single quotes, no Prettier. Do **not** run `cargo fmt` — the tree predates it
@@ -220,8 +222,9 @@ One snapshot field is **dim-only and must stay that way**: `provisionalToken` is
 a reversible frontier fed by fuzzy/phonetic evidence, and it is allowed to lead
 precisely because shading can be taken back and scroll cannot. In the renderer it
 reaches the dim frontier (`cursorTokenIndex` and its retraction latch in
-`ScriptLayer.svelte`) and nothing else; wiring it into motion, `observed` or
-`confirmed` would let a spelling guess move the document. `provisionalRetracted`
+`ScriptLayer.svelte`), which also places the Wash cue's phrase highlight, and
+never a scroll target; wiring it into motion, `observed` or `confirmed` would
+let a spelling guess move the document. `provisionalRetracted`
 is a **one-shot** — the engine clears it after the snapshot that carries it, so
 treat it as an event, not a state. As of 2026-07-30 the gate never opens on the
 recorded corpus (`bench/README.md`, "The reversible dim frontier") — the
@@ -231,15 +234,16 @@ working on real takes.
 ### One snapshot, two consumers
 
 `align/mod.rs::publish` emits every alignment snapshot twice: to the stage
-window (`stage://alignment-snapshot`) and to control (`align://snapshot`). In
-the production take there is no stage window — `Live.svelte` embeds
+window (`stage://alignment-snapshot`) and to control (`align://snapshot`). The
+production take renders entirely in the control window — `Live.svelte` embeds
 `StageApp` in the control window and hands it control's own copy
 (`$session.snapshot`) through its `embedded` prop (an `EmbeddedStageBridge`),
 so motion runs in the control webview. The separate stage window, which still
 receives the direct emit, exists only for Settings' preview and "Show test" and
-for Calibrate.
-Motion and the take summary read the same snapshots, so the summary describes
-the alignment the presenter was actually shown.
+for Calibrate (a preview can still be open beside a take, independently).
+Motion and the take summary share control's alignment feed: the renderer
+validates and animates it, and the summary reports confirmed progress (or where
+Auto-scroll ended) from the same snapshots.
 
 Stage-side motion lives in `src/stage/motion/`: a persistent jerk-limited
 follower (`controller.ts`, pure — the caller supplies `dt`, no rAF, no DOM) fed
@@ -294,8 +298,9 @@ the **automatic** profile, rebuilt from the landed panel on every Present
 (`shared/optical-discovery.ts::automaticProfile` — hardware table for the two
 Elgato models, otherwise the panel's own EDID millimetres, which Rust reads
 via `windows/panel_size.rs` into `DisplayDescriptor.physicalSizeMm`); else the
-flat fallback font size from Settings (64px by default), which only an
-unidentifiable panel gets now. The automatic
+flat fallback font size from Settings (64px by default), which only a panel
+with no usable optics gets now. (A rig can also pin a CSS-pixel size under
+Advanced, which overrides the visual-angle sizing.) The automatic
 profile is never stored — its `rigName` is `AUTOMATIC_RIG_NAME` (a name the
 wizard refuses) and that is how the appearance sheet and Live tell it from a
 calibrated rig. A stored rig that is not chosen is deliberately never adopted.
@@ -309,8 +314,10 @@ substitutes when a display has no EDID; `cargo test --lib windows::panel_size --
 
 ### Stage event protocol
 
-`src/shared/contracts/stage.ts` is the complete surface between control/Rust and
-the stage. Event names use the `stage://` convention and are mirrored verbatim
+`src/shared/contracts/stage.ts` is the complete event surface between
+control/Rust and the stage. (In a take, `Live.svelte` also drives the embedded
+stage through the `EmbeddedStageBridge` prop: alignment, follow pause, blanking,
+exit.) Event names use the `stage://` convention and are mirrored verbatim
 in `src-tauri/src/windows/mod.rs::events`; a Rust test `include_str!`s the
 TypeScript file to assert the two stay in sync, so **keep the string literals
 grep-able**.
@@ -341,14 +348,16 @@ src/control/      routes/ (Editor, Live, Settings, Calibrate, Library, Welcome,
                   services/ (ipc, voice-session, stage-envelope, audio/, stt/)
 src/stage/        StageApp/StageDock, motion/, renderer/ — embedded in Live for a
                   take, and the separate stage window's page
-src/preferences/  the Settings window's entry (hosts routes/Settings.svelte)
+src/preferences/  the Settings window's entry (hosts src/control/routes/Settings
+                  and Calibrate)
 src/identify/     the "which panel is display 2?" overlay
 src/workers/      compiler Web Worker
 src-tauri/src/    app.rs (command registry), commands/, windows/, align/, speech/,
                   coordinator/ (window generations, session, stage handshake),
                   database/, scripts/, assets/, sessions/, settings/, backup/,
                   updater.rs, legacy_data.rs (the CandidCue data-folder copy)
-src-tauri/models/ dev-only recogniser fetch target (gitignored, never bundled)
+src-tauri/models/ the model catalogue (compiled into Rust) and attribution; the
+                  downloaded model files are gitignored and never bundled
 crates/           cc-align (engine), cc-stt (STT protocol + on-device
                   recogniser), cc-bench
 bench/            fixture scripts, immutable captured replay runs, results
@@ -502,7 +511,9 @@ Wayland, or on two real monitors. What is different there:
   into place before the builder (a read-only `VACUUM INTO` snapshot of the
   database, then the logs and model seals renamed inside the copy), under an
   OS file lock the process then holds; a copied folder carries
-  `.candidcue-folder-copied`, and an unmarked one is retried next launch. A
+  `.candidcue-folder-copied`, and an unmarked one is retried next launch unless
+  the new folder already holds scripts or a recovery under way (that work is
+  kept, and the copy is not made). A
   `candidcue.sqlite3` export and a `.candidcue` bundle still restore and import. The old name survives on purpose in a few places: the SQL
   migrations (sqlx checksums them, so never edit one), the bench corpora and
   their fixture scripts (the recorded audio says "CandidCue"), `docs/archive/`,
