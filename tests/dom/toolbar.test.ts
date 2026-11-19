@@ -204,6 +204,82 @@ describe('Toolbar — abandoning an edit', () => {
   });
 });
 
+/*
+ * #449: File › Save and a quit move no focus, so neither fires the blur that
+ * commits the draft. They READ it instead, through `pendingTitle()` — which
+ * must answer exactly what leaving the field would have committed, and leave
+ * the field as the user has it.
+ */
+describe('Toolbar — the pending title a Save or quit reads', () => {
+  function typeInto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+  }
+
+  it('is the trimmed draft while the caret is still in the field, and reports nothing', () => {
+    const ontitlechange = vi.fn();
+    const { container, component } = renderHeader({ editableTitle: true, ontitlechange });
+    const input = titleInput(container);
+    input.focus();
+    typeInto(input, '  Keynote  ');
+
+    expect(component.pendingTitle()).toBe('Keynote');
+    expect(ontitlechange, 'reading is not committing').not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('  Keynote  ');
+  });
+
+  it('is nothing for an untouched, unchanged or emptied field', () => {
+    const { container, component } = renderHeader({ editableTitle: true });
+    const input = titleInput(container);
+    expect(component.pendingTitle()).toBeNull();
+    typeInto(input, ' Panel talk ');
+    expect(component.pendingTitle(), 'the same name is not a rename').toBeNull();
+    typeInto(input, '   ');
+    expect(component.pendingTitle(), 'an empty name is not a name').toBeNull();
+  });
+
+  it('is nothing once Escape has abandoned the edit', async () => {
+    const { container, component } = renderHeader({ editableTitle: true });
+    const input = titleInput(container);
+    input.focus();
+    typeInto(input, 'Half-typed nonsen');
+    press(input, 'Escape');
+    await tick();
+    expect(component.pendingTitle()).toBeNull();
+  });
+
+  it('is nothing for a title that is not editable, even over a dirty draft', async () => {
+    const { container, component, rerender } = renderHeader({ editableTitle: true });
+    typeInto(titleInput(container), 'Keynote');
+    await rerender({ title: 'Panel talk', editableTitle: false });
+    await tick();
+    expect(component.pendingTitle()).toBeNull();
+  });
+
+  it('keeps the typed text, spaces and all, when the save it fed lands under the caret', async () => {
+    const { container, component, rerender } = renderHeader({ editableTitle: true });
+    const input = titleInput(container);
+    input.focus();
+    typeInto(input, 'Board ');
+    expect(component.pendingTitle()).toBe('Board');
+
+    // The saved title catches up while the caret is still in the field. A
+    // re-seed here would leave `Board`, and the next word would read
+    // `Boardmeeting`.
+    await rerender({ title: 'Board', editableTitle: true });
+    await tick();
+    expect(titleInput(container).value).toBe('Board ');
+    expect(component.pendingTitle(), 'nothing new to commit').toBeNull();
+
+    // Leaving the field still shows the saved title, trimmed.
+    blur(titleInput(container));
+    await tick();
+    expect(titleInput(container).value).toBe('Board');
+  });
+});
+
 describe('Toolbar — focus treatment', () => {
   it('the back control is a small control, so it keeps the accent ring', () => {
     const { container } = renderHeader({ onback: () => {} });

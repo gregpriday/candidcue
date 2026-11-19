@@ -105,9 +105,23 @@
    */
   const dragRegion = windowTitlebar() === 'overlay' ? 'deep' : undefined;
 
-  let draft = $derived(title);
+  /*
+   * What was last typed into the field, held outside the reactive graph.
+   *
+   * An explicit Save commits the TRIMMED draft while the caret stays in the
+   * field (#449), and the saved title then changes underneath it. Re-seeding
+   * from that title would rewrite the input mid-edit: `Board ` becomes `Board`,
+   * and the next word typed lands as `Boardmeeting`. So a saved title that is
+   * just the typed text trimmed leaves the typed text alone. Any other change
+   * — a rename from elsewhere, another script — still replaces the draft.
+   * Cleared whenever the field commits or abandons, so a finished edit always
+   * shows the saved title.
+   */
+  let typed: string | null = null;
+  let draft = $derived.by(() => (typed !== null && typed.trim() === title ? typed : title));
 
   function commitTitle(): void {
+    typed = null;
     const next = draft.trim();
     if (!next) {
       draft = title;
@@ -115,6 +129,22 @@
     }
     draft = next;
     if (next !== title) ontitlechange?.(next);
+  }
+
+  /**
+   * The title the field would commit if it were left now, or `null` when
+   * leaving it would commit nothing — unchanged, emptied, or abandoned with
+   * Escape (which has already put the saved title back into the draft).
+   *
+   * Read, not committed: an explicit Save or a quit has to include a title the
+   * caret is still in (#449), and neither moves focus. Reading the draft leaves
+   * the field exactly as the user has it; the saved title then catches up
+   * underneath, and `draft` re-seeds from it.
+   */
+  export function pendingTitle(): string | null {
+    if (!editableTitle) return null;
+    const next = draft.trim();
+    return next && next !== title ? next : null;
   }
 
   function titleKeydown(event: KeyboardEvent): void {
@@ -134,6 +164,7 @@
        */
       event.preventDefault();
       event.stopPropagation();
+      typed = null;
       draft = title;
       (event.currentTarget as HTMLInputElement).blur();
     }
@@ -180,6 +211,7 @@
             bind:this={titleElement}
             bind:value={draft}
             aria-label="Script title"
+            oninput={(event) => (typed = event.currentTarget.value)}
             onblur={commitTitle}
             onkeydown={titleKeydown}
           />

@@ -13,6 +13,8 @@ import {
   editorHasUnsavedWork,
   editorStateHasUnsavedWork,
   openScript,
+  registerTitleDraft,
+  saveDocument,
   saveNow,
   setSource,
   setTitle,
@@ -431,5 +433,99 @@ describe('title persistence and file-action safety', () => {
     vi.spyOn(scripts, 'saveScript').mockRejectedValueOnce(new Error('Disk unavailable'));
     await expect(flushEditorEdits(scriptId)).rejects.toThrow('Disk unavailable');
     expect(get(editor).dirty).toBe(true);
+  });
+});
+
+/*
+ * #449: an explicit Save, and the flush a quit runs, take the title the
+ * toolbar is still holding — the caret has not left the field, so its blur
+ * commit never ran.
+ */
+describe('saveDocument and the title draft', () => {
+  let unregister: (() => void) | null = null;
+  afterEach(() => {
+    unregister?.();
+    unregister = null;
+    vi.restoreAllMocks();
+  });
+
+  it('writes the pending draft as the title, with the body, in one save', async () => {
+    unregister = registerTitleDraft(() => 'Renamed rehearsal');
+    setSource('# Edited body\n');
+    const saveSpy = vi.spyOn(scripts, 'saveScript');
+    await saveDocument();
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    expect(await scripts.getScript(scriptId)).toMatchObject({
+      title: 'Renamed rehearsal',
+      source: '# Edited body\n',
+    });
+    expect(get(editor)).toMatchObject({ title: 'Renamed rehearsal', dirty: false });
+  });
+
+  it('writes nothing when the reader has nothing pending and the body is clean', async () => {
+    unregister = registerTitleDraft(() => null);
+    const saveSpy = vi.spyOn(scripts, 'saveScript');
+    await saveDocument();
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(get(editor).title).toBe('Autosave test');
+  });
+
+  it('still saves the body when there is no title to take', async () => {
+    for (const draft of [null, '   ', ' Autosave test ']) {
+      unregister?.();
+      unregister = registerTitleDraft(() => draft);
+      setSource(`# Body for ${String(draft)}\n`);
+      await saveDocument();
+      expect(await scripts.getScript(scriptId)).toMatchObject({
+        title: 'Autosave test',
+        source: `# Body for ${String(draft)}\n`,
+      });
+      expect(editorHasUnsavedWork()).toBe(false);
+    }
+  });
+
+  it('ignores a blank or unchanged draft', async () => {
+    const saveSpy = vi.spyOn(scripts, 'saveScript');
+    unregister = registerTitleDraft(() => '   ');
+    await saveDocument();
+    unregister();
+    unregister = registerTitleDraft(() => ' Autosave test ');
+    await saveDocument();
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
+  it('is never taken by the autosave debounce, which fires mid-typing', async () => {
+    unregister = registerTitleDraft(() => 'Half-typ');
+    vi.useFakeTimers();
+    setSource('# Typed body\n');
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS + 100);
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    expect(await scripts.getScript(scriptId)).toMatchObject({
+      title: 'Autosave test',
+      source: '# Typed body\n',
+    });
+    expect(get(editor)).toMatchObject({ title: 'Autosave test', dirty: false });
+  });
+
+  it('an earlier registration cannot unregister a later one', async () => {
+    const stale = registerTitleDraft(() => 'From the old route');
+    unregister = registerTitleDraft(() => 'From the new route');
+    stale();
+    await saveDocument();
+    expect((await scripts.getScript(scriptId)).title).toBe('From the new route');
+    // And the later one's own disposer does clear it.
+    unregister();
+    unregister = null;
+    setSource('# After\n');
+    await saveDocument();
+    expect((await scripts.getScript(scriptId)).title).toBe('From the new route');
+  });
+
+  it('reads nothing once unregistered', async () => {
+    registerTitleDraft(() => 'Gone')();
+    const saveSpy = vi.spyOn(scripts, 'saveScript');
+    await saveDocument();
+    expect(saveSpy).not.toHaveBeenCalled();
   });
 });
