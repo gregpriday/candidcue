@@ -301,6 +301,28 @@ describe('the run passes only once the public URL serves the pinned bytes', () =
     expect(reads).toBe(4);
   });
 
+  it('fails on the pinned digest at the wrong length', async () => {
+    await expect(
+      mirror.verifyArchive('https://m/x', expected, {
+        read: async () => ({ status: 200, bytes: expected.bytes - 1, sha256: expected.sha256 }),
+        attempts: 1,
+        delayMs: 0,
+        log: quiet,
+      }),
+    ).rejects.toThrow(/bytes/);
+  });
+
+  it('names the timeout when a transfer stalls, not a bare abort', async () => {
+    // A fetch that never answers until it is aborted, as fetch itself does.
+    const stalled = ((_url: string, init: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })) as unknown as typeof fetch;
+    await expect(mirror.readBack('https://m/x', 1, { fetchFn: stalled, timeoutMs: 20 })).rejects.toThrow(
+      'took longer than 20 ms',
+    );
+  });
+
   it('fails when the URL never answers', async () => {
     await expect(
       mirror.verifyArchive('https://m/x', expected, {
@@ -532,10 +554,9 @@ describe('a sync over the catalogue', () => {
     expect(calls.heads).toEqual([]);
   });
 
-  it("verifies every model at its client URL, with the release gate's attempts", async () => {
+  it('verifies every model at its client URL, whatever origin the bucket is published under', async () => {
     const seen: Array<{ at: string; attempts: number }> = [];
     await mirror.verifyCatalogue(catalogue, {
-      publicUrl: 'https://cdn.example',
       log: quiet,
       attempts: 3,
       verify: async (at: string, _expected: unknown, options: { attempts: number }) => {

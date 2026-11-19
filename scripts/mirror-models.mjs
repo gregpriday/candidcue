@@ -45,8 +45,8 @@
  * whose catalogue names a mirror that does not serve its archive never ships.
  *
  * `sync` reads the bucket through the aws CLI with `R2_ENDPOINT`, `R2_BUCKET`
- * and the usual `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
- * `SPEAKING_GLASS_PUBLIC_URL` names the origin the bucket is served from;
+ * and the usual `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, and
+ * `SPEAKING_GLASS_PUBLIC_URL` names the origin that bucket is served from.
  * `SPEAKING_GLASS_MODEL_CATALOGUE` overrides the catalogue path.
  */
 
@@ -195,9 +195,9 @@ export function loadCatalogue(path = process.env.SPEAKING_GLASS_MODEL_CATALOGUE 
  * the byte ceiling, the file — rejects this call and closes everything, and
  * the timeout aborts the transfer rather than just the wait for headers.
  */
-async function transfer(url, limit, sink, fetchFn) {
+async function transfer(url, limit, sink, fetchFn, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error(`${url} took longer than ${FETCH_TIMEOUT_MS} ms`)), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new Error(`${url} took longer than ${timeoutMs} ms`)), timeoutMs);
   try {
     const response = await fetchFn(url, { redirect: 'follow', signal: controller.signal });
     if (response.status !== 200 || !response.body) {
@@ -224,14 +224,17 @@ async function transfer(url, limit, sink, fetchFn) {
     });
     await pipeline(...stages, { signal: controller.signal });
     return { status: 200, sha256: hash.digest('hex'), bytes };
+  } catch (error) {
+    // An abort surfaces as a bare AbortError; the reason says it was the timeout.
+    throw controller.signal.aborted ? controller.signal.reason : error;
   } finally {
     clearTimeout(timer);
   }
 }
 
 /** GET a URL, hash its body, and report what it served. Never reads past `limit`. */
-export async function readBack(url, limit, { fetchFn = fetch } = {}) {
-  return transfer(url, limit, null, fetchFn);
+export async function readBack(url, limit, { fetchFn = fetch, timeoutMs } = {}) {
+  return transfer(url, limit, null, fetchFn, timeoutMs);
 }
 
 /**
@@ -418,13 +421,18 @@ export async function syncCatalogue(catalogue, { publicUrl, bucket, download, sc
   }
 }
 
-/** `verify` over a whole catalogue. Needs no credentials. */
-export async function verifyCatalogue(catalogue, { publicUrl, log = console.log, verify = verifyArchive, attempts = 3 }) {
+/**
+ * `verify` over a whole catalogue. Needs no credentials, and no bucket: it
+ * asks the URL a client asks, wherever that is served from. Retried as long
+ * as `sync`'s read-back, so a 404 the runner's edge cached just before the
+ * seed cannot fail a release whose mirror is fine.
+ */
+export async function verifyCatalogue(catalogue, { log = console.log, verify = verifyArchive, attempts = READ_BACK_ATTEMPTS } = {}) {
   if (!catalogue.mirrorBaseUrl) {
     log('The catalogue names no mirror; nothing to verify.');
     return;
   }
-  mirrorPrefix(catalogue.mirrorBaseUrl, publicUrl);
+  httpsUrl(catalogue.mirrorBaseUrl, 'mirrorBaseUrl');
   for (const model of catalogue.models) {
     log(model.id);
     await verify(mirrorUrl(catalogue.mirrorBaseUrl, model), model.archive, { log, attempts });
@@ -433,12 +441,16 @@ export async function verifyCatalogue(catalogue, { publicUrl, log = console.log,
 
 async function main([command]) {
   const catalogue = loadCatalogue();
-  const publicUrl = process.env.SPEAKING_GLASS_PUBLIC_URL || DEFAULT_PUBLIC_URL;
   if (command === 'verify') {
-    await verifyCatalogue(catalogue, { publicUrl });
+    await verifyCatalogue(catalogue);
     return;
   }
   if (command !== 'sync') throw new Error('usage: mirror-models.mjs sync|verify');
+  if (!catalogue.mirrorBaseUrl) {
+    console.log('The catalogue names no mirror; nothing to do.');
+    return;
+  }
+  const publicUrl = process.env.SPEAKING_GLASS_PUBLIC_URL || DEFAULT_PUBLIC_URL;
 
   const bucket = awsBucket({ endpoint: process.env.R2_ENDPOINT, bucket: process.env.R2_BUCKET });
   const scratch = mkdtempSync(join(tmpdir(), 'mirror-models-'));

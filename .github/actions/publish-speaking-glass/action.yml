@@ -87,8 +87,6 @@ runs:
     # .github/workflows/mirror-models.yml when the catalogue lands on develop.
     - name: The speech-model mirror must serve every archive the catalogue pins
       shell: bash
-      env:
-        SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
       run: node scripts/mirror-models.mjs verify
 
     # The aws CLI's default request checksums are an S3 extension R2 does not

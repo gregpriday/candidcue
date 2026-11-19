@@ -55,7 +55,7 @@ export declare function loadCatalogue(path?: string): Catalogue;
 export declare function readBack(
   url: string,
   limit: number,
-  options?: { fetchFn?: typeof fetch },
+  options?: { fetchFn?: typeof fetch; timeoutMs?: number },
 ): Promise<ReadBack>;
 export declare function downloadVerified(
   url: string,
@@ -114,8 +114,7 @@ export declare function syncCatalogue(
 
 export declare function verifyCatalogue(
   catalogue: Catalogue,
-  context: {
-    publicUrl: string;
+  context?: {
     log?: Log;
     verify?: (url: string, expected: Expected, options: { log: Log; attempts: number }) => Promise<void>;
     attempts?: number;
