@@ -226,6 +226,11 @@ const MAX_PART_ROWS = 12;
 export function presentMenuItems(
   current: PresentationMode,
   choose: (mode: PresentationMode) => void,
+  /**
+   * A teleprompter take under the camera above this screen (#238), when the
+   * caller can launch one. Absent leaves the menu at its two shapes.
+   */
+  cameraAbove?: () => void,
 ): PresentMenuItem[] {
   /*
    * The product's own nouns, under a "Present as" heading that reads as the
@@ -248,5 +253,24 @@ export function presentMenuItems(
       selected: current === 'reader',
       onselect: () => choose('reader'),
     },
+    /*
+     * An action, not a third shape: it is never ticked, because it does not
+     * become the default. It opens a teleprompter take on the screen this
+     * window is on and remembers the camera rig for THAT panel, so the next
+     * plain Present still goes to the pinned prompter when it is plugged in,
+     * and comes back here, under the camera, when it is not.
+     */
+    ...(cameraAbove
+      ? [
+          {
+            label: CAMERA_ABOVE_LABEL,
+            description: 'Laptop or webcam, no mirror · from the beginning',
+            onselect: cameraAbove,
+          },
+        ]
+      : []),
   ];
 }
+
+/** The Present-menu row for a take under the camera above this screen (#238). */
+export const CAMERA_ABOVE_LABEL = 'Camera above this screen';

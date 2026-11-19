@@ -31,6 +31,7 @@ import {
   type CalibratedRig,
   type TakeDestination,
 } from '../lib/take-destination';
+import { isCameraOffPanelProfile } from '../lib/camera-above-rig';
 import { currentWindowDisplay, listDisplays, watchDisplayChanges } from '../services/stage';
 import {
   activeOpticalProfile,
@@ -113,7 +114,13 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
     const calibratedRigs: CalibratedRig[] = [];
     for (const display of displays) {
       const profile = activeOpticalProfile(context.optical, display.fingerprint);
-      if (profile !== null) calibratedRigs.push({ display, rigName: profile.rigName });
+      if (profile !== null) {
+        calibratedRigs.push({
+          display,
+          rigName: profile.rigName,
+          ...(isCameraOffPanelProfile(profile) ? { cameraOffPanel: true } : {}),
+        });
+      }
     }
     /*
      * The pinned panel's rig is the exception to "connected only": when that

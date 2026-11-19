@@ -54,6 +54,7 @@ import {
 import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
 import { loadSettings, patchSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
+import { isPrompterGlass, withCameraAboveRig } from './camera-above-rig';
 import { getVoiceFacade } from '../services/voice-facade';
 import { preloadSpeechEngine } from '../services/stt/local';
 import { writable } from 'svelte/store';
@@ -311,6 +312,46 @@ function restoreFrameFor(saved: AppSettings, mode: PresentationMode): ReaderFram
   return saved.stage.readerFrame;
 }
 
+/**
+ * The optical section a take under the camera above this screen is composed
+ * from, stored first when the panel is known (#238).
+ *
+ * Stored only against a panel Rust NAMED (`named`): the rig and the cleared
+ * mirror belong to one physical screen, and writing them against a guess could
+ * take a prompter's mirror away. A guess still gets the camera geometry for
+ * this one take — it is the best layout anybody can offer — but nothing about
+ * it is remembered.
+ *
+ * Recognised prompter glass is refused outright: a camera cannot be above a
+ * screen it films through, so the window was on the wrong screen. The take
+ * opens as the teleprompter it landed on, and a toast says why.
+ *
+ * A save that fails still composes the take from the rig: `patchSettings` has
+ * already reported the failure, and refusing to lay the take out for the
+ * camera the presenter just chose would be a second failure on top of it.
+ */
+async function chooseCameraAboveRig(
+  s: AppSettings,
+  panel: DisplayDescriptor | null,
+  named: boolean,
+): Promise<AppSettings['optical']> {
+  if (panel === null) return s.optical;
+  if (isPrompterGlass(panel)) {
+    showToast(
+      'This screen is a teleprompter, so it was left as it is. Move the Speaking Glass window to the screen with the camera above it and choose Camera above this screen again.',
+      'info',
+    );
+    return s.optical;
+  }
+  const t = s.teleprompter;
+  const seed = { intensity: t.textIntensity, readingCue: t.readingCue, bias: t.sizeBias };
+  if (!named) return withCameraAboveRig(s.optical, panel, seed);
+  // The newest optical section, so a rig saved since this take began is kept.
+  const next = withCameraAboveRig(get(settings).optical ?? s.optical, panel, seed);
+  await patchSettings('optical', next).catch(() => {});
+  return next;
+}
+
 export interface StartTakeOptions {
   /**
    * Present in this shape, and REMEMBER it.
@@ -394,6 +435,20 @@ export interface StartTakeOptions {
    * no migration.
    */
   practice?: boolean;
+  /**
+   * A teleprompter take under the camera above this screen (#238).
+   *
+   * The take fills the screen the window is on — the pinned panel is NOT
+   * asked for, since the camera is above this one — and, once Rust has said
+   * which panel that is, the camera rig is chosen for it and its mirror
+   * cleared (`withCameraAboveRig`). Stored against the panel, so the next plain
+   * Present finds it there whenever it falls back to this screen, and finds
+   * the pinned prompter's own rig and mirror whenever it is plugged in.
+   *
+   * Pass `presentationMode: 'prompter'` with it. Ignored for a practice, which
+   * always opens in a window.
+   */
+  cameraAboveScreen?: boolean;
   /**
    * The part of the script this take is recording (§parts).
    *
@@ -542,6 +597,9 @@ export async function startTake(
     const presentationMode: PresentationMode = options.practice
       ? 'reader'
       : s.stage.presentationMode;
+    // Only a teleprompter take goes under the camera; see `cameraAboveScreen`.
+    const cameraAbove =
+      options.cameraAboveScreen === true && !options.practice && presentationMode === 'prompter';
     /*
      * Start loading the recogniser now, while the rest of the take is built
      * (#257).
@@ -767,8 +825,10 @@ export async function startTake(
       restoreFrameFor(s, presentationMode),
       // The pinned panel, for a prompter to fill. Rust falls back to the
       // monitor the window is on when nothing is pinned or the pin is
-      // unplugged, and reports whichever it chose — see below.
-      s.stage.displayFingerprint,
+      // unplugged, and reports whichever it chose — see below. A take under
+      // the camera above this screen asks for no panel, so it gets that
+      // fallback: the screen the window is on.
+      cameraAbove ? null : s.stage.displayFingerprint,
     );
     await awaitViewportSettled(presentation);
 
@@ -807,9 +867,22 @@ export async function startTake(
      * never worse than what it replaced.
      */
     const displays = await stageService.listDisplays().catch(() => []);
+    const reported = displays.find((d) => d.fingerprint === presentation.displayFingerprint) ?? null;
+    /*
+     * A take under the camera writes a rig against the panel it lands on, so
+     * it needs a panel somebody NAMED, not a guess: Rust's answer, or failing
+     * that the monitor Rust says the window is on now that it has moved. Its
+     * last-resort guess is the primary display rather than the prompter rule,
+     * which would aim at the pinned glass this take deliberately did not ask
+     * for — and a guess is only ever composed against, never stored.
+     */
+    const named =
+      reported ?? (cameraAbove ? await stageService.currentWindowDisplay().catch(() => null) : null);
     const landed =
-      displays.find((d) => d.fingerprint === presentation.displayFingerprint) ??
-      chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
+      named ??
+      (cameraAbove
+        ? chooseStageDisplay(displays, null, 'reader')
+        : chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode));
     /*
      * COMPOSED AGAINST THE MODE THIS TAKE IS OPENING IN, not the saved one.
      *
@@ -831,6 +904,7 @@ export async function startTake(
      */
     const composedFrom: AppSettings = {
       ...s,
+      ...(cameraAbove ? { optical: await chooseCameraAboveRig(s, landed, named !== null) } : {}),
       stage: { ...s.stage, presentationMode },
     };
     const stageSettings = stageSettingsFromSettings(composedFrom, landed);
