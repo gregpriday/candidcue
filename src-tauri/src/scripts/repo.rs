@@ -39,7 +39,7 @@ pub fn file_missing_error(script_id: &ScriptId) -> AppError {
 }
 
 /// Every authored-state transition writes exactly one row. Anything else is a
-/// lost compare-and-swap and must never be reported as success (spec §48.4).
+/// lost compare-and-swap and must never be reported as success.
 fn expect_single_row(rows_affected: u64, expected_revision: i64) -> Result<(), AppError> {
     match rows_affected {
         1 => Ok(()),

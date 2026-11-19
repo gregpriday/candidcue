@@ -1160,7 +1160,7 @@ static SPOKEN_VISUAL: LazyLock<Regex> =
 static SPOKEN_SAY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^[ \t]*say:[ \t]*(.*)$").expect("say pattern"));
 
-/// The last line of `coach:` front matter, which the compiler masks
+/// The last line of the retired `coach:` front matter, which the compiler masks
 /// out. Any other front matter is ordinary Markdown to it, and so here.
 fn coach_front_matter_end(lines: &[&str]) -> Option<usize> {
     if lines.first()?.trim() != "---" {

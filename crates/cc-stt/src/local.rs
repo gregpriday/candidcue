@@ -18,8 +18,9 @@
 //!   recorded at. We emit on every CHANGE rather than on a timer: the engine
 //!   costs ~90 µs an event, and earlier evidence is the entire product.
 //!
-//! The model archive is not fixed: [`ModelFiles::detect`] works out how a given one
-//! names its graphs, because upstream is not consistent and ships no manifest.
+//! The model archive is not fixed: [`ModelFiles::detect`] works out how a given
+//! one names its graphs, because upstream is not consistent and ships no
+//! manifest.
 //!
 //! Utterance identity is minted here in the shape the replay corpora already
 //! hold — ids are `"{generation}-{ordinal}"` — so a log captured today and one

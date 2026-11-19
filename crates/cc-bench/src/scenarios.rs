@@ -419,7 +419,7 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
 
         // 12. Rate extremes.
         // ---------------------------------------------------------------
-        // The scenario cells the corpus was missing (§11).
+        // The scenario cells the corpus was missing.
         //
         // Balanced by CELL, not by duration: a clean read is the easiest thing
         // the engine does and it was most of the wall-clock in the suite, so

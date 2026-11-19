@@ -12,7 +12,7 @@
 //! `fidelity = 1 − E/Z` where `Z` is the cost of explaining the same query and
 //! consumed script span with no matches at all. A verbatim read therefore has
 //! `E = 0` and fidelity exactly `1.0` regardless of token weights — the
-//! mandatory invariant from the spec (§10.4), enforced by a property test.
+//! invariant enforced by a property test.
 
 use crate::config::AlignmentConfig;
 use crate::ledger::QueryAtom;
@@ -29,7 +29,7 @@ pub enum Relation {
 
 /// Everything the ranker and the confidence model need to know about one
 /// candidate alignment, kept as separate features rather than one opaque
-/// score (spec §10.5).
+/// score (Navigation spec §10.7).
 #[derive(Debug, Clone, Default)]
 pub struct Evidence {
     /// 1 − E/Z in [0,1].
@@ -121,7 +121,7 @@ impl Default for AlignScratch {
 }
 
 /// Is `b` within a small edit distance of `a`? Bounded Levenshtein used for
-/// the fuzzy relation: distance ≤1 for length 5–8, ≤2 for 9+ (spec §10.6).
+/// the fuzzy relation: distance ≤1 for length 5–8, ≤2 for 9+.
 pub fn fuzzy_match(a: &str, b: &str) -> bool {
     if a.is_ascii() && b.is_ascii() {
         let (la, lb) = (a.len(), b.len());
@@ -501,8 +501,8 @@ pub fn align(
 /// Last-resort phonetic relation: the script atom is a rare anchor-grade word
 /// and the two sound alike.
 ///
-/// The length and anchor tests that used to live here are now facts about the
-/// keys: both are empty unless the word qualified when it was encoded.
+/// Length and anchor eligibility are facts about the keys: both are empty
+/// unless the word qualified when it was encoded.
 fn phonetic_ok(q: &QueryAtom, s: &crate::script::ScriptAtom) -> bool {
     q.phonetic.matches(&s.phonetic)
 }

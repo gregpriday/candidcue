@@ -54,7 +54,7 @@ pub mod events {
      * `src/shared/contracts/updates.ts`, with its own test holding the two
      * spellings together.
      */
-    /// A speech model's install progressing, finishing, or failing (§152).
+    /// A speech model's install progressing, finishing, or failing (#152).
     ///
     /// Its own name rather than a shared "download progress" event: a screen
     /// listening for "something is downloading" could not otherwise tell a
@@ -66,7 +66,7 @@ pub mod events {
     /// Rust → every window: the settings document changed, and here it is.
     ///
     /// Broadcast rather than targeted, because Settings now lives in its own
-    /// window (§14.1) and each webview holds its own copy of the store. It
+    /// window and each webview holds its own copy of the store. It
     /// carries the whole revisioned document so a listener adopts the new state
     /// without a second round trip — and without a window in between where it
     /// would answer from a copy it already knows is stale.
@@ -118,7 +118,7 @@ pub mod events {
 
     // Stage → Rust (listened in app setup).
     /// The stage's event subscriptions are registered and it can now receive
-    /// a document (spec §43.3 step 0).
+    /// a document (handshake step 0).
     ///
     /// A webview event is delivered by evaluating JS in the target webview and
     /// is not queued, so anything emitted to the stage before its bundle runs
@@ -1412,7 +1412,7 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     // Same failure class as the transcript: this status readout was produced
     // by control and disappeared on the direct webview-to-webview event road.
     "voicePill",
-    // Voice following switched on or off (§48). The stage cannot infer this
+    // Voice following switched on or off. The stage cannot infer this
     // from the snapshots stopping: an absence is indistinguishable from a
     // presenter who has gone quiet until the staleness window expires, and for
     // those seconds the script would keep drifting on prediction — which is the

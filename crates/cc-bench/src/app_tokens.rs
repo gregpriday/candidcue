@@ -1,4 +1,4 @@
-//! The script as a TAKE compiles it, not as the benchmark used to.
+//! The script as a TAKE compiles it: token by token, not from the Markdown.
 //!
 //! The app never hands the engine Markdown. It tokenises the spoken text
 //! itself (`src/shared/markdown/tokenize.ts`), sends each word with its block

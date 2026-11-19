@@ -186,7 +186,8 @@ pub struct StageBehaviorSettings {
      * is taken for every take, and the stage hides the pointer after 1.5 s.
      * Old documents that carry them still load; see `GeneralSettings`.
      */
-    /// The shape a take OPENS in: 'prompter' | 'reader' (§ reader-mode spec).
+    /// The shape a take OPENS in: 'prompter' | 'reader'
+    /// (docs/SpeakingGlass_Reader_Mode_Specification.md).
     ///
     /// ------------------------------------------------------------------------
     /// WHY `Option`, WHEN EVERY OTHER FIELD HERE HAS A PLAIN DEFAULT
@@ -427,7 +428,7 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
     }
 
     /*
-     * The recogniser and the language are ONE choice (§153).
+     * The recogniser and the language are ONE choice (#153).
      *
      * `migrate_in_place` repairs an incoherent pair on READ, which is right for
      * a document a previous build wrote — the user should not lose a session

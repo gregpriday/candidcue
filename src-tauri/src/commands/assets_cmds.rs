@@ -100,7 +100,7 @@ pub async fn remove_asset_reference(
 /// allow-list and it cannot drift: adding a model with a new licence adds its
 /// url here automatically, and nothing else can ever be opened.
 ///
-/// §153 is explicit that attribution is an obligation the app carries rather
+/// #153 is explicit that attribution is an obligation the app carries rather
 /// than a decision to put in front of the user, so this is not gated on
 /// anything — it is the same link, opened safely.
 #[tauri::command]

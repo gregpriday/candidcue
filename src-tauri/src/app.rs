@@ -90,7 +90,7 @@ pub fn run() {
         .plugin(crate::windows::material::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
-            // Recovery (§48.5). These work on FILES and never open the damaged
+            // Recovery (§48.6). These work on FILES and never open the damaged
             // database for writing, because the failures they exist for are
             // the ones that stop the application starting at all.
             commands::get_boot_status,
@@ -130,13 +130,13 @@ pub fn run() {
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
-            // Speech-model install: the recogniser is downloaded after
+            // Speech-model install (#152): the recogniser is downloaded after
             // installation rather than bundled.
             commands::get_speech_model_status,
             commands::start_speech_model_download,
             commands::cancel_speech_model_download,
             commands::delete_speech_model,
-            // Language choice (§153): the user picks a language; the model is
+            // Language choice (#153): the user picks a language; the model is
             // an implementation detail of that choice.
             commands::get_speech_language_options,
             commands::select_speech_language,
@@ -219,7 +219,7 @@ pub fn run() {
              * startup reconciliation below are all inside the captured window.
              * A packaged build launched from Finder has no stdout — launchd
              * points it at /dev/null — so until this line runs, every warning
-             * this app can emit goes nowhere at all (§179).
+             * this app can emit goes nowhere at all (#179).
              *
              * A failure here does NOT stop the app. `create_dir_all` two lines
              * up proves the directory exists, not that it can be written to —
@@ -333,12 +333,12 @@ pub fn run() {
             handle.manage(SpeechEngine::new());
 
             // Owns the "is a model downloading, and how far has it got" state
-            // that Settings and Welcome both read (§152). Managed rather than
+            // that Settings and Welcome both read (#152). Managed rather than
             // static so a download cannot outlive the app that started it.
             handle.manage(crate::speech::model_manager::SpeechModelManager::new());
 
             // Put back any model whose replacement was interrupted mid-commit
-            // (§152). Restore-only: it never deletes, so it cannot damage an
+            // (#152). Restore-only: it never deletes, so it cannot damage an
             // install running in another instance. Stale staging is swept by
             // the next install of that model instead, which is the moment it
             // is provably garbage.
@@ -362,7 +362,7 @@ pub fn run() {
             // Nothing is granted at runtime any more. The one exception was the
             // bundled Listener pack directory, which in a dev build lived in the
             // repo, outside `$RESOURCE`, and so could not be expressed as a
-            // static pattern. The Listener is gone and the exception with
+            // static pattern. The Listener is gone (#106) and the exception with
             // it, which leaves the static config as the whole story.
 
             register_stage_event_bridge(&handle);
@@ -687,7 +687,7 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
         Some((generation, value))
     }
 
-    // Handshake step 0 (§43.3): the stage can now receive events. Anything
+    // Handshake step 0: the stage can now receive events. Anything
     // published to it before this point was evaluated against a page with no
     // listeners and is gone, so the held envelope is re-sent here. Carries no
     // generation — the stage does not know one until it has the document —
@@ -817,9 +817,9 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     // §62 recoverable stage-layout failure. The stage holds motion rather than
     // move on guessed line positions, so the operator has to be told — this is
     // the only path by which control learns. Relayed under its own name for the
-    // broadcast reason above, and generation-checked like every other stage-originated
-    // event: a held layout from a stage lifetime that is already gone is not a
-    // problem with the take running now.
+    // broadcast reason above, and generation-checked like every other
+    // stage-originated event: a held layout from a stage lifetime that is
+    // already gone is not a problem with the take running now.
     let handle = app.clone();
     app.listen_any(events::STAGE_LAYOUT_ERROR, move |event| {
         if let Some((gen, value)) = generation(event.payload()) {

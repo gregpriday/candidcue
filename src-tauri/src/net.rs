@@ -1,6 +1,6 @@
 //! The hardened outbound-HTTP discipline, for everything that fetches.
 //!
-//! Its one caller is the speech-model downloader (§152). It lives apart from
+//! Its one caller is the speech-model downloader (#152). It lives apart from
 //! that downloader because it is the SSRF guard: a second caller should reuse
 //! this rather than grow a guard that is only accidentally identical.
 //!
@@ -253,11 +253,12 @@ fn is_allowed_answer(ip: IpAddr, rule: AddressRule) -> bool {
             o[0] == 198 && (o[1] & 0xFE) == 18
         }
         // 64:ff9b::/96 exactly, the RFC 6052 well-known prefix. It may only
-        // carry a global IPv4 (§3.1), so the last 32 bits must pass the strict
-        // test: a DNS64 that answers `64:ff9b::7f00:1` is pointing at
-        // loopback through the gateway. The rest of 64:ff9b::/32 — including
-        // the local-use 64:ff9b:1::/48 of RFC 8215, whose embedded address
-        // sits wherever its operator's prefix length puts it — stays refused.
+        // carry a global IPv4 (RFC 6052 section 3.1), so the last 32 bits must
+        // pass the strict test: a DNS64 that answers `64:ff9b::7f00:1` is
+        // pointing at loopback through the gateway. The rest of 64:ff9b::/32 —
+        // including the local-use 64:ff9b:1::/48 of RFC 8215, whose embedded
+        // address sits wherever its operator's prefix length puts it — stays
+        // refused.
         IpAddr::V6(v6) => {
             let s = v6.segments();
             let o = v6.octets();

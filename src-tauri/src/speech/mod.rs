@@ -53,7 +53,7 @@ use catalogue::catalogue;
 /// The model is not on this machine — and that is now an ordinary state.
 ///
 /// It used to mean "your installation is damaged", because every build carried
-/// the weights and their absence could only be corruption. Since §152 the
+/// the weights and their absence could only be corruption. Since #152 the
 /// stock installer ships none, so the honest message points at the download
 /// rather than telling the user to reinstall the app. Recoverable, because it
 /// genuinely is: Settings has the button.
@@ -160,7 +160,7 @@ impl SpeechEngine {
     ///
     /// This used to be one line: resolve the resource directory and hand it
     /// back, on the assumption that every model this build knows about is
-    /// inside the application bundle. §152 removed that assumption — stock
+    /// inside the application bundle. #152 removed that assumption — stock
     /// builds bundle no models at all — so the question changed from "where
     /// would the bundler have put it" to "where, if anywhere, IS it".
     ///

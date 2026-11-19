@@ -81,7 +81,7 @@ pub async fn run_startup_reconciliation(
         .unwrap_or_else(|_| "failed".into());
     report.integrity_ok = check == "ok";
     if !report.integrity_ok {
-        // Fail closed (spec §47.6, §48.5): a database that failed its
+        // Fail closed (spec §47.6, §48.6): a database that failed its
         // integrity check must not be written to. Every step below mutates
         // something — deleting temp files, inserting recovered rows, purging
         // trash — so none of them may run. The evidence is preserved in the

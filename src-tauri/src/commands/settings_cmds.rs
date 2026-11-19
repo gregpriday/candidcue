@@ -16,7 +16,7 @@ pub async fn get_settings(db: State<'_, Database>) -> Result<RevisionedSettings,
     settings::get_settings(db.pool()).await
 }
 
-/// The language and the recogniser are not patchable through here (§153).
+/// The language and the recogniser are not patchable through here (#153).
 ///
 /// Both are half of ONE choice, and this command cannot enforce what that
 /// choice requires: it has no take guard, so it would accept a language change
@@ -56,7 +56,7 @@ pub async fn update_settings<R: tauri::Runtime>(
     /*
      * TELL EVERY WINDOW, because there is now more than one that cares.
      *
-     * Settings moved into its own Preferences window (§14.1), and each webview
+     * Settings moved into its own Preferences window, and each webview
      * has its own copy of the settings store — they are separate JavaScript
      * contexts, so a write in one is invisible to the other. Without this the
      * two would silently diverge: change the stage font in Preferences and the
@@ -313,7 +313,7 @@ impl LastSupportBundle {
 }
 
 /// Support bundle (spec §44.11): system facts, recovery reports, and the logs
-/// (§179). No audio, script, or transcript content — the logs carry step names,
+/// (#179). No audio, script, or transcript content — the logs carry step names,
 /// states and timings, which is a property of what the call sites write rather
 /// than something enforced here.
 ///
@@ -407,7 +407,7 @@ pub fn write_support_bundle(
     }
 
     // And the logs — which is the whole reason anyone exports one of these
-    // (§179). The bundle used to ship system facts and recovery reports while
+    // (#179). The bundle used to ship system facts and recovery reports while
     // leaving out the only files that record what the app was actually doing
     // when it went wrong.
     crate::diagnostics::logging::copy_support_logs(&paths.logs_dir(), bundle_dir)?;
@@ -416,22 +416,20 @@ pub fn write_support_bundle(
 
 /*
  * `check_for_update` and `install_update` live in `update_cmds.rs`, over the
- * real updater in `crate::updater` (docs/updates.md). Two always-failing stubs
- * used to sit here instead.
+ * real updater in `crate::updater` (docs/updates.md).
  */
 
-/// Frontend diagnostic line → the process log AND a file (spec §30.1 triage).
+/// Frontend diagnostic line → the process log AND a file.
 ///
-/// The realtime transport lives in the control WEBVIEW, and a `console.log`
-/// there does not reach the terminal running `tauri dev` — so the one failure
-/// that has resisted every other kind of investigation, a realtime connection
-/// that will not open, has been invisible from the outside.
+/// Audio capture lives in the control WEBVIEW, and a `console.log` there does
+/// not reach the terminal running `tauri dev`, so a failure only the webview
+/// can see is invisible from the outside without this.
 ///
 /// It writes to a FILE as well as to `tracing`, and that mattered more than it
 /// should have: `tracing` used to reach stdout only, so a trace survived only if
 /// whoever ran the app happened to pipe it somewhere — and the first attempt to
 /// collect one was lost exactly that way. `tracing` now reaches a file too
-/// (§179), but this one stays: it is per-launch and per-step, which is what
+/// (#179), but this one stays: it is per-launch and per-step, which is what
 /// makes it readable as a sequence.
 ///
 /// Deliberately blunt: it takes a string the frontend has already composed and
