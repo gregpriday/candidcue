@@ -384,6 +384,19 @@ describe('startPointAtCaret (#241)', () => {
     expect(startPointAtCaret(0, input)).toEqual(beginning());
   });
 
+  it('treats a caret above the first sentence as the beginning, as the Opening row leaves it', () => {
+    const opening = '\nIntro words come first. Then more.\n\n# Pricing\n\nRaise prices now.\n';
+    const compiled = compile(opening, { scriptId: 'script-241c' });
+    expect(
+      startPointAtCaret(0, {
+        sentences: compiled.sentences,
+        outline: compiled.outline,
+        totalTokens: compiled.statistics.spokenWordCount,
+        blocks: compiled.blocks,
+      }),
+    ).toEqual(beginning());
+  });
+
   it('offers nothing without a compile', () => {
     expect(startPointAtCaret(5, { sentences: [], outline: [], totalTokens: 0 })).toBeNull();
   });

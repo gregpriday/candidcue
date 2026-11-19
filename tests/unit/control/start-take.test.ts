@@ -1550,11 +1550,14 @@ describe('recording one part of a script', () => {
     });
 
     it('gives a practice its part, so the stage can say which one is rehearsed (#241)', async () => {
+      // 44 snaps to the sentence at 40, inside p2 (20..49): the practice keeps
+      // the caret's place rather than jumping to the part's start.
       await expect(
-        startTake(SCRIPT.id, { practice: true, startTokenIndex: 25, part: { id: 'p2' } }),
+        startTake(SCRIPT.id, { practice: true, startTokenIndex: 44, part: { id: 'p2' } }),
       ).resolves.toBe(true);
-      expect(opened().practice).toBe(true);
-      expect(opened().startTokenIndex).toBe(20);
+      expect((opened() as { practice?: boolean }).practice).toBe(true);
+      expect(opened().startTokenIndex).toBe(40);
+      expect(glass()).toBe(40);
       expect(opened().part).toMatchObject({ id: 'p2', startTokenIndex: 20, endTokenIndex: 49 });
       expect(calls.showToast).not.toHaveBeenCalled();
     });

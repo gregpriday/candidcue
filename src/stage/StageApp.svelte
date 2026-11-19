@@ -656,6 +656,34 @@
       : null,
   );
 
+  /*
+   * Which edge the label takes: the one AWAY from the reading band.
+   *
+   * The band is placed by the lens, not by convention — a camera below the
+   * screen puts it in the bottom tenth of the glass, and optics allow anywhere
+   * from 5% to 95% — so a label fixed to the bottom edge would sit on the words
+   * being read on exactly those rigs. Measured in the talent plane's own
+   * coordinates, like the band.
+   *
+   * On the top edge it sits below the row the hold chip, the acknowledgement
+   * and the Escape prompt share, so a transient prompt never lands on it. On
+   * an edge that is PHYSICALLY the top — the bottom edge under a vertical
+   * mirror — it clears the host's "Take controls" tab by the same measure the
+   * acknowledgement chip uses.
+   */
+  const bandCenterPercent = $derived(
+    settings?.optics ? settings.optics.readingBandY * 100 : (settings?.readingBandCenterPercent ?? 38),
+  );
+  const takeScopeAtTop = $derived(bandCenterPercent > 50);
+  const takeScopeTop = $derived(takeScopeAtTop ? `calc(${ackTopPx}px + 2.6em)` : undefined);
+  const takeScopeBottom = $derived(
+    takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? `${ackTopPx}px`
+        : 'var(--stage-chrome-bottom-inset, 16px)',
+  );
+
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');
 
@@ -2681,30 +2709,35 @@
           What is running (#241): "Practising", the part, or both.
 
           In this plane because it is words the presenter reads through the
-          glass, so it takes the corrective flip with the script. It sits on the
-          bottom edge — below the reading band, in the strip the dock already
-          reserves — and in the PHYSICAL corner opposite the dock. The dock is
-          in the unmirrored operator plane at the bottom left, so under a
-          mirror the label's side flips in these coordinates to land at the
-          bottom right of the panel either way.
+          glass, so it takes the corrective flip with the script. It takes the
+          edge away from the reading band (see `takeScopeAtTop`), and the
+          PHYSICAL right-hand side: the dock is in the unmirrored operator plane
+          at the bottom left, so under a horizontal mirror the label's side
+          flips in these coordinates to land on the right of the panel either
+          way.
 
           Persistent rather than transient: it answers "is this the take?", a
           question that matters for the whole reading, and it does not fade
-          with the dock. A blank hides it like everything else.
+          with the dock. A blank hides it like everything else. Not a live
+          region: the take-controls drawer already announces the part, and two
+          regions would say the same thing twice.
         -->
         {#if takeScope && !app.blanked}
           <div
             class="take-scope"
             class:flip-x={settings?.mirrorX ?? false}
-            class:flip-y={settings?.mirrorY ?? false}
-            role="status"
+            data-edge={takeScopeAtTop ? 'top' : 'bottom'}
             style:font-size="{overlayFontSizePx}px"
+            style:top={takeScopeTop}
+            style:bottom={takeScopeBottom}
           >
             <span class="take-scope-lead">{takeScope.lead}</span>
             {#if takeScope.name}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
               <span class="take-scope-name">{takeScope.name}</span>
             {/if}
             {#if takeScope.done}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
               <span class="take-scope-done">{takeScope.done}</span>
             {/if}
           </div>
@@ -3364,18 +3397,18 @@
   }
 
   /*
-   * What is running (#241). One quiet line, at the secondary floor, in the
-   * bottom corner opposite the dock. The name is the only piece that may be
-   * long, so it is the piece that truncates; the lead and the "end reached"
-   * mark always show.
+   * What is running (#241). One quiet line, at the secondary floor, on the
+   * edge away from the reading band; the edge's offset arrives inline. The
+   * name gives way first, then the lead, so a narrow window or presenter-sized
+   * type truncates rather than running off the glass. The line height is the
+   * label's own, not the stage's, so large type is not clipped.
    */
   .take-scope {
     position: absolute;
     right: var(--stage-chrome-inset, 20px);
-    bottom: var(--stage-chrome-bottom-inset, 16px);
     display: flex;
     align-items: baseline;
-    gap: 0.5em;
+    gap: 0.4em;
     max-width: 45%;
     padding: 0.3em 0.9em;
     border-radius: 999px;
@@ -3383,6 +3416,7 @@
     background: var(--stage-overlay);
     color: var(--stage-text);
     font-weight: 550;
+    line-height: 1.3;
     white-space: nowrap;
     pointer-events: none;
   }
@@ -3392,26 +3426,26 @@
     left: var(--stage-chrome-inset, 20px);
   }
 
-  .take-scope.flip-y {
-    bottom: auto;
-    top: var(--stage-chrome-bottom-inset, 16px);
+  .take-scope-lead,
+  .take-scope-name,
+  .take-scope-done {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .take-scope-lead,
   .take-scope-done {
+    flex: 0 1 auto;
+  }
+
+  .take-scope-sep {
     flex: none;
   }
 
   .take-scope-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 0 100 auto;
     opacity: 0.8;
-  }
-
-  .take-scope-name::before,
-  .take-scope-done::before {
-    content: '· ';
   }
 
   /*

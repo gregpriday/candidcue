@@ -156,6 +156,8 @@ interface StartOverrides {
     normalizedText: string;
   }>;
   practice?: boolean;
+  part?: { id: string; label: string; ordinal: number; totalParts: number; startTokenIndex: number; endTokenIndex: number };
+  nextPart?: StartOverrides['part'];
   micDeviceId?: string;
   micDeviceLabel?: string;
 }
@@ -175,6 +177,8 @@ function start(overrides: StartOverrides = {}): string {
     compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
     practice: overrides.practice,
+    ...(overrides.part === undefined ? {} : { part: overrides.part }),
+    ...(overrides.nextPart === undefined ? {} : { nextPart: overrides.nextPart }),
     ...(overrides.micDeviceId === undefined ? {} : { micDeviceId: overrides.micDeviceId }),
     ...(overrides.micDeviceLabel === undefined ? {} : { micDeviceLabel: overrides.micDeviceLabel }),
   });
@@ -374,6 +378,31 @@ describe('#214 — a take keeps its summary and its session row without the hist
     // must go on meaning the last recording.
     expect(ended).toBeGreaterThan(0);
     expect(recorded, 'a practice supplies no ending').not.toHaveProperty('endTokenIndex');
+  });
+
+  it('closes a practice OF A PART without an ending, past the part’s end (#241)', async () => {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    const boundary = compiled.sentences[2]!.endTokenIndex;
+    const total = compiled.spokenTokens.length;
+    start({
+      compiled,
+      sentences: compiled.sentences as never,
+      practice: true,
+      part: { id: 'p1', label: 'Opening', ordinal: 1, totalParts: 2, startTokenIndex: 0, endTokenIndex: boundary },
+      nextPart: { id: 'p2', label: 'Close', ordinal: 2, totalParts: 2, startTokenIndex: boundary + 1, endTokenIndex: total - 1 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).part?.id, 'a practice keeps its part').toBe('p1');
+    const ended = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(ended));
+
+    stopSession();
+    expect(get(session).summary, 'a practice of a part opens no report either').toBeNull();
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    expect(recorded).not.toHaveProperty('endTokenIndex');
   });
 
   it('still closes a take’s session row with where it ended', async () => {

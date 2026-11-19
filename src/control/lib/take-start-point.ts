@@ -164,7 +164,9 @@ export function snapToStart(token: number, input: SnapInput): StartPoint {
  * so it starts at the section's first spoken words.
  *
  * A heading with nothing spoken after it at all, at the very end of a script,
- * has no section start and falls back to the body rule.
+ * has no section start and falls back to the body rule. A caret above the
+ * first sentence — the synthetic "Opening" section's outline row puts it at
+ * offset 0, before any blank lines — is the beginning.
  *
  * Null when there is no compile to resolve against, so the menu leaves its
  * "From here" rows out rather than pointing them at the top.
@@ -188,8 +190,7 @@ export function startPointAtCaret(offset: number, input: SnapInput): StartPoint 
     if (sentence.source.utf16Start <= offset) best = sentence;
     else break;
   }
-  if (best === null) return null;
-  return snapToStart(best.startTokenIndex, input);
+  return snapToStart(best === null ? 0 : best.startTokenIndex, input);
 }
 
 /**

@@ -71,7 +71,9 @@ function renderDocument(): StageRenderDocument {
   } as unknown as StageRenderDocument;
 }
 
-function envelope(mirror: { mirrorX?: boolean; mirrorY?: boolean } = {}): StageSessionEnvelope {
+function envelope(
+  mirror: { mirrorX?: boolean; mirrorY?: boolean; readingBandCenterPercent?: number } = {},
+): StageSessionEnvelope {
   return {
     schemaVersion: 1,
     sessionId: '00000000-0000-0000-0000-0000000000aa',
@@ -120,68 +122,110 @@ afterEach(() => {
   vi.clearAllTimers();
 });
 
+function bridge(env: StageSessionEnvelope, extra: Record<string, unknown>) {
+  return {
+    embedded: {
+      envelope: env,
+      alignment: null,
+      transcript: '',
+      voicePill: null,
+      onexit: vi.fn(),
+      onintent: vi.fn(),
+      ...extra,
+    },
+  } as never;
+}
+
 describe('the take-scope label', () => {
   it('says nothing over an ordinary take of the whole script', async () => {
-    const { container } = await mount({});
+    const { container } = await mount({ practice: false, part: null });
     expect(label(container)).toBeNull();
   });
 
   it('says Practising over a practice, without opening the dock', async () => {
     const { container } = await mount({ practice: true });
-    expect(label(container)?.textContent?.trim()).toBe('Practising');
+    expect(label(container)?.querySelector('.take-scope-lead')?.textContent).toBe('Practising');
+    expect(label(container)?.querySelector('.take-scope-name')).toBeNull();
   });
 
-  it('names the part a take is recording, and marks its end once reached', async () => {
-    const { container, rerender } = await mount({ part: PART, partComplete: false });
+  it('names the part a take is recording, and marks its end when it is reached', async () => {
+    const env = envelope();
+    const { container, rerender } = await mount({ part: PART, partComplete: false }, env);
     expect(label(container)?.querySelector('.take-scope-lead')?.textContent).toBe('Part 3 of 5');
     expect(label(container)?.querySelector('.take-scope-name')?.textContent).toBe('Pricing');
     expect(label(container)?.querySelector('.take-scope-done')).toBeNull();
 
-    await rerender({
-      embedded: {
-        envelope: envelope(),
-        alignment: null,
-        transcript: '',
-        voicePill: null,
-        onexit: vi.fn(),
-        onintent: vi.fn(),
-        part: PART,
-        partComplete: true,
-      },
-    } as never);
+    // The same envelope: only the latch moves, as it does mid-take.
+    await rerender(bridge(env, { part: PART, partComplete: true }));
     flushSync();
     expect(label(container)?.querySelector('.take-scope-done')?.textContent).toBe('end reached');
   });
 
-  it('says both over a practice of a part', async () => {
-    const { container } = await mount({ practice: true, part: PART });
-    expect(label(container)?.querySelector('.take-scope-lead')?.textContent).toBe(
-      'Practising · Part 3 of 5',
+  it('says both over a practice of a part, name and end included', async () => {
+    const { container } = await mount({ practice: true, part: PART, partComplete: true });
+    const el = label(container)!;
+    expect(el.querySelector('.take-scope-lead')?.textContent).toBe('Practising · Part 3 of 5');
+    expect(el.querySelector('.take-scope-name')?.textContent).toBe('Pricing');
+    expect(el.querySelector('.take-scope-done')?.textContent).toBe('end reached');
+    // Separators are text, not generated content, so the words never run together.
+    expect(el.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Practising · Part 3 of 5 · Pricing · end reached',
     );
   });
 
-  it('is read through the glass: inside the mirrored talent plane', async () => {
+  it('is read through the glass: inside the safe rectangle of the mirrored talent plane', async () => {
     const { container } = await mount({ practice: true });
     const el = label(container)!;
+    expect(el.closest('.stage-safe-plane')).not.toBeNull();
     expect(el.closest('.stage-talent-plane')).not.toBeNull();
     expect(el.closest('.stage-operator-plane')).toBeNull();
   });
 
-  it('keeps to the corner opposite the dock under either mirror', async () => {
+  it('keeps to the physical side opposite the dock under a horizontal mirror only', async () => {
     const plain = await mount({ practice: true });
     expect(label(plain.container)?.classList.contains('flip-x')).toBe(false);
-    expect(label(plain.container)?.classList.contains('flip-y')).toBe(false);
     document.body.innerHTML = '';
 
-    const mirrored = await mount({ practice: true }, envelope({ mirrorX: true, mirrorY: true }));
-    const talent = mirrored.container.querySelector('.stage-talent-plane')!;
-    expect(talent.getAttribute('data-mirror-x')).toBe('true');
-    expect(label(mirrored.container)?.classList.contains('flip-x')).toBe(true);
-    expect(label(mirrored.container)?.classList.contains('flip-y')).toBe(true);
+    const flippedY = await mount({ practice: true }, envelope({ mirrorY: true }));
+    expect(label(flippedY.container)?.classList.contains('flip-x')).toBe(false);
+    document.body.innerHTML = '';
+
+    const flippedX = await mount({ practice: true }, envelope({ mirrorX: true }));
+    expect(flippedX.container.querySelector('.stage-talent-plane')?.getAttribute('data-mirror-x')).toBe(
+      'true',
+    );
+    expect(label(flippedX.container)?.classList.contains('flip-x')).toBe(true);
   });
 
-  it('goes with everything else on a blank', async () => {
-    const { container } = await mount({ practice: true, blanked: true });
+  it('takes the edge away from the reading band', async () => {
+    const usual = await mount({ practice: true }, envelope({ readingBandCenterPercent: 38 }));
+    expect(label(usual.container)?.dataset['edge']).toBe('bottom');
+    expect(label(usual.container)?.style.bottom).not.toBe('');
+    expect(label(usual.container)?.style.top).toBe('');
+    document.body.innerHTML = '';
+
+    // A camera below the screen puts the band low on the glass.
+    const low = await mount({ practice: true }, envelope({ readingBandCenterPercent: 70 }));
+    expect(label(low.container)?.dataset['edge']).toBe('top');
+    expect(label(low.container)?.style.top).not.toBe('');
+    expect(label(low.container)?.style.bottom).toBe('');
+  });
+
+  it('is not a live region: the drawer already announces the part', async () => {
+    const { container } = await mount({ practice: true, part: PART });
+    expect(label(container)?.getAttribute('role')).toBeNull();
+    expect(label(container)?.getAttribute('aria-live')).toBeNull();
+  });
+
+  it('goes with everything else on a blank, and comes back after it', async () => {
+    const env = envelope();
+    const { container, rerender } = await mount({ practice: true, blanked: false }, env);
+    expect(label(container)).not.toBeNull();
+    await rerender(bridge(env, { practice: true, blanked: true }));
+    flushSync();
     expect(label(container)).toBeNull();
+    await rerender(bridge(env, { practice: true, blanked: false }));
+    flushSync();
+    expect(label(container)).not.toBeNull();
   });
 });

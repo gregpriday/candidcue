@@ -195,15 +195,22 @@ describe('startMenuItems part rows', () => {
 describe('practiceMenuItems (#241)', () => {
   const parts = [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)];
 
-  it('rehearses the whole script from the plain row, with no part', () => {
-    const chosen: Array<[number | undefined, TakePartRequest | undefined]> = [];
+  it('offers only the plain row when there is no caret', () => {
     const items = practiceMenuItems(
       { hereTokenIndex: null, hereLabel: null, herePart: null },
-      (token, p) => chosen.push([token, p]),
+      () => {},
     );
     expect(items.map((i) => i.label)).toEqual(['Practise']);
     expect(items[0]!.group).toEqual({});
-    items[0]!.onselect();
+  });
+
+  it('rehearses the whole script from the plain row, whatever the caret is in', () => {
+    const chosen: Array<[number | undefined, TakePartRequest | undefined]> = [];
+    const items = practiceMenuItems(
+      { hereTokenIndex: 14, hereLabel: '“Raise prices.”', herePart: parts[1]! },
+      (token, p) => chosen.push([token, p]),
+    );
+    items.find((i) => i.label === 'Practise')!.onselect();
     expect(chosen).toEqual([[undefined, undefined]]);
   });
 

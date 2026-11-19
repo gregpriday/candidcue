@@ -37,4 +37,12 @@ describe('takeScopeText (#241)', () => {
     expect(takeScopeText(true, null, true)?.done).toBeNull();
     expect(takeScopeText(false, { ...part, label: '  ' }, false)?.name).toBeNull();
   });
+
+  it('reads every number and name off the part it is given', () => {
+    expect(takeScopeText(true, { ordinal: 1, totalParts: 2, label: '  Intro ' }, false)).toEqual({
+      lead: 'Practising · Part 1 of 2',
+      name: 'Intro',
+      done: null,
+    });
+  });
 });
