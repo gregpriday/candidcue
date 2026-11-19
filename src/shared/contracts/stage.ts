@@ -248,7 +248,7 @@ export const SHUTDOWN_COMPLETE_EVENT = 'app://shutdown-complete';
 /** `stage://load-session` — the whole render model in one validated envelope. */
 export type StageSnapshotPayload = StageSessionEnvelope;
 
-/** `stage://alignment-snapshot` — one Rust `AlignmentSnapshot`, motion's input. */
+/** `stage://alignment-snapshot` — one Rust snapshot; what motion follows. */
 export type StageAlignmentPayload = AlignmentSnapshot;
 
 /** `stage://viewport-hint` — the stage's visible token range, to Rust. */
@@ -304,8 +304,8 @@ export type StageDirective =
    *
    * The state lives in control — the dock's follow control flips it — and the
    * stage has to be told because the stage is where the consequence is visible
-   * (a take's embedded stage reads it from the bridge prop). Without it the only
-   * way the glass learns that following stopped is that snapshots stop
+   * (a take's embedded stage reads it from the bridge prop). Without it the
+   * only way the glass learns that following stopped is that snapshots stop
    * arriving, which it cannot distinguish from a presenter who has gone quiet
    * until the 15 s staleness window expires. A mode has to be announced, not
    * inferred from an absence.
@@ -465,7 +465,7 @@ export interface StageTranscriptTapPayload {
    * at most {@link STAGE_TRANSCRIPT_TAP_WORDS} of them.
    */
   text: string;
-  /** True when the recogniser has finalised the utterance this text came from. */
+  /** True when the recogniser finalised the utterance this text came from. */
   final: boolean;
   sentAtMs: number;
 }

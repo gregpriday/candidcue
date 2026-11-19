@@ -34,7 +34,8 @@
  *
  * Everything here is pure with respect to time and the DOM: the caller supplies
  * `nowMs` and applies `scrollPx`. That keeps the whole control system testable
- * in node while the rAF loop stays in the stage window.
+ * in node while the rAF loop stays in the renderer (`ScriptLayer.svelte`),
+ * in whichever webview mounts it.
  */
 import {
   alignmentDisplayAt,
@@ -216,8 +217,8 @@ export interface StageMotionEngineOptions {
    * nothing new to say. `displayAt` already stops advancing at
    * `maxPredictionMs`, so a merely-old snapshot holds the position by itself.
    * This threshold is about something stronger — the feed being GONE (the
-   * session ended, the socket died) — after which the stage stops claiming to
-   * follow anyone and hands over to the fallback target.
+   * session ended, the recogniser stopped publishing) — after which the stage
+   * stops claiming to follow anyone and hands over to the fallback target.
    */
   snapshotStaleMs?: number;
   /** Capped rate for active/passed styling updates (§26.2 step 7). */
@@ -309,9 +310,9 @@ export interface StageMotionEngine {
    * §47.1/§55. Adopt a resolved motion profile — the user's Follow feel, as
    * control resolved it, arriving in the stage envelope.
    *
-   * It is a setter rather than a constructor argument alone because the stage
-   * window outlives a session: a second take on the same window republishes an
-   * envelope into the SAME engine, and a profile that could only be read at
+   * It is a setter rather than a constructor argument alone because a stage can
+   * outlive a session: a second envelope published into the same stage reaches
+   * the SAME engine, and a profile that could only be read at
    * construction would leave the new session running the previous one's feel.
    *
    * Nothing about plant state changes. The profile reshapes the motion limits;
@@ -555,7 +556,7 @@ interface GuidedRewindEpisode {
    * open and both velocity budgets capped, and the degraded path can simply
    * stop publishing (`setFallbackTarget(null)`) mid-walk with no alignment feed
    * to take over. The walk would then wait for a frame that never comes, and
-   * every later take on that stage window would run at three lines a second.
+   * every later session on that engine would run at three lines a second.
    */
   expiresAtMs: number;
   /**
@@ -975,7 +976,7 @@ type ReanchorFadePhase = 'idle' | 'down' | 'up';
 export function createStageMotionEngine(
   options: StageMotionEngineOptions = {},
 ): StageMotionEngine {
-  // §47.1: mutable, because a stage window outlives a session and the next
+  // §47.1: mutable, because a stage can outlive a session and the next
   // session's envelope may carry a different feel. Read on every frame — never
   // captured — so a swap takes effect on the next one.
   let profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
@@ -1666,8 +1667,8 @@ export function createStageMotionEngine(
        * §30.6. Manual authority does not survive a session either, and this is
        * the one place it could have.
        *
-       * The stage window outlives a take — that is the whole reason this
-       * function exists — so a take that ENDED with the presenter's hand on the
+       * A stage can outlive a take — that is the whole reason this function
+       * exists — so a take that ENDED with the presenter's hand on the
        * script would have carried the hold into the next one: take two would
        * open holding, and the §62 degraded fallback would be suppressed with
        * it, until somebody said something. The hold is a fact about a gesture

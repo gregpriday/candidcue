@@ -225,7 +225,8 @@
      * §47.1/§55. The versioned motion profile this session runs on — the user's
      * Follow feel, resolved by control and validated by the
      * mount site (`stageFollowProfile`). Given to the engine at construction
-     * AND on every change, because the stage window outlives a session.
+     * AND on every change, because a stage can outlive a session (the separate
+     * window is handed a new envelope without a remount).
      */
     followProfile?: SmoothFollowProfile;
     /**
@@ -1235,9 +1236,9 @@
    * covers the normal case, where the envelope arrives before this component
    * mounts (the mount site gates on `doc`, which comes from the envelope), so
    * the very first frame already runs the chosen feel. The effect covers the
-   * stage window outliving a session: a second take republishes an envelope into
-   * this same component instance, and a construction-only read would silently
-   * run take two on take one's feel.
+   * stage outliving a session: a second envelope published into this same
+   * component instance would otherwise, with a construction-only read, run
+   * session two on session one's feel.
    */
   const engine = createStageMotionEngine(
     untrack(() => (followProfile ? { profile: followProfile } : {})),
@@ -1423,12 +1424,12 @@
     /*
      * Scoped to the SESSION, not just to the token.
      *
-     * A stage outlives a take. Latching on the token alone meant a second take
-     * that opened at the same place — the obvious case, "Retry last section"
-     * twice — was suppressed, and `openingHandedOver` is plain state that a new
-     * session resets without waking this effect. Reading the generation makes
-     * the effect re-run when a take begins and gives the latch something that
-     * actually changes between takes.
+     * A stage can outlive a take. Latching on the token alone meant a second
+     * take that opened at the same place — the obvious case, "Retry last
+     * section" twice — was suppressed, and `openingHandedOver` is plain state
+     * that a new session resets without waking this effect. Reading the
+     * generation makes the effect re-run when a take begins and gives the latch
+     * something that actually changes between takes.
      */
     const session = sessionGeneration;
     if (session !== seededForSession) {
@@ -1653,13 +1654,14 @@
     /*
      * A document with nothing to measure IS measured.
      *
-     * `els.length > 0` was standing in for "the blocks have rendered", which
-     * it is — right up until there are no blocks. An empty source compiles to
-     * a valid script with zero blocks and nothing stops it presenting, so the
-     * stage hydrated, mounted this layer, and then waited for an element that
-     * was never coming: the handshake could not complete and the take died on
-     * `waitForStageReady`'s timeout. Asking the document how many blocks it
-     * has separates "not rendered yet" from "nothing to render".
+     * `els.length > 0` was standing in for "the blocks have rendered", which it
+     * is — right up until there are no blocks. An empty source compiles to a
+     * valid script with zero blocks. A take now refuses a script with no spoken
+     * words before presenting, but a stage can still be handed one, and when it
+     * was the stage hydrated, mounted this layer, and then waited for an
+     * element that was never coming: the handshake could not complete and the
+     * take died on `waitForStageReady`'s timeout. Asking the document how many
+     * blocks it has separates "not rendered yet" from "nothing to render".
      */
     const rendered = els.length > 0 || performanceBlocks.length === 0;
     if (!layoutReadySent && rendered) {
@@ -2608,7 +2610,7 @@
    * The reveal's deadline, and the only thing in this file that is allowed to
    * show the script without knowing where it is.
    *
-   * Keyed on the session so a second take on a stage window that outlived the
+   * Keyed on the session so a second session on a stage that outlived the
    * first gets its own opening rather than inheriting a reveal from a script
    * that is no longer on the glass.
    */
@@ -2638,7 +2640,7 @@
      * The three flags above have just declared the position unknown, and
      * nothing else would ever contradict them: the build effect keys on the
      * document, the layout inputs and the render window, none of which a
-     * session bump changes. So a second take on a stage window that outlived
+     * session bump changes. So a second session on a stage that outlived
      * the first would sit behind the plate for the whole ceiling and then
      * reveal wherever the LAST take had left the script — the new take never
      * opening at the top being the older half of that bug.
@@ -4050,7 +4052,7 @@
     flex: none;
   }
 
-  /* Subtle low-contrast rounded underlay, not a karaoke marker (primary §16.2). */
+  /* A subtle low-contrast underlay, not a karaoke marker (primary §16.2). */
   .phrase-underlay {
     position: absolute;
     border-radius: 0.35em;

@@ -6,9 +6,9 @@
  * ---------------------------------------------------------------------------
  * `alignmentDisplayAt` is a function of AUDIO-clock time — milliseconds of
  * audio the session has sent, which is what the engine's lag model was
- * calibrated against. The stage runs on `performance.now()` and has never seen
- * a byte of audio. So it estimates: every snapshot carries the audio time it
- * was produced at, and between snapshots the stage advances that reading by
+ * calibrated against. The receiver runs on `performance.now()` and sees no
+ * audio, only snapshots. So it estimates: every snapshot carries the audio time
+ * it was produced at, and between snapshots the stage advances that reading by
  * elapsed wall time.
  *
  * That estimate is sound because the two clocks run at the same rate whenever
@@ -43,7 +43,8 @@
  * ---------------------------------------------------------------------------
  * THE STAGE DOES NOT TRUST WHAT IT IS SENT
  * ---------------------------------------------------------------------------
- * Snapshots arrive over an event channel from another process. The motion plant
+ * Snapshots come from Rust, over an event or through the embedded bridge, and
+ * nothing upstream promises their shape. The motion plant
  * is persistent for the life of the session, so a single `NaN` would poison
  * every later frame permanently. Everything is validated structurally before
  * acceptance, and rejections are counted rather than logged per snapshot.
@@ -206,8 +207,9 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
        *
        * These describe the feed, and the feed is a property of the SESSION —
        * which is the unit this method is given, and the only one it can see.
-       * One window can serve a second session (Present again opens one), and
-       * the engine that owns this receiver survives the change. Carried
+       * One stage can serve a second session (the separate window is handed a
+       * new envelope), and the engine that owns this receiver survives the
+       * change. Carried
        * forward, the counts stop answering the question anybody asks of them: a
        * session that rejected everything early would keep supplying the
        * "dominant" rejection reason for a later, healthy one — and, worse in

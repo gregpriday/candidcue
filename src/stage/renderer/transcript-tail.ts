@@ -50,11 +50,11 @@ export const TRANSCRIPT_TAIL_WORDS = STAGE_TRANSCRIPT_TAP_WORDS;
  * WHAT THIS DOES NOT DO: segment text that is not written with spaces. Chinese
  * and Japanese recogniser output arrives as one run, counts as one "word", and
  * is passed through for the bar's `max-width` and `overflow: hidden` to clip on
- * the left, keeping the newest end in view — the same newest-first reading, arrived at by geometry
- * instead of by counting. That is a deliberate floor rather than an oversight:
- * `Intl.Segmenter` would give real words, and it would also make what the bar
- * shows depend on a locale nothing here knows. The pixel clip is honest in
- * every language.
+ * the left, keeping the newest end in view — the same newest-first reading,
+ * arrived at by geometry instead of by counting. That is a deliberate floor
+ * rather than an oversight: `Intl.Segmenter` would give real words, and it
+ * would also make what the bar shows depend on a locale nothing here knows. The
+ * pixel clip is honest in every language.
  */
 export function transcriptTail(text: string, maxWords: number = TRANSCRIPT_TAIL_WORDS): string {
   if (typeof text !== 'string') return '';

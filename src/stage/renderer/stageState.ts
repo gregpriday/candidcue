@@ -149,8 +149,8 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
         /*
-         * A new take follows the presenter's voice — that is what a take
-         * IS — so the switch goes back on with it.
+         * A new session starts with following switched on, so the switch goes
+         * back on with it.
          *
          * The standalone stage window outlives a session, and control sends no
          * `follow` directive at the start of one: it has nothing to say, the

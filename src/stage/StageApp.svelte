@@ -1,5 +1,7 @@
 <!--
-  Stage window shell (spec §16.1 layer model, §43.5 heartbeat, §45.6).
+  Stage shell (spec §16.1 layer model, §43.5 heartbeat, §45.6). A take embeds
+  it in the control window; it is also the page of the separate stage window
+  that Settings' preview, "Show test" and Calibrate open.
 
   ---------------------------------------------------------------------------
   TWO PLANES, AND WHICH ONE A THING BELONGS TO
@@ -33,8 +35,10 @@
   text + focus fades → reading cue → presenter overlays → calibration →
   operator instruments and dock.
 
-  All data arrives via Tauri events (the stage holds only event:listen);
-  outbound traffic is intents/acks that control is free to ignore.
+  In a take the envelope and the live state arrive through the `embedded`
+  bridge prop. The separate window gets them as Tauri events — it may listen
+  and emit, never invoke. Outbound traffic is intents/acks that control is
+  free to ignore.
 -->
 <script lang="ts">
   import { onMount, untrack, type Snippet } from 'svelte';
@@ -122,8 +126,8 @@
      *
      * Single-window presentation runs at stage generation 0 and the directive
      * bus is a no-op there, so a mode that only travelled by directive would be
-     * dead in exactly the configuration most people use. The standalone window
-     * gets the same fact through `{ kind: 'follow' }`.
+     * dead in exactly the configuration every take uses. The standalone window
+     * can be told the same fact by a `follow` directive.
      */
     followPaused?: boolean;
     /**
@@ -406,13 +410,13 @@
    *
    * Clean is the default and is what a take is recorded against: script, reading
    * cue, authored cues, acknowledgements, a hold message once a hold has earned
-   * one, faults the presenter can act on, and the Escape confirmation. Nothing
-   * that reports on the machinery.
+   * one, faults the presenter can act on, the Escape confirmation, and the
+   * dock's voice readout.
    *
    * Diagnostic adds the instruments — the raw transcript, the alignment state
-   * and token position, the frame and media health, and the voice pill's
-   * waveform. They are for the person debugging a rig, and every one of them
-   * costs the presenter attention during a take that is going fine.
+   * and token position, and the frame and media health. They are for the
+   * person debugging a rig, and every one of them costs the presenter attention
+   * during a take that is going fine.
    *
    * The `diagnostics` directive stays an independent override, because an
    * operator who asks for the readout mid-take is asking for it whatever mode
@@ -454,11 +458,11 @@
   /**
    * Both counters start again with each SESSION.
    *
-   * The window can outlive one — Present again opens a new session into it —
-   * and `alignmentArrived` is counted here rather than by the receiver, so
-   * nothing else would ever clear it. The receiver zeroes its own counters on
-   * the same signal (`setSession`), which is what keeps the two halves of this
-   * readout describing the same stretch of time.
+   * The stage can outlive one — the separate window can be handed a new
+   * envelope — and `alignmentArrived` is counted here rather than by the
+   * receiver, so nothing else would ever clear it. The receiver zeroes its own
+   * counters on the same signal (`setSession`), which is what keeps the two
+   * halves of this readout describing the same stretch of time.
    *
    * A retake inside a session is deliberately NOT a reset: "restart paragraph"
    * opens a new take pass without minting a generation, and the feed it would
@@ -1022,9 +1026,9 @@
 
   /*
    * Single-window presentation uses the exact stage renderer but hands its
-   * session instruments across memory, not across a second webview. The
-   * envelope is immutable for a take; transcript, pill and transport remain
-   * live.
+   * session instruments across memory, not across a second webview: the
+   * envelope (whose settings the desk can change mid-take), the transcript,
+   * the pill and the transport.
    */
   $effect(() => {
     const bridge = embedded;
@@ -1333,13 +1337,15 @@
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           dispatch({ type: 'snapshot', envelope });
           /*
-           * A TAKE's envelope STARTS the liveness deadline, and it is the only
-           * other thing allowed to touch it.
+           * An envelope that belongs to a take (one carrying
+           * `sessionGeneration`) STARTS the liveness deadline, and it is the
+           * only other thing allowed to touch it. Only the separate window gets
+           * here: a take's embedded stage has no heartbeat to keep.
            *
            * Two holes close here, and both are the watchdog failing to fire at
            * all rather than firing wrongly:
            *
-           *   • control begins its heartbeat on a ~1 s `setInterval`, so the
+           *   • control began its heartbeat on a ~1 s `setInterval`, so the
            *     first beat is a second away. Arming only on a beat meant that a
            *     control window which died inside that window could never set
            *     `heartbeatSeen`, and the stage would sit there forever with no
@@ -1406,10 +1412,11 @@
         subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
           /*
            * Counted, because "control sent 6 of 6" and an empty bar cannot both
-           * be true and neither side could see the other. Control counts what
-           * it EMITS — which is an attempt, not a delivery, since the promise
-           * is fire-and-forget with a swallowed rejection. This counts what
-           * arrived, so the next take says plainly which of the two it is.
+           * be true and neither side could see the other. Control's count was
+           * of what it EMITTED — an attempt, not a delivery, since the promise
+           * was fire-and-forget with a swallowed rejection. This counts what
+           * arrived on the separate window's event path. The embedded bridge's
+           * transcript is not counted here.
            */
           transcriptTapsArrived += 1;
           transcriptTap = payload.text;
@@ -1525,10 +1532,11 @@
       },
     );
 
-    // Watchdog (§43.5): if control's heartbeat stops while live, freeze
-    // locally and wait. Only armed by a take — a take's envelope or a beat it
-    // owns — and only under Tauri; neither the preview bus nor the Settings
-    // appearance preview has a liveness contract to hold control to.
+    // Watchdog (§43.5): if control's heartbeat stops while live, freeze locally
+    // and wait. Only armed by an envelope carrying a session generation, or a
+    // beat it owns, in the separate window — never by an embedded take — and
+    // only under Tauri; neither the preview bus nor the Settings appearance
+    // preview has a liveness contract to hold control to.
     const watchdog = window.setInterval(() => {
       if (!isTauri || !heartbeatSeen || app.phase === 'handshake') return;
       if (performance.now() - lastHeartbeatAt > STAGE_HEARTBEAT_GRACE_MS) {
@@ -1542,9 +1550,10 @@
     /*
      * `?preview=1&replay=<url>` replays a frozen Tier-B run — real recorded
      * speech, through the real renderer — instead of the synthetic driver. It
-     * is the only configuration in which "does the product follow" can be
-     * asserted end to end: the benchmark proves the ENGINE follows and scores
-     * Rust's own model of the display, never the code that moves the glass.
+     * is the only automated configuration in which "does the product follow"
+     * can be asserted through the real renderer: the benchmark proves the
+     * ENGINE follows and scores Rust's own model of the display, never the code
+     * that moves the glass.
      */
     if (preview && previewReplayUrl) void startFixtureReplay(previewReplayUrl);
     else if (preview) previewDriver = startPreviewDriver({ calibrated: previewCalibrated });
@@ -1723,19 +1732,15 @@
    * §16.9. Escape ends the take on the SECOND press, and the first press has
    * to say so — on the stage.
    *
-   * Control answers a single press with a toast reading "Press Escape again on
-   * the stage to end the session", and the presenter cannot see it: the stage
-   * is frameless, sized to the monitor and always-on-top (§52.7), so the
-   * control window is behind it. The first press therefore produced no visible
-   * result at all, and Escape read as broken or laggy — press, nothing, press
-   * again, gone.
+   * The prompter covers the panel the presenter is reading, so nothing else
+   * they can see answers the first press. When the only answer was a toast in
+   * a window behind the stage, the first press produced no visible result at
+   * all, and Escape read as broken or laggy — press, nothing, press again,
+   * gone.
    *
-   * This is answered locally rather than by asking control to send an ack
-   * back: the round trip is stage → Rust → control → Rust → stage, and the
-   * whole complaint is about responsiveness. The stage already knows it sent a
-   * single press, so it can say so in the same frame. Control's toast still
-   * fires for the operator at the control window, who is a different person
-   * looking at a different screen.
+   * This is answered locally rather than by waiting on the host: the stage
+   * already knows it saw a single press, so it can say so in the same frame,
+   * and the whole complaint is about responsiveness.
    *
    * It gets its own state rather than riding the acknowledgement chip, which
    * is gated on the `stageAcknowledgements` setting (§33.10) — turning command
@@ -1833,9 +1838,10 @@
   /**
    * §16.9's missing half: a way out that is not a keystroke.
    *
-   * Escape ends a take from whichever window holds the keyboard, and the stage
-   * is frameless, monitor-sized and always-on-top (§52.7). Put those together
-   * and there is a reachable state with no exit: the stage is covering a screen,
+   * Escape reaches the stage only while its window has the keyboard, and a
+   * presented take is borderless and fills its panel (§52.7). Put those
+   * together and there is a reachable state with no exit: the stage is
+   * covering a screen,
    * the operator is working in some other application, and Escape goes to that
    * application. The stage has to be clicked before it can be dismissed, and
    * nothing on it says so — a full-screen window with no visible way out reads
@@ -2171,10 +2177,9 @@
       /*
        * The transport, answered where the hold chip advertises it.
        *
-       * On a separate-stage rig this window is the one holding the keyboard —
-       * the presenter is standing at it — and the chip that names these keys is
-       * drawn HERE. A key named on the glass and answered only by a window on a
-       * desk behind them is advice that does not work where it is read.
+       * The stage is what holds the keyboard while the presenter reads, and the
+       * chip that names these keys is drawn HERE. A key named on the glass and
+       * answered somewhere else is advice that does not work where it is read.
        *
        * `repeat` is refused for the toggle and allowed for the pace keys, the
        * same split the control window's shortcut layer makes: a held toggle
@@ -2812,9 +2817,11 @@
               {/if}
             {/if}
           </div>
-          <!-- Control emits these; Rust emits the snapshots. If this stays 0
-               while the summary reports taps sent, the control -> stage channel
-               is the fault and the snapshots are arriving by a different road. -->
+          <!-- Taps that arrived on the separate window's event path; Rust emits
+               the snapshots. If this stays 0 while taps are being sent, the
+               control -> stage channel is the fault and the snapshots are
+               arriving by a different road. A take's embedded stage gets its
+               transcript through the bridge, which this does not count. -->
           <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
             taps: {transcriptTapsArrived} arrived
           </div>
@@ -2886,14 +2893,14 @@
         recogniser heard nothing" from "the aligner would not match".
 
         Every one of those now has a first-class reading somewhere the presenter
-        is already looking. A dead input or a dead socket resolves to a named
-        fault on the audio readout AND, through `resolveHoldStatus`, to that
-        same sentence in the mirrored hold chip; several seconds of speech with
-        nothing coming back is `not_heard`, which reads "Not hearing you"; and
-        an aligner that will not match is the hold ladder's own "Holding here".
-        The distinction survives without a strip of small changing text beside
-        an animated waveform, which is what made the finished surface read as a
-        development HUD.
+        is already looking. A dead input or a stopped recogniser resolves to a
+        named fault on the audio readout AND, through `resolveHoldStatus`, to
+        that same sentence in the mirrored hold chip; several seconds of speech
+        with nothing coming back is `not_heard`, which reads "Not hearing you";
+        and an aligner that will not match is the hold ladder's own "Holding
+        here". The distinction survives without a strip of small changing text
+        beside an animated waveform, which is what made the finished surface
+        read as a development HUD.
 
         Aligned to the dock's left edge and sitting directly above it, so the
         two instruments read as one column instead of as two corners — which is

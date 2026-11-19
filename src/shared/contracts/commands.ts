@@ -167,14 +167,9 @@ export const COMMAND_IDS = [
    */
   'window.stage',
   /*
-   * NO `window.reopen-stage`.
-   *
-   * A Reopen Stage item is a genuine gap rather than a moot one. Recovering a
-   * lost stage today means ending the take and presenting again, which is what
-   * `Live.svelte` tells the operator to do. A real reopen has to re-enter the
-   * presentation state machine mid-take (`windows/present.rs`), which should
-   * not be disturbed casually. It wants its own change, with its own tests —
-   * and an enabled menu item that did nothing would be worse than its absence.
+   * NO `window.reopen-stage`. A take renders in the control window itself, so
+   * there is no separate stage to lose and reopen mid-take — and an enabled
+   * menu item that did nothing would be worse than its absence.
    */
 
   // ---- Help ----
