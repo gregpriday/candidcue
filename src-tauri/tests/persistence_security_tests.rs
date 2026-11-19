@@ -2019,14 +2019,18 @@ async fn issue_450_a_missing_image_is_named_in_a_warning() {
     let present = tiny_png();
     let present_name = png_name(&present);
     fs::write(dir.path().join("assets").join(&present_name), &present).unwrap();
-    let missing: Vec<String> = (0u8..3).map(|i| png_name(&solid_png([i, i, i]))).collect();
+    let missing: Vec<String> = (0u8..5).map(|i| png_name(&solid_png([i, i, i]))).collect();
+    let present_stem = present_name.trim_end_matches(".png");
+    let missing_stem = missing[3].trim_end_matches(".png");
     let md = dir.path().join("several.md");
     fs::write(
         &md,
         format!(
             "![Here](assets/{present_name})\n\n![A](assets/{})\n\n![B][b]\n\n\
-             [b]: assets/{}\n\nNext paragraph.\n\n![C](assets/{})\n",
-            missing[0], missing[1], missing[2]
+             [b]: assets/{}\n\nNext paragraph.\n\n![C](assets/{})\n\n\
+             ![D](assets/{missing_stem}&period;png)\n\n![E](assets/{})\n\n\
+             ![Wrong type](assets/{present_stem}.jpg)\n",
+            missing[0], missing[1], missing[2], missing[4]
         ),
     )
     .unwrap();
@@ -2035,10 +2039,16 @@ async fn issue_450_a_missing_image_is_named_in_a_warning() {
     assert_eq!(file_names(&h.paths.assets_dir(&id)), vec![present_name.clone()]);
     assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
     let warning = &imported.warnings[0];
-    assert!(warning.starts_with("3 image(s)"), "{warning}");
-    for name in &missing {
+    assert!(warning.starts_with("6 image(s)"), "{warning}");
+    // Named in the order their hashes first appear: the present image's
+    // stem first (its `.jpg` would not resolve), the last missing one only
+    // counted.
+    assert!(warning.contains(&format!(": assets/{present_stem}.jpg, ")), "{warning}");
+    for name in &missing[..4] {
         assert!(warning.contains(&format!("assets/{name}")), "{name} named: {warning}");
     }
+    assert!(warning.contains(" and 1 more."), "five named, the sixth counted: {warning}");
+    assert!(!warning.contains(&missing[4]), "the sixth is not named: {warning}");
     assert!(!warning.contains(&present_name), "the one brought in is not named: {warning}");
 }
 
@@ -2065,7 +2075,7 @@ async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
         format!(
             "# Mixed\n\nThe file is `{first_stem}.jpg` in the old notes.\n\n![Hero][hero]\n\n\
              ![Escaped](assets/{second_stem}&period;png)\n\n\
-             ![Angled](<./assets/{second_stem}\\.png> \"Title\")\n\n\
+             ![Angled](<./assets/{first_stem}\\.png> \"Title\")\n\n\
              ![Remote](https://example.com/assets/remote.png)\n\n\
              ![Hand](assets/photo.png)\n\n[hero]:\n  assets/{first_name}\n\nNext paragraph.\n"
         ),
@@ -2079,14 +2089,15 @@ async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
     assert_eq!(file_names(&h.paths.assets_dir(&id)), expected);
     assert!(resolves(&h, &id, &format!("assets/{first_name}")).await);
     assert!(resolves(&h, &id, &format!("assets/{second_name}")).await);
+    // The `.jpg` the prose mentions would not resolve, so it is named; the
+    // PNG under the same hash came in all the same.
     assert_eq!(
         imported.warnings,
-        vec![
-            "1 image(s) could not be imported from the assets folder beside this file: \
-             assets/photo.png. Export the original script as a .speakingglass bundle to keep \
-             its images with it."
-                .to_string()
-        ]
+        vec![format!(
+            "2 image(s) could not be imported from the assets folder beside this file: \
+             assets/{first_stem}.jpg, assets/photo.png. Export the original script as a \
+             .speakingglass bundle to keep its images with it."
+        )]
     );
 }
 

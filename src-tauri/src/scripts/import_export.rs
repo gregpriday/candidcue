@@ -26,6 +26,9 @@ const MAX_BUNDLE_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_BUNDLE_ASSET_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_BUNDLE_TOTAL_BYTES: u64 = 600 * 1024 * 1024;
 const MAX_BUNDLE_FILE_COUNT: usize = 256;
+/// How many entries of the folder beside an imported Markdown file are read
+/// to find its images (#450). An export's folder holds only its images.
+const MAX_LISTED_BESIDE: usize = 4096;
 
 /// Already-authorized import parameters.
 ///
@@ -256,45 +259,54 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
             }
             folder.canonicalize().ok()
         });
+        // The folder is listed once and the text's names matched against
+        // that, so a text full of hashes costs no lookups for files that are
+        // not there.
+        let present: std::collections::HashSet<String> = match &canonical_folder {
+            Some(_) => folder
+                .as_deref()
+                .and_then(|folder| fs::read_dir(folder).ok())
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .take(MAX_LISTED_BESIDE)
+                        .filter_map(|entry| entry.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            None => std::collections::HashSet::new(),
+        };
         let mut read_total: u64 = 0;
-        for (looked_for, (stem, written)) in wanted.into_iter().enumerate() {
-            // The extension written first, then the rest: export picked the
-            // file by its stem, so whichever is there is the one it copied.
-            let mut extensions: Vec<&str> = written.into_iter().collect();
-            extensions.extend(
-                ALLOWED_BUNDLE_ASSET_EXTENSIONS
-                    .iter()
-                    .copied()
-                    .filter(|e| Some(*e) != written),
-            );
-            let mut brought_in = false;
-            // Bounded in what is looked up as well as in what is kept, so a
-            // text naming thousands of hashes costs a bounded number of
-            // lookups.
-            if let (Some(folder), Some(canonical), true) =
-                (&folder, &canonical_folder, looked_for < MAX_BUNDLE_FILE_COUNT)
-            {
-                for extension in extensions {
-                    if found.len() >= MAX_BUNDLE_FILE_COUNT || read_total >= MAX_BUNDLE_TOTAL_BYTES {
-                        break;
-                    }
-                    let name = format!("{stem}.{extension}");
-                    let limit = MAX_BUNDLE_ASSET_BYTES.min(MAX_BUNDLE_TOTAL_BYTES - read_total);
-                    let (bytes, read) = read_image_beside(folder, canonical, &name, limit);
-                    // Every byte read counts, kept or not: the limit is on
-                    // what the import reads.
-                    read_total += read;
-                    if let Some(bytes) = bytes.filter(|b| validate_asset_image(&name, b).is_ok()) {
-                        found.push((name, bytes));
-                        brought_in = true;
-                        break;
-                    }
+        for (stem, written) in wanted {
+            // Every file the export would have copied for this stem — it
+            // picked by stem alone — whatever extension the text wrote.
+            let mut brought_in: Vec<&str> = Vec::new();
+            for extension in ALLOWED_BUNDLE_ASSET_EXTENSIONS {
+                let name = format!("{stem}.{extension}");
+                if !present.contains(&name) {
+                    continue;
+                }
+                let (Some(folder), Some(canonical)) = (&folder, &canonical_folder) else { break };
+                if found.len() >= MAX_BUNDLE_FILE_COUNT || read_total >= MAX_BUNDLE_TOTAL_BYTES {
+                    break;
+                }
+                let limit = MAX_BUNDLE_ASSET_BYTES.min(MAX_BUNDLE_TOTAL_BYTES - read_total);
+                let (bytes, read) = read_image_beside(folder, canonical, &name, limit);
+                // Every byte read counts, kept or not: the limit is on what
+                // the import reads.
+                read_total += read;
+                if let Some(bytes) = bytes.filter(|b| validate_asset_image(&name, b).is_ok()) {
+                    found.push((name, bytes));
+                    brought_in.push(extension);
                 }
             }
-            // Only a name written as an image is reported: a bare hash with no
-            // file beside it is as likely a checksum in the prose.
-            if let (false, Some(extension)) = (brought_in, written) {
-                omitted.push(format!("assets/{stem}.{extension}"));
+            // A name the text wrote as an image resolves only under that
+            // name, so each one not brought in is reported. A bare hash with
+            // no extension is as likely a checksum in the prose, and is not.
+            for extension in written {
+                if !brought_in.contains(&extension) {
+                    omitted.push(format!("assets/{stem}.{extension}"));
+                }
             }
         }
     }
@@ -374,7 +386,8 @@ fn authored_asset_references(source: &str) -> Vec<String> {
     // text is built.
     for token in source.split(|c: char| c.is_whitespace() || DELIMITERS.contains(c)) {
         let Some(at) = token.find("assets/") else { continue };
-        let prefix = &token[..at];
+        // `[p]:assets/x.png` is a definition, not a scheme.
+        let prefix = token[..at].trim_start_matches(':');
         if prefix.contains(':') || prefix.starts_with('/') {
             continue;
         }
