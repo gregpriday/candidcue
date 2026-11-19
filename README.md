@@ -25,6 +25,11 @@ installers and update files are also served from
   so SmartScreen asks first: choose **More info**, then **Run anyway**.
 - **Linux** (64-bit, Ubuntu 22.04 or newer): the `.AppImage`, or the `.deb`.
 
+The Windows and Linux builds are previews. Automated checks install each one
+and see it start, but none has yet completed a voice-followed take from its
+installer; [the acceptance record](docs/rig-runs/0.1.0-2026-11-19-windows-linux.md)
+says what has and has not been tried.
+
 After that, Speaking Glass checks for updates itself and installs one only when
 you choose to (a `.deb` install is pointed at the download page instead). Each
 update is signed and checked against the key the app was built with, and it is
@@ -70,7 +75,9 @@ path in the app and exactly what each one sends.
   installer fetches where it is missing — but is not tested.
 - Linux x64: Ubuntu 22.04 or later, as a `.deb` or an AppImage, with a
   PulseAudio or PipeWire sound server for the microphone. Other distributions
-  with glibc 2.35 and WebKitGTK 4.1 should work but are not tested.
+  with glibc 2.35 and WebKitGTK 4.1 should work but are not tested, and
+  neither are a real desktop, Wayland or two monitors: the packages have run
+  only in an X11 test container.
 - A microphone
 - A second display for prompter mode (optional)
 - English, for voice following

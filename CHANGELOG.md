@@ -26,10 +26,14 @@ engine decides where in the script you are.
 - **Windows 11, 64-bit.** A per-user installer that needs no administrator
   rights. It is not code-signed, so the first time you run it Windows
   SmartScreen says it does not recognise the app: choose **More info**, then
-  **Run anyway**. Windows 10 should work but has not been tested.
+  **Run anyway**. Automated checks install it and see it start, but no
+  voice-followed take has yet been completed with the installed build, so
+  treat it as a preview. Windows 10 should work but has not been tested.
 - **Linux, 64-bit**, as an AppImage or a `.deb`, built on Ubuntu 22.04 and
-  needing that release's libraries or newer (WebKitGTK 4.1). Tested under X11;
-  Wayland is untested.
+  needing that release's libraries or newer (WebKitGTK 4.1). A preview, like
+  Windows: both packages have been installed and started only in an X11 test
+  container, with no voice-followed take; a real desktop, Wayland and two
+  monitors are untested.
 - **A microphone**, and **a second display** for a prompter rig. A reading
   window, or a full-screen prompter on the same screen, works on one display.
 
@@ -86,6 +90,8 @@ a `.deb` install is pointed at the download page instead.
 - The speech model is a separate download, which you start yourself.
 - No cloud backup or sync.
 - The Windows build is not code-signed.
+- The Windows and Linux builds are previews: neither has completed a
+  voice-followed take from its installer yet.
 - Dragging a reading window to a display with different optics mid-take
   keeps the opening display's text scale until the take ends.
 

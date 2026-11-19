@@ -41,8 +41,10 @@ A case has three outcomes: **pass**, **fail** (file an issue, link it), and
 | | |
 |---|---|
 | Speaking Glass version | |
-| macOS version | |
-| Mac | |
+| Artifact (file name and SHA-256) | |
+| OS and version (macOS; Windows with its WebView2 version; Linux distribution with its WebKitGTK version) | |
+| Display session (macOS; Windows console; X11 or Wayland, and the desktop) | |
+| Machine | |
 | Microphone | |
 | Display(s) | |
 | Glass / beamsplitter | |
@@ -152,11 +154,39 @@ List every section and case skipped, and why. **This section is not optional**
 |---|---|
 | | |
 
+## G. Windows and Linux: the packaged journey
+
+Run for every release that publishes a Windows or Linux build, on the artifact
+the release workflow built, before it is advertised. CI's smoke tests only see
+the installed process stay up for 25 seconds, with no microphone and no voice;
+this is the part they cannot reach. One sheet per installer format.
+
+Fill the Rig rows with the exact artifact, the OS and its web view (WebView2 on
+Windows, WebKitGTK on Linux), the display session and the input. **The Microphone
+row says what fed the take**: a real microphone, or a WAV through a fake
+capture device. A fake device bypasses the OS microphone permission, so a take
+on one records G4 as not tested.
+
+| # | Step | Pass criteria | Result |
+|---|---|---|---|
+| G1 | Install through the advertised path | The `-setup.exe` from the releases page through SmartScreen's **More info › Run anyway**, with no administrator prompt; the `.deb` through the desktop's installer or `apt`; the AppImage made executable and opened. No terminal step beyond what README tells a user | |
+| G2 | Open a script | Create one and open one; it renders in the editor | |
+| G3 | Install the model | From the Welcome screen or Settings › Speech; the download verifies and the readiness sheet stops naming it | |
+| G4 | Microphone access | The OS permission flow as a first-time user meets it (Windows: Settings › Privacy & security › Microphone; Linux: a PulseAudio or PipeWire source); the level meter moves | |
+| G5 | Voice-followed take | Read at least a paragraph; the reading line follows the voice | |
+| G6 | End the take | Returns to the editor with the summary over it | |
+| G7 | Quit and reopen | Quit from the menu (File › Exit on Windows and Linux); relaunch from the Start menu or the desktop's launcher; the library, the script and the model are still there | |
+
 ---
 
 ## Known gaps this protocol cannot close
 
-- **Windows and Linux**: there is no build. Not applicable rather than untested.
+- **Windows and Linux beyond §G**: §G covers the packaged journey only.
+  Sections A–E were written on a Mac, and a case there that names a Mac
+  behaviour does not carry over to Windows or Linux without being re-run
+  there. Record each installer format (`-setup.exe`, `.deb`, AppImage) as its
+  own run; `docs/rig-runs/0.1.0-2026-11-19-windows-linux.md` is the first
+  attempt, and neither platform was exercised.
 - **Intel Macs**: the release ships a universal binary; if no Intel Mac was
   used, say so here rather than implying coverage.
 - **Delivery analysis of any kind**: there is none to test. Live coaching and

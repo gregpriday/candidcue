@@ -328,6 +328,18 @@ environment variables, and no cached speech model.
 No terminal command may be required for any of this. If one is, that is a
 release defect, not a documentation gap.
 
+**Windows and Linux** get the same drill, on a machine that has never run
+Speaking Glass, from the files the release workflow staged (its
+`speaking-glass-release-<os>` artifact), before the publish job runs: record it
+as `docs/real-rig-test-protocol.md` §G, one sheet per installer format
+(`-setup.exe`, `.deb`, AppImage), naming the OS, its web view (WebView2 or
+WebKitGTK), the display session (X11 or Wayland on Linux) and what fed the
+take. The Gatekeeper rows become SmartScreen's **More info › Run anyway** on
+Windows, which README tells users to expect. CI's smoke tests only see the
+installed process stay up for 25 seconds; they are not this drill. **A
+platform with no passing sheet is not advertised as tested**: README and the
+`CHANGELOG.md` section say what ran instead.
+
 ## 8. Long sessions, before a build goes wide
 
 Short takes prove the happy path and nothing about the third hour. Run these on
@@ -420,6 +432,7 @@ no sheet behind it**:
 
 | Dimension | Cells a 1.0 claim would need |
 |---|---|
+| OS | Each advertised OS: macOS, Windows 11, and Linux under X11 and Wayland, if those are advertised |
 | CPU | Apple Silicon; Intel, if Intel is advertised |
 | macOS | The oldest supported version; one in between; the current one |
 | Display | Laptop only; one external; two displays |
