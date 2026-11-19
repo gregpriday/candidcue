@@ -19,3 +19,19 @@ export declare function missing(
   required: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
 ): string[];
+
+/**
+ * `Developer ID Application: <name> (<TEAM ID>)`; capture group 1 is the Team
+ * ID. Shared with `verify-signed-bundle.mjs`, which binds the signed bundle
+ * to that team.
+ */
+export declare const DEVELOPER_ID_IDENTITY: RegExp;
+
+/** Secrets whose value must also have a shape, checked once present. */
+export declare const FORMATS: Readonly<Record<string, { readonly pattern: RegExp; readonly describe: string }>>;
+
+/** The present names in `names` whose value does not have its declared shape. */
+export declare function malformed(
+  names: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+): string[];

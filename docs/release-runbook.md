@@ -140,7 +140,7 @@ each check names every secret of its own kind that is missing at once:
 |---|---|---|---|
 | `APPLE_CERTIFICATE` | the Developer ID Application `.p12`, base64 | macOS | Gates |
 | `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password | macOS | Gates |
-| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <Name> (<TEAM ID>)` | macOS | Gates |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <Name> (<TEAM ID>)` | macOS | Gates (name and shape), keychain import |
 | `APPLE_API_KEY` | the App Store Connect API key `.p8`, base64 | macOS | Gates |
 | `APPLE_API_KEY_ID` | that key's ID | macOS | Gates |
 | `APPLE_API_ISSUER` | that key's issuer UUID | macOS | Gates |
@@ -149,6 +149,17 @@ each check names every secret of its own kind that is missing at once:
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | an R2 API token that can write the bucket | publishing | Publish |
 | `R2_ENDPOINT` | the account's R2 S3 endpoint | publishing | Publish |
 | `SPEAKING_GLASS_R2_BUCKET` | the bucket the public origin serves | publishing | Publish |
+
+`APPLE_SIGNING_IDENTITY` is the one secret whose wrong value does not fail by
+itself: Tauri hands it straight to `codesign --sign`, and `-` is codesign's
+ad-hoc identity, so the build would sign ad hoc and succeed. The gate therefore
+also checks its shape — exactly `Developer ID Application: <Name> (<TEAM ID>)`,
+a ten-character Team ID, no surrounding whitespace — and reports it `INVALID`
+without printing it. An Apple Development or Mac App Store identity, or a
+certificate's SHA-1 hash, is refused the same way. After the certificate is
+imported, the build checks that the keychain holds an identity of exactly that
+name before it compiles anything, so a secret that does not match the `.p12`
+fails in seconds rather than as a codesign error after the universal build.
 
 The signing secrets are checked in each workflow's `Gates` job, and every test
 runner and build waits for it, so a missing one fails the run in a minute or
@@ -189,7 +200,9 @@ gh run watch <id>
 Read the macOS log for: the keychain import, the universal build,
 notarisation of the app AND the DMG, the step that compares each link map
 against the slice lipo packaged, the copyleft check for both architectures,
-`verify-signed-bundle.mjs`, the DMG and updater-payload inspection, the smoke
+`verify-signed-bundle.mjs` (on the bundle, on the app inside the mounted DMG
+and on the unpacked updater payload: a `PASS` line per slice for the hardened runtime, the Developer ID
+signature and the entitlements), the DMG inspection, the smoke
 launch, and the credential cleanup step reporting that it ran. Read the Windows
 and Linux logs for the TTS-free recogniser (`sherpa-no-tts.mjs`), the GPL check
 on the linked binary (`verify-no-gpl-in-binary.mjs`), and the installer smoke
@@ -324,6 +337,23 @@ BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents
 ```
 
 **Signature, notarisation, Gatekeeper**
+
+The release workflow already runs `scripts/verify-signed-bundle.mjs` on the
+app, on the app inside the DMG and on the updater payload, and fails the build on any of what follows. It
+runs on a downloaded copy too, given the identity it should have been signed
+with (the Team ID is read from it):
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: <Name> (<TEAM ID>)" \
+  node scripts/verify-signed-bundle.mjs "$APP"
+```
+
+For each of the arm64 and x86_64 slices it requires a Developer ID
+Application signature that is not ad hoc, that Team ID, `com.speakingglass.app`,
+a secure timestamp and the hardened runtime (`flags=0x10000(runtime)`), and
+entitlements exactly equal to `src-tauri/entitlements/entitlements.macos.plist`
+with `com.apple.security.device.audio-input` true; then `codesign --verify
+--deep --strict`, `spctl` and the stapled ticket. By hand:
 
 ```bash
 codesign --verify --deep --strict --verbose=4 "$APP"

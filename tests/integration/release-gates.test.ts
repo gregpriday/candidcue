@@ -1823,12 +1823,115 @@ describe('the release workflow cannot publish an unverified build', () => {
      * an architecture mismatch. None of that is visible from source.
      */
     expect(uncommented).toContain('verify-signed-bundle.mjs');
-    expect(uncommented, 'and without the unsigned escape hatch').not.toMatch(
-      /verify-signed-bundle\.mjs[^\n]*--unsigned/,
-    );
-    // The DMG and the updater payload are artifacts too, and each is asked.
+    expect(uncommented, 'and without the unsigned escape hatch, on any line').not.toContain('--unsigned');
+    // The DMG is an artifact too, and is asked directly.
     expect(uncommented).toMatch(/stapler validate "\$DMG"/);
-    expect(uncommented).toMatch(/stapler validate "\$RUNNER_TEMP\/payload\/Speaking Glass\.app"/);
+  });
+
+  /*
+   * #189: the bundle that shipped was the linker's ad-hoc signature, with no
+   * hardened runtime and no entitlements. The inspection reads each slice's
+   * signer, Team ID, runtime flag and entitlements back off the signature,
+   * and the Team ID it holds them to is the release identity's — so both app
+   * copies (the one in the DMG and the one the updater installs) must be
+   * inspected, and each step must be handed the identity.
+   */
+  it('inspects both signed app copies against the release identity', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const targets = {
+      'Inspect the signed bundle': [
+        '"src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"',
+      ],
+      'Inspect the disk image and the updater payload': [
+        '"$MOUNT/Speaking Glass.app"',
+        '"$RUNNER_TEMP/payload/Speaking Glass.app"',
+      ],
+    };
+    for (const [name, apps] of Object.entries(targets)) {
+      const step = stepOf(build, name, RELEASE_WORKFLOWS.macos);
+      expect(step, name).not.toMatch(/^\s+if:/m);
+      expect(step, name).not.toContain('continue-on-error');
+      const joined = step.replace(/\\\n\s*/g, '');
+      const invocations = joined.split('\n').filter((line) => line.includes('verify-signed-bundle.mjs'));
+      expect(invocations.map((line) => line.trim()), name).toEqual(
+        apps.map((app) => `node scripts/verify-signed-bundle.mjs ${app}`),
+      );
+      expect(envMappings(step, 'secrets'), name).toEqual([['APPLE_SIGNING_IDENTITY', 'APPLE_SIGNING_IDENTITY']]);
+      expect(build.indexOf(`- name: ${name}`), `${name} runs before staging`).toBeLessThan(
+        build.indexOf('release-feed.mjs stage'),
+      );
+    }
+    // Each copy is in place before it is asked: the image mounted, the
+    // payload unpacked.
+    const media = stepOf(build, 'Inspect the disk image and the updater payload', RELEASE_WORKFLOWS.macos);
+    expect(media.indexOf('hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT"')).toBeGreaterThan(-1);
+    expect(media.indexOf('hdiutil attach')).toBeLessThan(media.indexOf('"$MOUNT/Speaking Glass.app"'));
+    expect(media.indexOf('tar -xzf')).toBeGreaterThan(-1);
+    expect(media.indexOf('tar -xzf')).toBeLessThan(media.indexOf('"$RUNNER_TEMP/payload/Speaking Glass.app"'));
+    expect(media).toMatch(/^\s+set -euo pipefail$/m);
+  });
+
+  it('stops before the build when the imported certificate is not the identity it will sign with', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const step = stepOf(build, 'Import the signing certificate', RELEASE_WORKFLOWS.macos);
+    expect(envMappings(step, 'secrets').map(([name]) => name)).toContain('APPLE_SIGNING_IDENTITY');
+    expect(step).toContain('security find-identity -p codesigning "$KEYCHAIN"');
+    expect(step).toMatch(/grep -Fq "\\"\$APPLE_SIGNING_IDENTITY\\""/);
+    expect(step).toMatch(/exit 1/);
+    expect(build.indexOf('- name: Import the signing certificate')).toBeLessThan(build.indexOf('pnpm tauri build'));
+  });
+
+  /*
+   * The guard itself, run: its lines from the step, with a `security` that
+   * prints a listing in the real tool's shape. A near miss (the same name, a
+   * different team) must stop the job; only the exact name may pass.
+   */
+  it.skipIf(process.platform === 'win32')('passes the keychain guard only for the exact identity', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const step = stepOf(build, 'Import the signing certificate', RELEASE_WORKFLOWS.macos);
+    const lines = step.split('\n');
+    const first = lines.findIndex((line) => line.includes('identities="$(security find-identity'));
+    const last = lines.findIndex((line, at) => at > first && line.trim() === 'fi');
+    expect(first, 'the guard').toBeGreaterThan(-1);
+    const guard = lines.slice(first, last + 1).join('\n');
+
+    const bin = mkdtempSync(join(tmpdir(), 'speaking-glass-keychain-'));
+    try {
+      fakeTool(
+        bin,
+        'security',
+        `if (process.argv[2] !== 'find-identity') process.exit(9);
+console.log('Policy: Code Signing');
+console.log('  Matching identities');
+console.log('  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Ada Lovelace (A1B2C3D4E5)"');
+console.log('     1 identities found');`,
+      );
+      const run = (identity: string) =>
+        spawnSync('bash', ['-c', `set -euo pipefail\n${guard}\necho reached`], {
+          encoding: 'utf8',
+          env: {
+            PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
+            KEYCHAIN: join(bin, 'signing.keychain-db'),
+            APPLE_SIGNING_IDENTITY: identity,
+          },
+        });
+      const exact = run('Developer ID Application: Ada Lovelace (A1B2C3D4E5)');
+      expect(exact.status, exact.stdout + exact.stderr).toBe(0);
+      expect(exact.stdout).toContain('reached');
+      for (const near of [
+        'Developer ID Application: Ada Lovelace (Z9Y8X7W6V5)',
+        'Developer ID Application: Ada Lovelace',
+        'Developer ID Application: Ada',
+      ]) {
+        const result = run(near);
+        expect(result.status, near).toBe(1);
+        expect(result.stdout, near).not.toContain('reached');
+        expect(result.stdout + result.stderr, near).toContain('::error::the imported certificate is not the identity');
+        expect(result.stdout + result.stderr, 'the listing is never printed').not.toContain('0123456789ABCDEF');
+      }
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   it('publishes only after everything else has run', () => {

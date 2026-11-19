@@ -17,7 +17,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { REQUIRED, missing } from '../../scripts/release-credentials.mjs';
+import { DEVELOPER_ID_IDENTITY, REQUIRED, malformed, missing } from '../../scripts/release-credentials.mjs';
 
 const SCRIPT = resolve(__dirname, '../../scripts/release-credentials.mjs');
 
@@ -29,7 +29,14 @@ afterAll(() => {
 /** A value no message could contain by accident. */
 const sentinel = (name: string) => `sentinel-value-of-${name.toLowerCase()}-0f3a`;
 
-const all = (names: readonly string[]) => Object.fromEntries(names.map((name) => [name, sentinel(name)]));
+/*
+ * The identity's shape is checked too, so its stand-in has that shape and
+ * still carries the sentinel the redaction assertions look for.
+ */
+const valueFor = (name: string) =>
+  name === 'APPLE_SIGNING_IDENTITY' ? `Developer ID Application: ${sentinel(name)} (A1B2C3D4E5)` : sentinel(name);
+
+const all = (names: readonly string[]) => Object.fromEntries(names.map((name) => [name, valueFor(name)]));
 
 function gate(args: string[], env: Record<string, string>, { withSummary = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'release-credentials-'));
@@ -128,6 +135,76 @@ describe('the release credential gate', () => {
       '3 secrets that are not set: APPLE_SIGNING_IDENTITY, APPLE_API_ISSUER, TAURI_SIGNING_PRIVATE_KEY.',
     );
     expect(output).toContain('This build attempt stopped before building anything.');
+  });
+
+  /*
+   * The identity is the one secret whose wrong value does not fail: Tauri
+   * hands it to `codesign --sign`, and `-` signs ad hoc and succeeds. Each of
+   * these would have passed a presence check.
+   */
+  it.each([
+    ['codesign\'s ad-hoc identity', '-'],
+    ['an Apple Development identity', `Apple Development: ${sentinel('dev')} (A1B2C3D4E5)`],
+    ['a Mac App Store identity', `3rd Party Mac Developer Application: ${sentinel('mas')} (A1B2C3D4E5)`],
+    ['the installer identity', `Developer ID Installer: ${sentinel('installer')} (A1B2C3D4E5)`],
+    ['a certificate hash, which names no Team ID', 'A'.repeat(40)],
+    ['a name with no Team ID', `Developer ID Application: ${sentinel('noteam')}`],
+    ['a lower-case Team ID', `Developer ID Application: ${sentinel('lower')} (a1b2c3d4e5)`],
+    ['a nine-character Team ID', `Developer ID Application: ${sentinel('short')} (A1B2C3D4E)`],
+    ['an eleven-character Team ID', `Developer ID Application: ${sentinel('long')} (A1B2C3D4E5F)`],
+    ['an empty name', 'Developer ID Application:  (A1B2C3D4E5)'],
+    ['a value pasted with a trailing newline', `Developer ID Application: ${sentinel('newline')} (A1B2C3D4E5)\n`],
+    ['a value pasted with a leading space', ` Developer ID Application: ${sentinel('space')} (A1B2C3D4E5)`],
+  ])('refuses %s as the signing identity, without printing it', (_label, identity) => {
+    const env = { ...all(REQUIRED.build.macos), APPLE_SIGNING_IDENTITY: identity };
+    const { status, output, summary } = gate(['build', 'macos'], env);
+    expect(status, output).toBe(1);
+    expect(output).toContain('INVALID  APPLE_SIGNING_IDENTITY');
+    expect(summary).toContain('`APPLE_SIGNING_IDENTITY` | **invalid** |');
+    expect(output).toContain('::error title=Malformed release credential::APPLE_SIGNING_IDENTITY is set, but not to');
+    expect(output).toContain('This build attempt stopped before building anything.');
+    // Nothing else is blamed, and nothing is reported missing.
+    for (const name of REQUIRED.build.macos.filter((name) => name !== 'APPLE_SIGNING_IDENTITY')) {
+      expect(output).toContain(`present  ${name}`);
+    }
+    expect(output).not.toContain('Missing release credentials');
+    // The value never appears: `-` cannot be searched for, so its output is
+    // held to another malformed value's, with the sentinel swapped out.
+    if (identity.length > 1) expect(output + summary).not.toContain(identity.trim());
+    else expect(output).toBe(gate(['build', 'macos'], { ...env, APPLE_SIGNING_IDENTITY: 'x' }).output);
+    for (const name of REQUIRED.build.macos) expect(output + summary).not.toContain(sentinel(name));
+  });
+
+  it('accepts a Developer ID Application identity, and reads its Team ID', () => {
+    const identity = 'Developer ID Application: Ada O\'Neill-Lovelace (Z9Y8X7W6V5)';
+    expect(malformed(['APPLE_SIGNING_IDENTITY'], { APPLE_SIGNING_IDENTITY: identity })).toEqual([]);
+    expect(malformed(['APPLE_SIGNING_IDENTITY'], { APPLE_SIGNING_IDENTITY: 'Developer ID Application: A (Z9Y8X7W6V5)' })).toEqual([]);
+    expect(DEVELOPER_ID_IDENTITY.exec(identity)?.[1]).toBe('Z9Y8X7W6V5');
+    // A name with parentheses of its own still yields the LAST group.
+    expect(DEVELOPER_ID_IDENTITY.exec('Developer ID Application: Acme (UK) Ltd (A1B2C3D4E5)')?.[1]).toBe(
+      'A1B2C3D4E5',
+    );
+  });
+
+  it('reports a malformed identity and missing secrets in the same run', () => {
+    const env: Record<string, string> = { ...all(REQUIRED.build.macos), APPLE_SIGNING_IDENTITY: '-' };
+    delete env.APPLE_API_ISSUER;
+    const { status, output } = gate(['build', 'macos'], env);
+    expect(status).toBe(1);
+    expect(output).toContain('MISSING  APPLE_API_ISSUER');
+    expect(output).toContain('INVALID  APPLE_SIGNING_IDENTITY');
+    expect(output).toContain('a secret that is not set: APPLE_API_ISSUER.');
+    expect(output).toContain('Malformed release credential::APPLE_SIGNING_IDENTITY');
+  });
+
+  it('checks no shape on a secret that is missing, and none on the other operating systems', () => {
+    expect(malformed(['APPLE_SIGNING_IDENTITY'], { APPLE_SIGNING_IDENTITY: '  ' })).toEqual([]);
+    expect(malformed(['APPLE_SIGNING_IDENTITY'], {})).toEqual([]);
+    expect(malformed(REQUIRED.build.windows, { TAURI_SIGNING_PRIVATE_KEY: '-' })).toEqual([]);
+    for (const os of ['windows', 'linux']) {
+      const env = { ...all(REQUIRED.build[os as 'windows' | 'linux']), APPLE_SIGNING_IDENTITY: '-' };
+      expect(gate(['build', os], env).status, os).toBe(0);
+    }
   });
 
   it('tells a failed publish how to finish once the secrets are added', () => {

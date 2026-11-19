@@ -19,6 +19,11 @@
   so it is driven by the APPLE_SIGNING_IDENTITY environment variable, and an
   unsigned local build simply never consults this file.
 
+  `scripts/verify-signed-bundle.mjs` reads the entitlements back off each
+  signed slice of a release and fails it unless they equal this file exactly,
+  with audio-input true, and unless the hardened-runtime flag is set. Adding
+  or removing a key here is therefore a change to what the release must carry.
+
   Deliberately NOT included: `com.apple.security.cs.allow-jit` and
   `allow-unsigned-executable-memory`. Electron needs those for V8; Speaking Glass
   renders in WKWebView, whose JIT lives in a separate system process, so
