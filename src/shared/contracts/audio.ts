@@ -10,8 +10,8 @@
  *
  * `RealtimeState` still names `minting_credential` and `negotiating`, states of
  * a hosted connection the app no longer makes. Nothing mints a credential: the
- * live path reports `minting_credential` as its "starting" state while it opens
- * the microphone and the recogniser.
+ * transcription test reports `minting_credential` as its "starting" state
+ * while it opens the microphone and the recogniser.
  */
 export type Unsubscribe = () => void;
 

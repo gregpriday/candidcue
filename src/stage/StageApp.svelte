@@ -2827,9 +2827,9 @@
           </div>
           <div>viewport: {vw}×{vh}</div>
           {#if budget}
-            <!-- The number that used to be a `compact` flag, said properly: what
-                 the presenter can actually see. Short is worth knowing about
-                 BEFORE a take, which is why it is stated rather than corrected. -->
+            <!-- What the presenter can actually see, in rendered lines. Short
+                 is worth knowing about BEFORE a take, which is why it is
+                 stated rather than corrected. -->
             <div>
               lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
                 ? ''

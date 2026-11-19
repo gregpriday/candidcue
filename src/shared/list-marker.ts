@@ -122,8 +122,7 @@ type Hints = Readonly<Record<string, string | number | boolean>> | undefined;
  *
  * A task beats a number: `1. [x] Ship it` carries both, and whether the step is
  * done is the more useful of the two facts to see. Hints that are missing or of
- * the wrong type fall back to a top-level bullet, which is what the stage drew
- * for every item before this existed.
+ * the wrong type fall back to a top-level bullet.
  */
 export function listMarker(hints: Hints): ListMarker {
   const depth = clampDepth(hints?.['depth']);

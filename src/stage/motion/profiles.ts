@@ -116,14 +116,10 @@ export function catchUpMultiplierFor(profile: SmoothFollowProfile, boost: number
 /**
  * Companion §30.1–30.5, over the alignment engine's four states plus `paused`.
  *
- * The state vocabulary is deliberately small. It used to carry thirteen
- * entries, most of which were the old TypeScript tracker's internal bookkeeping
- * leaking into motion — `coasting`, `retake_pending`, `reanchoring` and friends
- * described what the *tracker* was doing, not what the presenter needed to see.
- * The engine now reports the only four distinctions that change how the
- * document should move, and everything that used to be a state is either a
- * transition directive (a bounded discontinuity, handled below) or nothing at
- * all.
+ * The state vocabulary is deliberately small: the engine reports only the
+ * four distinctions that change how the document should move. What the engine
+ * is doing internally is not a motion state; a bounded discontinuity is a
+ * transition directive, handled below.
  *
  * Note what is NOT here: no multiplier tries to stop the document during a
  * hold. It stops because the engine zeroes `rateTokensPerSecond` in exactly

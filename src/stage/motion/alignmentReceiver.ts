@@ -209,13 +209,13 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
        * which is the unit this method is given, and the only one it can see.
        * One stage can serve a second session (the separate window is handed a
        * new envelope), and the engine that owns this receiver survives the
-       * change. Carried
-       * forward, the counts stop answering the question anybody asks of them: a
-       * session that rejected everything early would keep supplying the
-       * "dominant" rejection reason for a later, healthy one — and, worse in
-       * the other direction, a single acceptance from the earlier session would
-       * make the next one's all-rejected feed look partly healthy, which is
-       * precisely the reading this instrument exists to make impossible.
+       * change. Carried forward, the counts stop answering the question anybody
+       * asks of them: a session that rejected everything early would keep
+       * supplying the "dominant" rejection reason for a later, healthy one —
+       * and, worse in the other direction, a single acceptance from the earlier
+       * session would make the next one's all-rejected feed look partly
+       * healthy, which is precisely the reading this instrument exists to make
+       * impossible.
        *
        * NOT per take PASS. A retake ("restart paragraph") opens a new pass
        * inside the same session and never changes the generation, so its counts

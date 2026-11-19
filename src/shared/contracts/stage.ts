@@ -354,11 +354,11 @@ export type StageAutoScrollEndReason = 'document_end' | 'nowhere_to_go';
 /**
  * What the stage should draw while the operator is calibrating the rig.
  *
- * The crosshair used to be the whole of calibration, and it answered exactly one
- * question: where is the lens. The optical model needs four more answers before
- * it can size anything — how much of the panel is visible in the glass, which
- * way the glass flips the image, how many millimetres a pixel is, and whether a
- * given type size is actually comfortable from where the presenter stands.
+ * The crosshair answers one question: where is the lens. The optical model
+ * needs four more answers before it can size anything — how much of the panel
+ * is visible in the glass, which way the glass flips the image, how many
+ * millimetres a pixel is, and whether a given type size is actually
+ * comfortable from where the presenter stands.
  *
  * They are modes of one directive rather than five directives because only one
  * can be on screen at a time, and because "leave calibration" must be a single

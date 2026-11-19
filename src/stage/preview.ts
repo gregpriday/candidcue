@@ -88,11 +88,9 @@ export function uncalibratedPreviewSettings(): StageSettings {
 /**
  * Preview settings, resolved through the real optical model.
  *
- * This used to hold a hand-tuned pair of tables selected by a viewport
- * breakpoint — a "compact" column of numbers for 1024x600 and a wide one for
- * everything else. Two tables for one question is exactly the arrangement the
- * optical layer replaces, and keeping it here would mean the preview no longer
- * showed what the stage does.
+ * Not hand-tuned tables picked by a viewport breakpoint: two tables for one
+ * question is exactly the arrangement the optical layer replaces, and keeping
+ * one here would mean the preview no longer showed what the stage does.
  *
  * So the preview discovers a rig the same way a take does. The window it is
  * running in stands in for the panel, and the profile it produces is resolved by
@@ -275,10 +273,9 @@ export interface PreviewDriver {
   /**
    * Step through every calibration overlay and back to off.
    *
-   * Five cards is four more than the crosshair used to be, and each of them
-   * exists to be looked at through glass at the distance somebody presents
-   * from. Judging one in a browser window costs a keystroke; judging one on a
-   * rig costs a Tauri build and a prompter.
+   * There are five cards, and each of them exists to be looked at through glass
+   * at the distance somebody presents from. Judging one in a browser window
+   * costs a keystroke; judging one on a rig costs a Tauri build and a prompter.
    */
   cycleCalibration(): void;
   /** Clean Take ⇄ Diagnostic Take. */

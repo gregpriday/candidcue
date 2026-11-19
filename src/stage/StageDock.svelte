@@ -1410,9 +1410,6 @@
    * likely to be resting; `display: none` would take it out of the tab order
    * and collapse the row, so the buttons would shuffle sideways against each
    * other every time one of them changed state.
-   *
-   * The audio readout is no longer downstream of any of this — it is first in
-   * the row — but the rule stands for the cluster itself.
    */
   .dock-button[data-hidden='true'] {
     opacity: 0;
