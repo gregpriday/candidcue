@@ -947,3 +947,24 @@ async function expectRowFilterNote(page: Page, expected: number): Promise<void> 
     })
     .toEqual({ stated: expected, visible: expected });
 }
+
+/*
+ * The published guide's "Where your data lives" names the folder Speaking
+ * Glass keeps its data in, and Settings is where someone checking it looks. The
+ * button asks Rust for the one folder it knows (`reveal_data_folder` takes no
+ * path), so what opens is the folder the Data folder row reports.
+ */
+test('Reveal data folder asks Rust to show the data folder', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Data, privacy & updates');
+
+  await page.getByRole('button', { name: 'Reveal data folder' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__E2E__.calls.filter((c) => c.command === 'reveal_data_folder').length,
+      ),
+    )
+    .toBe(1);
+});

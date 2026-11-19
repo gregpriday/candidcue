@@ -51,6 +51,7 @@
     type SystemDiagnostics,
   } from '../lib/diagnostics-format';
   import * as diagnosticsService from '../services/diagnostics';
+  import { revealDataFolder } from '../services/recovery';
   import {
     describeError,
     recentErrorDiagnostics,
@@ -2440,6 +2441,20 @@
     );
   }
 
+  /**
+   * The folder the Data folder row names, in the file manager. The same
+   * `reveal_data_folder` the Recovery screen uses, so the folder a support
+   * conversation or the published guide sends someone to can be opened from
+   * Settings on a healthy launch too, not only after a failed one.
+   */
+  async function revealData(): Promise<void> {
+    try {
+      await revealDataFolder();
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    }
+  }
+
   async function revealBundle(): Promise<void> {
     try {
       await diagnosticsService.revealSupportBundle();
@@ -4328,6 +4343,7 @@
             <Button size="sm" disabled={!diagnostics} onclick={() => void copyDiagnostics()}>
               Copy diagnostics
             </Button>
+            <Button size="sm" onclick={() => void revealData()}>Reveal data folder</Button>
             <Button size="sm" onclick={() => void runSupportBundle()}>
               Export support bundle
             </Button>
