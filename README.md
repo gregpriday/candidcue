@@ -14,9 +14,10 @@ window on a single screen too.
 
 ## Download
 
-The current release is on the
-[releases page](https://github.com/gregpriday/candidcue/releases/latest), and
-every file is also served from `https://updates.speakingglass.com/releases/`:
+Each release's installers are published on the
+[releases page](https://github.com/gregpriday/candidcue/releases), and the
+installers and update files are also served from
+`https://updates.speakingglass.com/releases/<version>/`:
 
 - **macOS** (12 or later, Apple Silicon and Intel): the universal `.dmg`,
   signed and notarised.
@@ -24,9 +25,10 @@ every file is also served from `https://updates.speakingglass.com/releases/`:
   so SmartScreen asks first: choose **More info**, then **Run anyway**.
 - **Linux** (64-bit, Ubuntu 22.04 or newer): the `.AppImage`, or the `.deb`.
 
-Speaking Glass updates itself after that. Each update is signed and checked against
-the key the app was built with, and it is never offered or installed during a
-take.
+After that, Speaking Glass checks for updates itself and installs one only when
+you choose to (a `.deb` install is pointed at the download page instead). Each
+update is signed and checked against the key the app was built with, and it is
+never offered or installed during a take.
 
 ## What it does
 
@@ -44,7 +46,8 @@ take.
   - `[Pause]`, `[Beat]` and `[Breathe]` are shorthand cues.
   - `[Take: Intro]` starts a part you can record on its own.
   - `GUI{say="gooey"}` shows one thing and follows the voice saying another.
-  - `:::silent` and `:::stage` blocks are shown but never followed.
+  - `:::silent` and `:::stage` blocks are shown but skipped by the follower,
+    except for anything inside a nested `:::spoken` block.
 - **Your files.** Scripts are Markdown files on disk, with revision history and
   an Export all data backup.
 
@@ -52,12 +55,11 @@ take.
 
 No account, no telemetry and no API key. Recognition happens on device, so your
 audio and your script are not uploaded anywhere. The app uses the network for
-two things: the speech model download you start yourself (about 128 MB, checked
-against a pinned SHA-256), and an update check against
-`updates.speakingglass.com` shortly after launch and every six hours, which you
-can turn off in Settings and which installs an update only when you choose to,
-never during a take
-([`docs/updates.md`](docs/updates.md)).
+the speech model download you start yourself (about 128 MB, checked against a
+pinned SHA-256), an update check against `updates.speakingglass.com` shortly
+after launch and every six hours, which you can turn off in Settings, and the
+update download when you choose to install one; nothing is installed during a
+take ([`docs/updates.md`](docs/updates.md)).
 [`docs/network-inventory.md`](docs/network-inventory.md) lists every network
 path in the app and exactly what each one sends.
 
@@ -115,15 +117,15 @@ On Linux it is `--target linux-x64` and `src-tauri/target/release/speaking-glass
 The Windows section of [`CLAUDE.md`](CLAUDE.md) has the reasoning.
 
 The speech model is not in the repository or the app bundle. Install it from
-the Welcome screen or **Settings › Speech**. To skip that download while
-developing:
+the Welcome screen or **Settings › Speech**. To fetch it from the command line
+instead while developing:
 
 ```bash
 pnpm models:fetch                                   # ~161 MB into src-tauri/models/
 export SPEAKING_GLASS_MODELS_DIR="$PWD/src-tauri/models"
 ```
 
-`models:fetch` is a POSIX shell script. On Windows, install the model from the
+`models:fetch` is a Bash script. On Windows, install the model from the
 app instead; `SPEAKING_GLASS_MODELS_DIR` can then point at the copy it keeps in
 `%APPDATA%\com.speakingglass.app\models`.
 
@@ -133,23 +135,28 @@ you what to watch for.
 Speaking Glass was called CandidCue until October 2026. A build from before the
 rename kept its data in a `com.candidcue.app` folder. The first launch of
 Speaking Glass copies that folder to `com.speakingglass.app` and leaves the
-original alone, so delete the original yourself once no older checkout needs it.
+original alone. It copies only once: anything an older build writes to the
+original afterwards stays there, and if `com.speakingglass.app` already holds
+scripts, or a restore is under way there, nothing is copied at all. Keep the
+original until no older checkout uses it and you have checked that your data
+came across.
 
 ## Development
 
 ```bash
 pnpm check                   # svelte-check, the authoritative typecheck
-pnpm test                    # unit tests (node)
+pnpm test                    # unit and integration tests (node)
 pnpm test:dom                # component tests (jsdom)
 pnpm test:e2e                # browser journeys (Playwright)
-cd src-tauri && cargo test   # the app's Rust core
-cd crates && cargo test      # alignment engine, recogniser, benchmarks
+cargo test --manifest-path src-tauri/Cargo.toml  # the app's Rust core
+cargo test --manifest-path crates/Cargo.toml     # engine, recogniser, benchmarks
 ```
 
 ```
 src/shared/    compiler, contracts, optics (no I/O)
-src/control/   the main window: library, editor, settings, takes
+src/control/   the main window: library, editor, takes; the Settings screens
 src/stage/     the prompter renderer and motion
+src/preferences/ the Settings window
 src-tauri/     Rust: storage, windows, speech, the alignment host
 crates/        cc-align (alignment engine), cc-stt (recogniser), cc-bench
 bench/         replay corpora (Git LFS) and benchmark results
@@ -171,9 +178,14 @@ The project uses gitflow. Branch from `develop` and open your pull request
 against `develop`; that is where all work is integrated. `main` only moves when
 a release is cut: `develop` is merged into `main` and the release is tagged
 there (see [`docs/release-runbook.md`](docs/release-runbook.md)).
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, testing and pull requests.
 
 ## Licence
 
 Speaking Glass is free and open source under the [MIT licence](LICENSE).
-Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md),
-and security reports go through [`.github/SECURITY.md`](.github/SECURITY.md).
+Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Report a bug or ask a question in
+[GitHub Issues](https://github.com/gregpriday/candidcue/issues); **Help › Report
+a Problem** opens GitHub's new-issue form in your browser. Security
+reports go privately, through [`.github/SECURITY.md`](.github/SECURITY.md).

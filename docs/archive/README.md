@@ -3,7 +3,8 @@
 These are the specifications CandidCue was first designed from. None of them
 describes the app as it ships. Speech recognition now runs on-device, live
 coaching and the semantic sidecar are gone, no OpenAI or other hosted speech or
-language model is involved, and macOS is the only supported platform. Wherever
+language model is involved, a take runs in a single window, and the app runs on
+macOS, Windows and Linux. Wherever
 one of these documents and the code disagree, the code is the authority.
 Phrases like "build-ready", "mandatory" and "normative" are part of the
 history.

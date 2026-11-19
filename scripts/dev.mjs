@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * `pnpm dev` — start the real app (control + stage windows), on a port that is
+ * `pnpm dev` — start the real app (the control window), on a port that is
  * actually free.
  *
  * Two things used to go wrong. `pnpm dev` ran plain Vite, so the everyday
