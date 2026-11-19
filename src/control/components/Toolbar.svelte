@@ -158,16 +158,10 @@
         pattern to remove: a control on its own line above a heading is a web
         breadcrumb, and it cost 28px of every screen.
       -->
-      <!-- Named and titled as well as labelled: a route with no room for the
-           words (the editor's narrowest toolbar, #412) shows the chevron alone. -->
-      <button
-        type="button"
-        class="back"
-        data-focus="control"
-        aria-label={backLabel ?? 'Back'}
-        title={backLabel ?? 'Back'}
-        onclick={onback}
-      >
+      <!-- `back-label`: a route with no room for the words (the editor's
+           narrowest toolbar, #412) hides them visually, never from the
+           button's name. -->
+      <button type="button" class="back" data-focus="control" onclick={onback}>
         <Icon name="chevron-left" size={14} />
         <span class="back-label">{backLabel ?? 'Back'}</span>
       </button>

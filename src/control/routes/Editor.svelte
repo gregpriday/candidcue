@@ -838,8 +838,15 @@ import type { PresentationMode } from '../services/settings-types';
     $settings.stage.presentationMode === 'reader' ? NOUNS.reader : NOUNS.prompter,
   );
 
-  /** A failed save or a conflict is standing in the toolbar's status slot. */
-  const saveIssueShown = $derived($editor.saveState === 'error' || $editor.saveState === 'conflict');
+  /*
+   * The readout beside Present steps aside, at every width, while a failed
+   * save or a conflict stands in the toolbar's status slot — its words already
+   * cost the title its room — and while the stage is opening, when Present's
+   * own label grows and the destination can no longer be chosen anyway.
+   */
+  const presentReadoutYields = $derived(
+    $editor.saveState === 'error' || $editor.saveState === 'conflict' || $takeStarting,
+  );
 
   const VOICE_REMEDY: Record<string, string> = {
     model_missing: 'Set up voice following…',
@@ -2397,7 +2404,7 @@ import type { PresentationMode } from '../services/settings-types';
             its own, says it, and this stays quiet rather than say it twice.
           -->
           <span class="sr-only" role="status" aria-live="polite">{presentStatusAnnouncement}</span>
-          <div class="present-status">
+          <div class="present-status" class:yield={presentReadoutYields}>
             {#if voiceModelProblem}
               {@const problem = voiceModelProblem}
               {@const section = problem.action?.settingsSection ?? 'speech'}
@@ -2448,14 +2455,10 @@ import type { PresentationMode } from '../services/settings-types';
               the destination, which already starts with the shape; heard as
               plain text beside the voice warning, which the region says
               instead.
-
-              It yields to a failed save or a conflict, which already costs
-              the title its room from the status slot.
             -->
             <span
               class="present-mode"
               class:mismatch={$takeDestination?.mismatch != null}
-              class:yield={saveIssueShown}
               title={$takeDestination
                 ? ($takeDestination.mismatch?.detail ?? $takeDestination.summary)
                 : undefined}
@@ -3623,6 +3626,15 @@ import type { PresentationMode } from '../services/settings-types';
   .present-mode.mismatch {
     color: var(--warning);
   }
+  /* Steps aside for a save issue or a launch (`presentReadoutYields`). The
+     voice warning stays: it is the thing to fix before a take. */
+  .present-status.yield {
+    width: auto;
+  }
+  .present-status.yield .present-destination,
+  .present-status.yield .present-mode {
+    display: none;
+  }
 
   /*
    * The voice warning in the destination's place. A button, because it goes
@@ -3724,9 +3736,6 @@ import type { PresentationMode } from '../services/settings-types';
     .present-mode {
       display: block;
     }
-    .present-mode.yield {
-      display: none;
-    }
     /* The shape follows the warning glyph, so the glyph keeps its padding
        rather than tucking into Present. */
     .present-voice {
@@ -3760,7 +3769,8 @@ import type { PresentationMode } from '../services/settings-types';
    * the toolbar row itself owns (its 12px gaps) is left alone.
    *
    *   - "‹ Library" becomes its chevron, the back affordance every narrow
-   *     toolbar settles on; its name stays as the label and tooltip;
+   *     toolbar settles on; the word is hidden visually, so it is still the
+   *     button's name;
    *   - the actions close up from 8px to 4px;
    *   - the spacer gives up its 8px floor (the row's own gaps still part the
    *     title from the actions);
@@ -3776,7 +3786,12 @@ import type { PresentationMode } from '../services/settings-types';
       --segment-pad-x: var(--space-2);
     }
     .page :global(.toolbar .back-label) {
-      display: none;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
     }
   }
 </style>

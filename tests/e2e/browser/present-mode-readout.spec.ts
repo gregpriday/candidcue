@@ -63,6 +63,7 @@ interface Boot {
   width: number;
   workspace?: Record<string, unknown>;
   noModel?: boolean;
+  failListDisplays?: boolean;
 }
 
 async function boot(page: Page, opts: Boot): Promise<void> {
@@ -78,6 +79,7 @@ async function boot(page: Page, opts: Boot): Promise<void> {
     seedScripts: [SCRIPT],
     promptMode: 'voice',
     presentationMode: opts.mode,
+    ...(opts.failListDisplays ? { failListDisplays: true } : {}),
     ...(opts.noModel
       ? { modelStatuses: Object.fromEntries(MODEL_IDS.map((id) => [id, notInstalled(id)])) }
       : {}),
@@ -88,16 +90,24 @@ async function boot(page: Page, opts: Boot): Promise<void> {
   await expect(page.getByRole('button', { name: 'Present', exact: true })).toBeVisible();
 }
 
-interface Readout {
-  /** What the slot beside Present shows, as drawn (`innerText` skips hidden boxes). */
+/** One label beside Present, as drawn. */
+interface Label {
+  shown: boolean;
   text: string;
-  /** Drawn boxes in the slot whose text is cut by their own box. */
-  clipped: string[];
+  /** Its text runs past its own box, or its box runs outside the slot. */
+  cut: boolean;
+  ariaHidden: string | null;
+}
+
+interface Readout {
+  /** The toolbar's content box — what the container queries measure. */
+  content: number;
+  mode: Label;
+  destination: Label;
   titleClient: number;
   titleScroll: number;
   splitRight: number;
   toolbarRight: number;
-  warningGlyph: boolean;
 }
 
 async function readout(page: Page): Promise<Readout> {
@@ -105,24 +115,32 @@ async function readout(page: Page): Promise<Readout> {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   return page.evaluate(() => {
     const status = document.querySelector('.present-status') as HTMLElement;
-    const clipped = Array.from(status.querySelectorAll<HTMLElement>('*'))
-      .filter((el) => el.getClientRects().length > 0 && el.clientWidth > 0)
-      // Text collapsed on purpose for a screen reader is not a clipped readout.
-      .filter((el) => getComputedStyle(el).clip !== 'rect(0px, 0px, 0px, 0px)')
-      .filter((el) => el.scrollWidth > el.clientWidth + 1)
-      .map((el) => `${el.className}: ${el.scrollWidth} > ${el.clientWidth}`);
+    const slot = status.getBoundingClientRect();
+    const label = (el: HTMLElement | null) => {
+      if (el === null) return { shown: false, text: '', cut: false, ariaHidden: null };
+      const box = el.getBoundingClientRect();
+      const shown = el.getClientRects().length > 0 && box.width > 0;
+      return {
+        shown,
+        text: (el.textContent ?? '').trim(),
+        cut:
+          shown &&
+          (el.scrollWidth > el.clientWidth + 1 || box.left < slot.left - 0.5 || box.right > slot.right + 0.5),
+        ariaHidden: el.getAttribute('aria-hidden'),
+      };
+    };
+    const toolbar = document.querySelector('header.toolbar') as HTMLElement;
+    const style = getComputedStyle(toolbar);
     const title = document.querySelector('.title-input') as HTMLInputElement;
     const split = document.querySelector('.present-group > :last-child') as HTMLElement;
-    const toolbar = document.querySelector('header.toolbar') as HTMLElement;
-    const glyph = status.querySelector('.present-voice') as HTMLElement | null;
     return {
-      text: status.innerText.trim(),
-      clipped,
+      content: toolbar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      mode: label(status.querySelector<HTMLElement>('.present-mode')),
+      destination: label(status.querySelector<HTMLElement>('.present-destination-text')),
       titleClient: title.clientWidth,
       titleScroll: title.scrollWidth,
       splitRight: split.getBoundingClientRect().right,
       toolbarRight: toolbar.getBoundingClientRect().right,
-      warningGlyph: glyph !== null && glyph.getClientRects().length > 0,
     };
   });
 }
@@ -140,12 +158,28 @@ async function naturalTitleWidth(page: Page): Promise<number> {
 }
 
 function expectRoomKept(r: Readout, label: string, titleWidth?: number): void {
-  expect(r.clipped, `${label}: a readout beside Present is clipped`).toEqual([]);
+  expect(r.mode.cut, `${label}: the shape beside Present is clipped`).toBe(false);
+  expect(r.destination.cut, `${label}: the destination beside Present is clipped`).toBe(false);
   expect(r.titleScroll, `${label}: the title is cut`).toBeLessThanOrEqual(r.titleClient + 1);
+  expect(r.splitRight, `${label}: Present runs off the toolbar`).toBeLessThanOrEqual(r.toolbarRight + 0.5);
   if (titleWidth !== undefined) {
     expect(r.titleClient, `${label}: the title gave up room`).toBeGreaterThanOrEqual(titleWidth - 1);
   }
-  expect(r.splitRight, `${label}: Present runs off the toolbar`).toBeLessThanOrEqual(r.toolbarRight + 0.5);
+}
+
+/** Exactly one of the two labels, by the tier the bar's width puts it in. */
+function expectTier(r: Readout, mode: Mode, label: string): void {
+  if (r.content >= 961) {
+    expect(r.destination.shown, `${label} (${r.content}px bar): the whole line`).toBe(true);
+    expect(r.destination.text.startsWith(`${NOUN[mode]} · `), `${label}: "${r.destination.text}"`).toBe(true);
+    expect(r.mode.shown, `${label}: the shape is said twice`).toBe(false);
+  } else if (r.content >= 704) {
+    expect(r.mode.shown, `${label} (${r.content}px bar): the shape alone`).toBe(true);
+    expect(r.mode.text, label).toBe(NOUN[mode]);
+    expect(r.destination.shown, `${label}: the whole line in a short bar`).toBe(false);
+  } else {
+    expect(r.mode.shown || r.destination.shown, `${label} (${r.content}px bar): nothing fits`).toBe(false);
+  }
 }
 
 /*
@@ -166,29 +200,76 @@ for (const mode of ['reader', 'prompter'] as const) {
       await page.setViewportSize({ width, height: 700 });
       const r = await readout(page);
       const label = `${mode} @ ${width}px`;
-      expect(r.text.startsWith(NOUN[mode]), `${label}: "${r.text}" does not name the shape`).toBe(true);
+      expect(r.mode.shown || r.destination.shown, `${label}: nothing names the shape`).toBe(true);
+      expectTier(r, mode, label);
       expectRoomKept(r, label, titleWidth);
+      // Said once: the live region speaks the destination, so the short label
+      // is not read a second time.
+      expect(r.mode.ariaHidden, label).toBe('true');
     }
-    // A roomy window still gets the whole destination, not just the shape.
-    expect((await readout(page)).text).toContain('·');
+    expect((await readout(page)).destination.shown).toBe(true);
   });
 }
 
+test('each tier starts exactly where the bar can pay for it', async ({ page }) => {
+  await boot(page, { mode: 'reader', width: 1100 });
+  const r0 = await readout(page);
+  const chrome = 1100 - r0.content;
+  for (const content of [703, 704, 795, 796, 960, 961]) {
+    await page.setViewportSize({ width: content + chrome, height: 700 });
+    const r = await readout(page);
+    expect(Math.round(r.content), 'the bar did not land on the edge').toBe(content);
+    expectTier(r, 'reader', `edge ${content}px`);
+    expectRoomKept(r, `edge ${content}px`);
+  }
+});
+
 test('with the sidebar hidden the minimum window names the shape too', async ({ page }) => {
   await boot(page, { mode: 'reader', width: 980, workspace: { sidebarVisible: false } });
+  await expect(page.getByRole('separator', { name: 'Sidebar width' })).toHaveCount(0);
   const titleWidth = await naturalTitleWidth(page);
   const r = await readout(page);
-  expect(r.text.startsWith(NOUN.reader), `"${r.text}"`).toBe(true);
+  expectTier(r, 'reader', 'no sidebar @ 980px');
+  expect(r.mode.shown || r.destination.shown).toBe(true);
   expectRoomKept(r, 'no sidebar @ 980px', titleWidth);
 });
 
 test('a widest sidebar at the minimum window drops the readout whole rather than clip it', async ({ page }) => {
   await boot(page, { mode: 'reader', width: 980, workspace: { sidebarWidth: 360 } });
+  await expect(page.getByRole('separator', { name: 'Sidebar width' })).toHaveAttribute('aria-valuenow', '360');
   const r = await readout(page);
   // Nothing rigid is left to pay for it here; complete or absent are the only
-  // acceptable answers.
-  expect(r.text === '' || r.text === NOUN.reader, `"${r.text}"`).toBe(true);
-  expect(r.clipped).toEqual([]);
+  // acceptable answers, and the bar still holds the title and Present.
+  expectTier(r, 'reader', 'widest sidebar @ 980px');
+  expectRoomKept(r, 'widest sidebar @ 980px');
+});
+
+test('the shape comes from the setting, before any display is known', async ({ page }) => {
+  await boot(page, { mode: 'reader', width: 1040, failListDisplays: true });
+  const r = await readout(page);
+  expect(r.mode.shown).toBe(true);
+  expect(r.mode.text).toBe(NOUN.reader);
+  // Nothing else says it, so it is not hidden from a screen reader.
+  expect(r.destination.shown).toBe(false);
+  expect(r.mode.ariaHidden).toBeNull();
+});
+
+test('a failed save takes the readout away rather than the title its room', async ({ page }) => {
+  await boot(page, { mode: 'reader', width: 1040 });
+  expect((await readout(page)).mode.shown).toBe(true);
+  await page.evaluate(
+    (err) => window.__E2E__.setFail('save_script', err),
+    { code: 'SCRIPT_SAVE_FAILED', userMessage: 'Speaking Glass could not write the script file.' },
+  );
+  await page.getByRole('textbox', { name: 'Script Markdown' }).click();
+  await page.keyboard.type(' More words.');
+  await expect(page.getByRole('button', { name: /Save failed/ })).toBeVisible({ timeout: 10_000 });
+  for (const width of [1040, 1400]) {
+    await page.setViewportSize({ width, height: 700 });
+    const r = await readout(page);
+    expect(r.mode.shown || r.destination.shown, `save failed @ ${width}px`).toBe(false);
+    expect(r.splitRight).toBeLessThanOrEqual(r.toolbarRight + 0.5);
+  }
 });
 
 test('the voice warning keeps its glyph and the shape is still named, in Preview at the minimum window', async ({
@@ -196,9 +277,18 @@ test('the voice warning keeps its glyph and the shape is still named, in Preview
 }) => {
   await boot(page, { mode: 'prompter', width: 980, noModel: true });
   await page.getByRole('radio', { name: 'Preview' }).click();
-  await expect(page.getByRole('button', { name: /Set up voice following/ })).toBeVisible();
+  await expect(page.getByRole('radio', { name: 'Preview' })).toHaveAttribute('aria-checked', 'true');
+  const warning = page.getByRole('button', { name: /Set up voice following/ });
+  await expect(warning).toBeVisible();
+  const glyph = await warning.locator('svg').boundingBox();
+  expect(glyph?.width).toBeGreaterThan(0);
+  // The remedy's words are the button's name and tooltip, not drawn here.
+  const words = await warning.locator('.present-voice-text').evaluate((el) => getComputedStyle(el).clip);
+  expect(words).toBe('rect(0px, 0px, 0px, 0px)');
   const r = await readout(page);
-  expect(r.warningGlyph).toBe(true);
-  expect(r.text.endsWith(NOUN.prompter), `"${r.text}"`).toBe(true);
+  expectTier(r, 'prompter', 'voice warning, preview @ 980px');
+  expect(r.mode.shown).toBe(true);
+  // The live region says the warning instead, so the shape is plain text.
+  expect(r.mode.ariaHidden).toBeNull();
   expectRoomKept(r, 'voice warning, preview @ 980px');
 });
