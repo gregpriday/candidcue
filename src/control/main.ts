@@ -7,6 +7,13 @@ import { bindRealVoiceFacadeIfAvailable } from './services/voice-live';
 import { applyPlatformAttribute } from './lib/platform';
 import { followSystemAppearance } from './lib/appearance';
 import { applyWindowMaterial } from './lib/window-material';
+import { perfMark } from './lib/perf/probe';
+
+// Issue #240: the first statement of the entry, which runs only once every
+// static import above has loaded and evaluated. Navigation start to here is
+// the cost of the control bundle on this webview. A no-op unless this is the
+// benchmark build.
+perfMark('entry');
 
 // Bind the real audio/realtime services behind the voice facade before any
 // screen asks for microphones (falls back to the mock in plain-node tests).
@@ -25,5 +32,6 @@ if (!target) {
 }
 
 const app = mount(App, { target });
+perfMark('mounted');
 
 export default app;

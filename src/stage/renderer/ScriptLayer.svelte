@@ -2149,7 +2149,7 @@
      * exact hop this gate exists to prevent, in the one path most likely to hit
      * it.
      */
-    if (!next.valid && !retryScheduled) revealScript();
+    if (!next.valid && !retryScheduled) revealScript('unmeasurable');
   }
 
   /* ---------------------------------------------------------------------
@@ -2322,11 +2322,21 @@
    * is explicit that an unusable measurement is reported and lived with, not
    * hidden behind — a map that never validates must still show its script.
    */
-  function revealScript(): void {
+  function revealScript(reason: RevealReason): void {
     if (scriptRevealed) return;
     scriptRevealed = true;
+    revealReason = reason;
     onplacedchange?.(true);
   }
+
+  /*
+   * Why the script was shown, on the layer as `data-reveal` (issue #240). A
+   * script shown unplaced looks exactly like one shown placed, so the
+   * benchmark scenario reads this to refuse a Present that only became
+   * readable through a fallback — a timing could never tell the two apart.
+   */
+  type RevealReason = 'placed' | 'unmeasurable' | 'deadline' | 'manual';
+  let revealReason = $state<RevealReason | null>(null);
 
   /**
    * How long the stage waits before showing a script it has NOT placed.
@@ -2617,6 +2627,7 @@
   $effect(() => {
     void sessionGeneration;
     scriptRevealed = false;
+    revealReason = null;
     plantAtTarget = false;
     mapEverBuilt = false;
     // The engine's own copy goes with `configureSession`; this is ours.
@@ -2693,7 +2704,7 @@
         );
         return;
       }
-      revealScript();
+      revealScript('deadline');
     };
     timer = window.setTimeout(deadline, OPENING_REVEAL_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
@@ -3253,7 +3264,7 @@
      */
     if (!scriptRevealed) {
       plantAtTarget = Math.abs(result.scrollPx - result.targetPx) <= REVEAL_SETTLE_PX;
-      if (mapEverBuilt && plantAtTarget) revealScript();
+      if (mapEverBuilt && plantAtTarget) revealScript('placed');
     }
     // Where the alignment feed last wanted the document, kept for
     // `alignmentGapPx`. Only from frames the feed actually drove: a hold or a
@@ -3496,7 +3507,7 @@
     // so if the script is still behind the opening gate, show it: they asked
     // for the document to be somewhere and it is there.
     handOverOpening();
-    revealScript();
+    revealScript('manual');
     /*
      * Carry the transport to where the presenter just put the document.
      *
@@ -3854,6 +3865,7 @@
 <div
   class="script-layer"
   data-degraded={degraded ? 'true' : 'false'}
+  data-reveal={revealReason ?? undefined}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
   style:visibility={awaitingOpeningPlacement ? 'hidden' : null}

@@ -217,3 +217,18 @@ describe('§61 degradation reaches the renderer', () => {
     // stylesheet itself in tests/unit/stage/degradation.test.ts.
   });
 });
+
+describe('why the script was revealed (issue #240)', () => {
+  it('says nothing before the reveal, and names its reason after', async () => {
+    const { layer } = mountLayer();
+    expect(layer().hasAttribute('data-reveal')).toBe(false);
+    // jsdom measures nothing, so the opening can only end through a fallback:
+    // the unmeasurable map or the opening deadline (700 ms, extended to a
+    // 3 s ceiling while placement is still coming). Either way the layer must
+    // say which, because a benchmark reads it to refuse an unplaced reveal.
+    for (let i = 0; i < 5; i++) pumpFrame();
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    pumpFrame();
+    expect(['unmeasurable', 'deadline']).toContain(layer().getAttribute('data-reveal'));
+  }, 10_000);
+});
