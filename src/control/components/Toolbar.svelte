@@ -118,7 +118,7 @@
    * shows the saved title.
    */
   let typed: string | null = null;
-  let draft = $derived(typed !== null && typed.trim() === title ? typed : title);
+  let draft = $derived.by(() => (typed !== null && typed.trim() === title ? typed : title));
 
   function commitTitle(): void {
     typed = null;
