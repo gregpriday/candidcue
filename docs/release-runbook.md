@@ -290,7 +290,7 @@ only the two key secrets are replaced. The owner's checklist:
 
   ```bash
   (
-    unset AWS_SESSION_TOKEN AWS_PROFILE
+    unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_PROFILE
     printf 'Access Key ID: '; read -rs AWS_ACCESS_KEY_ID; echo
     printf 'Secret Access Key: '; read -rs AWS_SECRET_ACCESS_KEY; echo
     [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ] || exit 1
@@ -322,8 +322,7 @@ only the two key secrets are replaced. The owner's checklist:
   history. At repository level:
 
   ```bash
-  gh secret set R2_ACCESS_KEY_ID
-  gh secret set R2_SECRET_ACCESS_KEY
+  gh secret set R2_ACCESS_KEY_ID && gh secret set R2_SECRET_ACCESS_KEY
   gh secret list
   ```
 
@@ -333,14 +332,17 @@ only the two key secrets are replaced. The owner's checklist:
 
   ```bash
   for env in release-stable release-prerelease; do
-    gh secret set R2_ACCESS_KEY_ID --env "$env"
-    gh secret set R2_SECRET_ACCESS_KEY --env "$env"
-    gh secret list --env "$env"
+    gh secret set R2_ACCESS_KEY_ID --env "$env" &&
+      gh secret set R2_SECRET_ACCESS_KEY --env "$env" || break
   done
+  gh secret list --env release-stable
+  gh secret list --env release-prerelease
   ```
 
-  Each list shows both keys updated today, beside `R2_ENDPOINT` and
-  `SPEAKING_GLASS_R2_BUCKET`.
+  The commands stop at the first set that fails; run both sets again for
+  that environment, because a pair that is half new and half old fails the
+  next publish at R2 however recent the dates look. Each list shows both
+  keys updated today, beside `R2_ENDPOINT` and `SPEAKING_GLASS_R2_BUCKET`.
 - [ ] The first real publish after the swap (§5) proves the write; a dry run
   does not reach R2. In that publish, `Every publishing credential must be
   present` lists all four present, and `Upload the release files` and both
