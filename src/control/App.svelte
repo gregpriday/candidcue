@@ -159,7 +159,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * install is refused rather than allowed to outrun a save that failed.
      */
     prepareToQuit: async () => {
-      await saveDocument();
+      await saveNow();
       if (editorHasUnsavedWork()) {
         throw new Error(
           'Your script has changes that could not be saved, so the update was not installed. Save the script, then try again.',

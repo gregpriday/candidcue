@@ -462,12 +462,26 @@ describe('saveDocument and the title draft', () => {
     expect(get(editor)).toMatchObject({ title: 'Renamed rehearsal', dirty: false });
   });
 
-  it('writes nothing when the reader has nothing pending', async () => {
+  it('writes nothing when the reader has nothing pending and the body is clean', async () => {
     unregister = registerTitleDraft(() => null);
     const saveSpy = vi.spyOn(scripts, 'saveScript');
     await saveDocument();
     expect(saveSpy).not.toHaveBeenCalled();
     expect(get(editor).title).toBe('Autosave test');
+  });
+
+  it('still saves the body when there is no title to take', async () => {
+    for (const draft of [null, '   ', ' Autosave test ']) {
+      unregister?.();
+      unregister = registerTitleDraft(() => draft);
+      setSource(`# Body for ${String(draft)}\n`);
+      await saveDocument();
+      expect(await scripts.getScript(scriptId)).toMatchObject({
+        title: 'Autosave test',
+        source: `# Body for ${String(draft)}\n`,
+      });
+      expect(editorHasUnsavedWork()).toBe(false);
+    }
   });
 
   it('ignores a blank or unchanged draft', async () => {
@@ -480,18 +494,30 @@ describe('saveDocument and the title draft', () => {
     expect(saveSpy).not.toHaveBeenCalled();
   });
 
-  it('is never taken by the autosave flush, which runs mid-typing', async () => {
+  it('is never taken by the autosave debounce, which fires mid-typing', async () => {
     unregister = registerTitleDraft(() => 'Half-typ');
+    vi.useFakeTimers();
     setSource('# Typed body\n');
-    await saveNow();
-    expect((await scripts.getScript(scriptId)).title).toBe('Autosave test');
-    expect(get(editor).title).toBe('Autosave test');
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS + 100);
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    expect(await scripts.getScript(scriptId)).toMatchObject({
+      title: 'Autosave test',
+      source: '# Typed body\n',
+    });
+    expect(get(editor)).toMatchObject({ title: 'Autosave test', dirty: false });
   });
 
   it('an earlier registration cannot unregister a later one', async () => {
     const stale = registerTitleDraft(() => 'From the old route');
     unregister = registerTitleDraft(() => 'From the new route');
     stale();
+    await saveDocument();
+    expect((await scripts.getScript(scriptId)).title).toBe('From the new route');
+    // And the later one's own disposer does clear it.
+    unregister();
+    unregister = null;
+    setSource('# After\n');
     await saveDocument();
     expect((await scripts.getScript(scriptId)).title).toBe('From the new route');
   });

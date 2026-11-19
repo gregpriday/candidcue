@@ -250,9 +250,33 @@ describe('Toolbar — the pending title a Save or quit reads', () => {
     expect(component.pendingTitle()).toBeNull();
   });
 
-  it('is nothing for a title that is not editable', () => {
-    const { component } = renderHeader();
+  it('is nothing for a title that is not editable, even over a dirty draft', async () => {
+    const { container, component, rerender } = renderHeader({ editableTitle: true });
+    typeInto(titleInput(container), 'Keynote');
+    await rerender({ title: 'Panel talk', editableTitle: false });
+    await tick();
     expect(component.pendingTitle()).toBeNull();
+  });
+
+  it('keeps the typed text, spaces and all, when the save it fed lands under the caret', async () => {
+    const { container, component, rerender } = renderHeader({ editableTitle: true });
+    const input = titleInput(container);
+    input.focus();
+    typeInto(input, 'Board ');
+    expect(component.pendingTitle()).toBe('Board');
+
+    // The saved title catches up while the caret is still in the field. A
+    // re-seed here would leave `Board`, and the next word would read
+    // `Boardmeeting`.
+    await rerender({ title: 'Board', editableTitle: true });
+    await tick();
+    expect(titleInput(container).value).toBe('Board ');
+    expect(component.pendingTitle(), 'nothing new to commit').toBeNull();
+
+    // Leaving the field still shows the saved title, trimmed.
+    blur(titleInput(container));
+    await tick();
+    expect(titleInput(container).value).toBe('Board');
   });
 });
 

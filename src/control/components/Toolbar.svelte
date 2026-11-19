@@ -105,9 +105,23 @@
    */
   const dragRegion = windowTitlebar() === 'overlay' ? 'deep' : undefined;
 
-  let draft = $derived(title);
+  /*
+   * What was last typed into the field, held outside the reactive graph.
+   *
+   * An explicit Save commits the TRIMMED draft while the caret stays in the
+   * field (#449), and the saved title then changes underneath it. Re-seeding
+   * from that title would rewrite the input mid-edit: `Board ` becomes `Board`,
+   * and the next word typed lands as `Boardmeeting`. So a saved title that is
+   * just the typed text trimmed leaves the typed text alone. Any other change
+   * — a rename from elsewhere, another script — still replaces the draft.
+   * Cleared whenever the field commits or abandons, so a finished edit always
+   * shows the saved title.
+   */
+  let typed: string | null = null;
+  let draft = $derived(typed !== null && typed.trim() === title ? typed : title);
 
   function commitTitle(): void {
+    typed = null;
     const next = draft.trim();
     if (!next) {
       draft = title;
@@ -150,6 +164,7 @@
        */
       event.preventDefault();
       event.stopPropagation();
+      typed = null;
       draft = title;
       (event.currentTarget as HTMLInputElement).blur();
     }
@@ -196,6 +211,7 @@
             bind:this={titleElement}
             bind:value={draft}
             aria-label="Script title"
+            oninput={(event) => (typed = event.currentTarget.value)}
             onblur={commitTitle}
             onkeydown={titleKeydown}
           />

@@ -36,7 +36,7 @@ async function deliver(page: Page, event: string, payload: unknown): Promise<voi
     .toBeGreaterThan(0);
 }
 
-/** How many writes the frontend sent for this script, of either kind. */
+/** How many title-carrying writes the frontend sent, of either kind. */
 function titleWrites(page: Page): Promise<number> {
   return page.evaluate(
     () =>
@@ -109,6 +109,19 @@ test('File › Save writes the title being typed, and leaves the caret in it', a
   errors.expectClean();
 });
 
+test('the save shortcut typed in the title field writes the title being typed', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await typeTitle(page, 'Renamed rehearsal');
+
+  await titleField(page).press('ControlOrMeta+s');
+
+  await expect.poll(() => persistedTitle(page)).toBe('Renamed rehearsal');
+  await expect(titleField(page)).toBeFocused();
+  errors.expectClean();
+});
+
 test('quitting with the caret in the title persists the new title', async ({ page }) => {
   const errors = watchPageErrors(page);
   await typeTitle(page, 'Renamed rehearsal');
@@ -123,11 +136,13 @@ test('quitting with the caret in the title persists the new title', async ({ pag
 
 test('a title typed and then abandoned with Escape is not written by a quit', async ({ page }) => {
   await typeTitle(page, 'Renamed rehearsal');
+  // Escape abandons AND leaves the field; the caret is put back so the quit
+  // below finds it there, which is the case that has to read nothing.
   await titleField(page).press('Escape');
   await expect(titleField(page)).toHaveValue(SCRIPT.title);
   await titleField(page).focus();
 
-  await quit(page);
+  expect(await quit(page)).toContain('flush-editor');
 
   expect(await persistedTitle(page)).toBe(SCRIPT.title);
   expect(await titleWrites(page)).toBe(0);
@@ -137,10 +152,13 @@ test('an emptied title is not written by Save or a quit', async ({ page }) => {
   await typeTitle(page, '   ');
 
   await deliver(page, 'menu://command', { id: 'file.save' });
-  await quit(page);
+  await expect.poll(() => titleWrites(page)).toBe(0);
+  // Still the user's half-finished edit: nothing restored it under the caret.
+  await expect(titleField(page)).toHaveValue('   ');
+  await expect(titleField(page)).toBeFocused();
+
+  expect(await quit(page)).toContain('flush-editor');
 
   expect(await persistedTitle(page)).toBe(SCRIPT.title);
   expect(await titleWrites(page)).toBe(0);
-  // Still the user's half-finished edit: nothing restored it under the caret.
-  await expect(titleField(page)).toBeFocused();
 });
