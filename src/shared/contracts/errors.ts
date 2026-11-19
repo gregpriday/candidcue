@@ -2,8 +2,8 @@
  * Application error contracts (spec §44.12 and Appendix C.7).
  *
  * All Rust errors exposed through IPC map to this stable shape. The UI maps
- * codes to localized copy and recovery actions — never branch on English
- * provider messages, and never surface a raw Rust debug string.
+ * codes to localized copy and recovery actions — never branch on an English
+ * message, and never surface a raw Rust debug string.
  */
 
 // No 'auth'. The category described a rejected API key from the hosted speech

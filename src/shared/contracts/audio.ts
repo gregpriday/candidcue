@@ -64,27 +64,20 @@ export interface AudioLevelSnapshot {
 }
 
 /**
- * What a take asks the recogniser for.
+ * The default recogniser's id, from the model catalogue
+ * (`src-tauri/models/catalogue.json`). No installer carries the model itself:
+ * it is downloaded from Settings › Speech.
  *
- * Two fields, both of which the provider actually reads. The retired shape also
- * carried `delay` and `requestLogprobs`: the first was a latency knob the
- * chosen model rejected outright, and the second bought per-token confidences
- * that only fed the semantic filter. Neither has a consumer now.
- */
-/**
- * The recogniser this build ships.
- *
- * Mirrors `crate::speech::MODEL_NAME`, which is itself asserted equal to
- * `src-tauri/models/catalogue.json`. Rust re-derives the real value on every
- * settings read, so a stale copy here is corrected before a take — but this is
- * also what the browser mock and the offline fallback show, and nothing
- * corrects those. A Rust test `include_str!`s this file to keep the two
- * honest, so keep the literal grep-able.
+ * Rust re-derives the real value on every settings read, so a stale copy here
+ * is corrected before a take — but this is also what the browser mock and the
+ * offline fallback show, and nothing corrects those. A Rust test
+ * (`speech/catalogue.rs`) `include_str!`s this file to keep the two honest, so
+ * keep the literal grep-able.
  */
 export const BUNDLED_MODEL_NAME = 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05';
 
 export interface TranscriptionConfig {
-  /** The bundled recogniser's name — see {@link BUNDLED_MODEL_NAME}. */
+  /** The configured recogniser's id — see {@link BUNDLED_MODEL_NAME}. */
   model: string;
   /** BCP-47 tag, e.g. `en-US`. */
   language?: string;

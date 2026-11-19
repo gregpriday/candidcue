@@ -125,9 +125,9 @@ export type SafeRenderNode =
 /* -------------------------------------------------------------------------
  * Additions beyond Appendix C.1 — the IR types referenced by §25.3
  * (CompiledScript, SpokenToken) plus the supporting shapes they require
- * (CueEvent, CompiledAsset, ScriptStatistics,
- * CompileOptions, token flags). Appendix C.1 names these in CompiledScript
- * but does not define them; definitions follow §25 exactly.
+ * (CueEvent, CompiledAsset, ScriptStatistics, CompileOptions). Appendix C.1
+ * names these in CompiledScript but does not define them. They depart from §25
+ * where lexical judgement is concerned: see `SpokenToken`.
  * ---------------------------------------------------------------------- */
 
 /**
@@ -223,14 +223,18 @@ export interface ScriptStatistics {
   blockCount: number;
 }
 
-/** Compile settings honoured by the pure compiler (spec §22.2, §21.8, §33). */
+/** Compile settings honoured by the pure compiler (spec §22.2, §21.8). */
 export interface CompileOptions {
   scriptId: string;
   readHeadings?: boolean;
   readImageAltText?: boolean;
   readInlineCode?: boolean;
   wordsPerMinute?: number;
-  /** Wake phrases used for command-collision warnings (spec §25.1). */
+  /**
+   * Phrases the compiler's `command_collision` warning looks for (spec §25.1).
+   * Nothing listens for a spoken command during a take; the warning is all
+   * that reads them.
+   */
   wakePhrases?: string[];
 }
 
@@ -251,16 +255,6 @@ export interface CompiledScript {
   diagnostics: CompileDiagnostic[];
   statistics: ScriptStatistics;
   /**
-   * Spoken-token ranges inside `:::literal-command` blocks (spec §23.7).
-   *
-   * Command detection must be suppressed while the alignment cursor is inside
-   * one of these ranges, otherwise reading "Speaking Glass, go to chapter one"
-   * aloud from the script can fire real navigation — the exact thing the
-   * directive exists to prevent. Consumers pass this straight into
-   * `buildTrackingDocument(...)` and `CommandRouterDeps.literalCommandRanges`.
-   * Ranges are inclusive, non-overlapping, and in ascending token order.
-   */
-  /**
    * The script's presentable segments, in document order.
    *
    * Empty when the script has no natural division — one part and "the whole
@@ -273,6 +267,14 @@ export interface CompiledScript {
    * "no parts".
    */
   parts?: ScriptPart[];
+  /**
+   * Spoken-token ranges inside `:::literal-command` blocks (spec §23.7).
+   * Ranges are inclusive, non-overlapping, and in ascending token order.
+   *
+   * Nothing consumes them at runtime: no spoken command is listened for during
+   * a take. The compiler still emits them, and does not raise its
+   * `command_collision` warning inside the blocks.
+   */
   literalCommandRanges: SpokenTokenRange[];
 }
 

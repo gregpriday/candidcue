@@ -2,6 +2,13 @@
  * Stage event protocol — the complete surface between control/Rust and the
  * minimally privileged stage window (spec §16, §43.5, §45.6, §46.9).
  *
+ * The separate stage window is opened for Settings' preview and "Show test"
+ * and for Calibrate. A take does not use it: it renders in the control window,
+ * where `Live.svelte` embeds `StageApp` and drives it through the
+ * `EmbeddedStageBridge` prop. So during a take most of these events have no
+ * listener; alignment snapshots are the exception, because Rust publishes every
+ * one to both windows.
+ *
  * Event names use the Rust `stage://` convention and are mirrored verbatim in
  * `src-tauri/src/windows/mod.rs::events` (a Rust test asserts the two sides
  * stay in sync via include_str! over this file — keep the string literals
@@ -12,20 +19,21 @@
  * knows arrives as one of the inbound events; the stage never invokes
  * commands.
  *
- * Direction summary:
- *   control → Rust command → stage : load-session, tracking-snapshot,
- *                                    apply-command (including transcript and
- *                                    voice-pill diagnostics),
+ * Direction summary (the separate stage window):
+ *   control → Rust command → stage : load-session, apply-command,
  *                                    close-session
- *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence),
- *                                    semantic-frame (companion §26.1, 15–30 Hz)
+ *   Rust → stage                    : alignment-snapshot
+ *   control → stage (direct emitTo): heartbeat (§43.5; no production sender
+ *                                    today — the in-page preview drivers
+ *                                    dispatch it)
  *   stage → Rust bridge             : hydrated, layout-ready, heartbeat-ack,
  *                                    media-error, escape-pressed,
- *                                    motion-report, layout-error
+ *                                    motion-report, layout-error,
+ *                                    viewport-hint
  *   stage → control (direct)        : intent
  *   Rust → control                  : ready, closed, error (CONTROL_EVENT),
  *                                    escape-requested, motion-ack,
- *                                    layout-failed
+ *                                    layout-failed, align snapshot
  */
 import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
@@ -49,7 +57,7 @@ export const STAGE_EVENT = {
    * Rust → stage: one `AlignmentSnapshot` per transcript event (~1/s).
    *
    * From Rust, not from control: the alignment engine runs beside the
-   * socket because that is where the audio clock its predictions are timed
+   * recogniser because that is where the audio clock its predictions are timed
    * against already is. Control is not in this path — it receives the same
    * snapshot separately on `CONTROL_EVENT.alignmentSnapshot`.
    */
@@ -64,7 +72,10 @@ export const STAGE_EVENT = {
    */
   viewportHint: 'stage://viewport-hint',
 
-  /** Legacy direct route; current control sends this through applyCommand. */
+  /**
+   * Legacy direct route, still subscribed by the standalone stage. A take hands
+   * its transcript to the embedded stage through the bridge prop.
+   */
   transcriptTap: 'stage://transcript-tap',
 
   /**
@@ -83,10 +94,11 @@ export const STAGE_EVENT = {
    * prevents a take from running.
    *
    * Control owns the capture (one microphone, one owner — see
-   * audio/ownership.ts) and sends a fully resolved view through Rust's
-   * apply-command relay; the stage holds no audio state and no thresholds.
-   * The legacy direct event remains subscribed for compatibility with an older
-   * control window during development reloads.
+   * audio/ownership.ts) and hands the stage a fully resolved view; the stage
+   * holds no audio state and no thresholds. In a take the view travels through
+   * the bridge prop. The standalone stage still accepts it through Rust's
+   * apply-command relay, and this direct event remains subscribed for
+   * compatibility with an older control window during development reloads.
    */
   voicePill: 'stage://voice-pill',
 
@@ -137,7 +149,10 @@ export const STAGE_EVENT = {
 
   /** stage → Rust: Escape pressed on the stage (§16.9). Relayed as below. */
   escapePressed: 'stage://escape-pressed',
-  /** Rust → control: a generation-checked Escape from the live stage (§16.9). */
+  /**
+   * Rust → control: a generation-checked Escape from the standalone stage
+   * (§16.9).
+   */
   escapeRequested: 'stage://escape-requested',
   /** stage → Rust: periodic `StageMotionAck` (companion §54). Relayed as below. */
   motionReport: 'stage://motion-report',
@@ -178,10 +193,11 @@ export const CONTROL_EVENT = {
   /** Stage reported a media error. */
   stageError: 'stage://error',
   /**
-   * Rust → control: the same `AlignmentSnapshot` the stage receives, for
-   * progress, recovery affordances and the take summary. A separate name from
-   * the stage's copy because they are different contracts to different
-   * windows — the stage follows it, control reports on it.
+   * Rust → control: the same `AlignmentSnapshot` the standalone stage
+   * receives. In a take this copy drives everything: `Live.svelte` hands it to
+   * the embedded stage for motion, and control reports progress, recovery
+   * affordances and the take summary from it. A separate name from the stage's
+   * copy because they are different contracts to different windows.
    */
   alignmentSnapshot: 'align://snapshot',
   /*
@@ -232,15 +248,10 @@ export const SHUTDOWN_COMPLETE_EVENT = 'app://shutdown-complete';
 /** `stage://load-session` — the whole render model in one validated envelope. */
 export type StageSnapshotPayload = StageSessionEnvelope;
 
-/**
- * `stage://tracking-snapshot` — revisioned snapshots. Since the v2 motion
- * controller (companion §32.1–32.5, which replaces primary §32) these drive the
- * *degraded* motion path only: they are what the stage follows when no semantic
- * frame is current.
- */
+/** `stage://alignment-snapshot` — one Rust `AlignmentSnapshot`, motion's input. */
 export type StageAlignmentPayload = AlignmentSnapshot;
 
-/** `stage://semantic-frame` — the v2 motion signal (companion §26.1). */
+/** `stage://viewport-hint` — the stage's visible token range, to Rust. */
 export type StageViewportHintPayload = AlignmentViewportHint;
 
 /**
@@ -263,10 +274,12 @@ export type StageDirective =
    * from RUST, arrived and moved the document perfectly. Two roads to the same
    * window, one of them not delivering.
    *
-   * This puts the words on the road that demonstrably works: control invokes
-   * `publish_stage_command`, Rust validates the generation and emits to the
-   * stage, and the stage handles it beside every other directive. It also gets
-   * the generation check for free, which the old direct emit never had.
+   * So the standalone stage takes the words on the road that demonstrably
+   * works: control invokes `publish_stage_command`, Rust validates the
+   * generation and emits to the stage, and the stage handles it beside every
+   * other directive. It also gets the generation check for free, which the old
+   * direct emit never had. A take's embedded stage gets the words through the
+   * bridge prop instead.
    */
   | { kind: 'transcript'; text: string; final: boolean }
   /**
@@ -278,19 +291,20 @@ export type StageDirective =
   /**
    * Roll the script at a fixed pace, because nothing is following a voice.
    *
-   * Travels the same Rust relay as the transcript and the pill, for the same
-   * reason: it is a live transport command, and the one road to the stage that
-   * has demonstrably kept working on every rig is the one that goes through
-   * Rust with a generation check on it.
+   * On the standalone stage it travels the same Rust relay as the transcript
+   * and the pill, for the same reason: it is a live transport command, and the
+   * one road to that window that has demonstrably kept working on every rig is
+   * the one that goes through Rust with a generation check on it. A take passes
+   * it through the bridge prop.
    */
   | { kind: 'autoScroll'; autoScroll: StageAutoScrollPayload }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   /**
    * Voice following is on or off.
    *
-   * The state lives in control — the same switch the transport checkbox and the
-   * Live "Pause following" button already flip — and the stage has to be told
-   * because the stage is where the consequence is visible. Without it the only
+   * The state lives in control — the dock's follow control flips it — and the
+   * stage has to be told because the stage is where the consequence is visible
+   * (a take's embedded stage reads it from the bridge prop). Without it the only
    * way the glass learns that following stopped is that snapshots stop
    * arriving, which it cannot distinguish from a presenter who has gone quiet
    * until the 15 s staleness window expires. A mode has to be announced, not
@@ -303,9 +317,9 @@ export type StageDirective =
  * The auto-scroll transport, as the stage should run it.
  *
  * A pace and a running flag, and deliberately nothing else — no pixel rate, no
- * position, no direction. The stage is the only window that has measured how
- * much script a pixel of travel carries, so control naming a pixel rate would be
- * control guessing at the type size on the glass. It names the pace a presenter
+ * position, no direction. Only the renderer has measured how much script a
+ * pixel of travel carries, so the host naming a pixel rate would be guessing
+ * at the type size on the glass. It names the pace a presenter
  * would recognise; the stage converts it against what it actually rendered.
  *
  * `running` is separate from a zero pace because they are different states and
@@ -406,7 +420,7 @@ export interface StageCloseSessionPayload {
   sessionId: Uuid;
 }
 
-/** `stage://heartbeat` — periodic liveness signal from control (spec §43.5). */
+/** `stage://heartbeat` — periodic liveness signal (spec §43.5); see above. */
 export interface StageHeartbeatPayload {
   stageGeneration: number;
   revision: number;
@@ -425,21 +439,18 @@ export interface StageHeartbeatPayload {
  * application holding the microphone, which Speaking Glass cannot prevent and had
  * no way to report.
  *
- * Deliberately the RAW provider text rather than anything the aligner has
+ * Deliberately the RAW recogniser text rather than anything the aligner has
  * decided: this is the reading upstream of every judgement the app makes, so
  * it stays truthful when the judgements are wrong.
  */
 /**
  * How many words the tap carries, and therefore how many the stage draws.
  *
- * ONE number, because there are two places that crop and they were drifting:
- * control keeps a rolling window of the last few words (so the bar reads across
- * utterance boundaries rather than blanking wherever the provider's voice
- * detector happens to end one), and the stage crops again on the way in — it
- * has to, because the single-window route hands it text through memory rather
- * than through this payload. Two constants for one policy means the wire
- * carries words nothing will ever draw, and a change to either one silently
- * does nothing.
+ * ONE number, shared by the payload and the renderer's crop
+ * (`transcript-tail.ts`). The stage has to crop on the way in, because a take
+ * hands it text through the bridge prop rather than through this payload; two
+ * constants for one policy would mean the wire carrying words nothing will ever
+ * draw, and a change to either one silently doing nothing.
  *
  * Ten is about a spoken phrase: enough that a presenter recognises what they
  * just said rather than reading a fragment, few enough to take in at a glance
@@ -454,7 +465,7 @@ export interface StageTranscriptTapPayload {
    * at most {@link STAGE_TRANSCRIPT_TAP_WORDS} of them.
    */
   text: string;
-  /** True when the provider has finalised the utterance this text came from. */
+  /** True when the recogniser has finalised the utterance this text came from. */
   final: boolean;
   sentAtMs: number;
 }
@@ -466,7 +477,7 @@ export interface StageTranscriptTapPayload {
  *               state at the top of a take, and NOT a warning: a presenter who
  *               has not spoken yet is not a fault to be announced;
  * `confirmed` — recogniser text has JUST come back, so the whole chain (device
- *               → capture → socket → model) demonstrably works. Transient — see
+ *               → capture → IPC → model) demonstrably works. Transient — see
  *               below;
  * `steady`    — the chain has been proven and nothing has gone wrong since;
  * `fault`     — the input died, the frames stopped, or the presenter has been
@@ -586,11 +597,10 @@ export const STAGE_VOICE_PILL_TRACE_SAMPLES = 20;
 /**
  * §16.9. How long a first Escape stays "armed" for the second one.
  *
- * Shared because BOTH windows implement the protocol and they have to agree:
- * the stage answers Escape when it has focus, and control answers it when it
- * does — which is most of the time, since the operator is at the control
- * window. Two different windows counting to two on two different clocks is how
- * a presenter ends up pressing Escape four times.
+ * One number in the contract, and one counter: the stage's. A take renders the
+ * stage inside the control window, so there is no second window to answer
+ * Escape — and two windows counting to two on two different clocks is how a
+ * presenter ends up pressing Escape four times.
  *
  * 1.5 s is long enough to be a deliberate second press and short enough that
  * an Escape now and an Escape a minute from now are never one gesture.
@@ -598,8 +608,10 @@ export const STAGE_VOICE_PILL_TRACE_SAMPLES = 20;
 export const ESCAPE_DOUBLE_PRESS_MS = 1500;
 
 /**
- * If no HEARTBEAT arrives for this long while live, the stage freezes locally
- * and says so on the glass (control is presumed gone; it owns recovery).
+ * If no HEARTBEAT arrives for this long while live, the standalone stage
+ * freezes locally and says so on the glass (control is presumed gone; it owns
+ * recovery). A take's embedded stage lives in the control window and has no
+ * heartbeat to miss.
  *
  * Heartbeats only, and generation-scoped. This used to read "heartbeat/snapshot
  * /tracking", and the stage implemented exactly that — which made the watchdog
@@ -607,7 +619,7 @@ export const ESCAPE_DOUBLE_PRESS_MS = 1500;
  * from RUST, with control out of the motion path by design, so they say nothing
  * whatever about whether the control window is still answering: a control window
  * that had crashed went on being counted as alive for as long as the aligner
- * kept publishing, which mid-take is indefinitely. The heartbeat is the only
+ * kept publishing, which mid-take was indefinitely. The heartbeat is the only
  * inbound event control alone can produce, so it is the only one that can
  * answer the question. Do not widen this back.
  */
@@ -755,11 +767,10 @@ export type StageIntent =
    * The presenter asked for the transport from the glass.
    *
    * These exist because the hold chip tells them to. When the input chain dies
-   * the chip names the key that starts the transport, and on a rig with a
-   * separate stage window that window is the one holding the keyboard — the
-   * presenter is standing at it, and the control window is on a desk behind
-   * them. Advice naming a key that does nothing where it is read would be worse
-   * than no advice.
+   * the chip names the key that starts the transport, and the stage is where
+   * that key has to work: it is what holds the keyboard while the presenter
+   * reads, and the host is only told. Advice naming a key that does nothing
+   * where it is read would be worse than no advice.
    *
    * Reported, not acted on: the running flag, the pace and the mutual exclusion
    * with voice following are all session state, and none of it is the stage's.

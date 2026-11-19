@@ -267,11 +267,11 @@
      * both are ordinary: the second is a paused transport that still remembers
      * its pace, which is what the operator gets back when they resume.
      *
-     * This never competes with voice following. The engine prefers an accepted
-     * alignment frame over any fallback target, so on the frames where
-     * recognition is working the pace set here is simply not consulted, and the
-     * one place the two could actually collide — the alignment path's own
-     * fallback corrections — stands down below while this is running.
+     * While it runs it owns the document. Starting it pauses voice following,
+     * and an accepted snapshot releases the alignment lock rather than taking
+     * the document back (see `pushAlignmentSnapshot`). The one other place the
+     * two could collide — the alignment path's own fallback corrections —
+     * stands down below while this is running.
      */
     autoScroll?: StageAutoScrollPayload | null;
     /**

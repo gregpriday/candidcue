@@ -31,10 +31,10 @@ import { STAGE_TRANSCRIPT_TAP_WORDS } from '../../shared/contracts';
 /**
  * How many words the bar carries.
  *
- * The contract's number, not a second opinion about it: control trims its
- * rolling window to the same bound before the tap is even sent, and the two
- * cropping the same text to different lengths is how one of them quietly stops
- * mattering. See `STAGE_TRANSCRIPT_TAP_WORDS`.
+ * The contract's number, not a second opinion about it: the payload is
+ * described against the same bound, and two crops of the same text to
+ * different lengths is how one of them quietly stops mattering. See
+ * `STAGE_TRANSCRIPT_TAP_WORDS`.
  */
 export const TRANSCRIPT_TAIL_WORDS = STAGE_TRANSCRIPT_TAP_WORDS;
 
@@ -50,7 +50,7 @@ export const TRANSCRIPT_TAIL_WORDS = STAGE_TRANSCRIPT_TAP_WORDS;
  * WHAT THIS DOES NOT DO: segment text that is not written with spaces. Chinese
  * and Japanese recogniser output arrives as one run, counts as one "word", and
  * is passed through for the bar's `max-width` and `overflow: hidden` to clip on
- * the right — which is the same newest-first reading, arrived at by geometry
+ * the left, keeping the newest end in view — the same newest-first reading, arrived at by geometry
  * instead of by counting. That is a deliberate floor rather than an oversight:
  * `Intl.Segmenter` would give real words, and it would also make what the bar
  * shows depend on a locale nothing here knows. The pixel clip is honest in

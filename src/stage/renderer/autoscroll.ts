@@ -4,19 +4,19 @@
  * ---------------------------------------------------------------------------
  * WHY THERE IS A CONSTANT-RATE PATH AT ALL
  * ---------------------------------------------------------------------------
- * Every take follows a voice, and when the voice is not getting through the
- * stage holds still — correctly, because moving on evidence it does not have is
- * the one thing a prompter must never do. But "holds still" is the whole of the
- * answer today, and there are ordinary rooms where it is the answer for the
- * whole take: no key entered yet, no network, a language the recogniser handles
- * badly, or a stage loud enough that finals stop arriving. The presenter is then
- * in front of a camera with a script that will not move, and their only recourse
- * is a keyboard they are not standing next to.
+ * When a voice-following take's voice is not getting through, the stage holds
+ * still — correctly, because moving on evidence it does not have is the one
+ * thing a prompter must never do. But there are ordinary rooms where holding
+ * still is the answer for the whole take: no speech model installed yet, a
+ * language the recogniser handles badly, or a stage loud enough that finals
+ * stop arriving. The presenter is then in front of a camera with a script that
+ * will not move, and their only recourse is a keyboard they are not standing
+ * next to. A take without voice following has no other way to move at all.
  *
- * So this is a fallback rather than a second way to prompt. It is not smarter
- * than voice following and does not try to be: it advances at the rate it is
- * told, and the moment recognition is working again the alignment path outranks
- * it inside the motion engine without anything here being consulted.
+ * It is not smarter than voice following and does not try to be: it advances
+ * at the rate it is told. While it runs it owns the document — starting it
+ * pauses following, and an alignment snapshot does not take the document back
+ * (see `pushAlignmentSnapshot` in `ScriptLayer.svelte`).
  *
  * ---------------------------------------------------------------------------
  * WHY WORDS PER MINUTE, AND WHY THAT NEEDS THE LINE MAP
