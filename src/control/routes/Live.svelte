@@ -1950,7 +1950,7 @@ import { onShortcut } from '../lib/shortcuts';
          */
         practice: $session.practice,
         /*
-         * §parts, for the stage's "what is running" label (#241): the part
+         * The part, for the stage's "what is running" label (#241): it
          * was readable only in the console and the drawer, neither of which is
          * on screen while reading. A label, and nothing the follow loop reads.
          */

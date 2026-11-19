@@ -987,7 +987,7 @@ import type { PresentationMode } from '../services/settings-types';
   const caretStartPoint = $derived(startPointAtCaret(caretOffset, snapInput));
 
   /*
-   * §parts: the part the caret is IN, shared by both "From here" rows.
+   * The part the caret is IN, shared by both "From here" rows.
    *
    * One answer for the take and the practice, so "Practise from here" and
    * "From here" can never disagree about which part a place belongs to.
