@@ -401,6 +401,7 @@ function sampleFrames(
     let lastOffset = startOffset;
     let lastMovedAt: number | null = null;
     let longestStillMs = 0;
+    let first: number | null = null;
     let last: number | null = null;
     let finished = false;
     let rafId = 0;

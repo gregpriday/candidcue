@@ -95,15 +95,6 @@ pub fn plugin<R: Runtime>(armed: bool) -> TauriPlugin<R> {
             }
             Ok(())
         })
-        .on_webview_ready(move |webview| {
-            // In front of everything for the length of the run. The
-            // scenario's clock is animation frames, and WKWebView stops them
-            // for a window another one covers: on a desk somebody is using,
-            // that froze a take until the runner killed it.
-            if armed && webview.label() == crate::windows::CONTROL_LABEL {
-                let _ = webview.window().set_always_on_top(true);
-            }
-        })
         .build()
 }
 
