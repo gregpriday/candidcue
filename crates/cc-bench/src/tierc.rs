@@ -21,7 +21,7 @@ use crate::perceptual::{
 };
 use crate::plan::{expand, synthetic_timing, GoldTimeline};
 use crate::stage::{default_layouts, render, Layout};
-use crate::suite::{BenchEntry, RunManifest};
+use crate::suite::{BenchEntry, RunManifest, ScoringTable};
 use crate::synthetic::generate_events;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +33,61 @@ pub struct TierCResult {
     /// Per-layout headline rows, so a controller that only works at 60 Hz is
     /// visible rather than averaged away.
     pub by_layout: BTreeMap<String, Vec<BenchEntry>>,
+    /// The language gate's rows over the scoring fixtures alone, at the
+    /// headline layout. Captured Tier C writes it; see `ScoringTable` for why
+    /// `table` cannot stand in for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoring: Option<ScoringTable>,
+}
+
+/// The Tier C rows the language gate reads, from one set of runs at the
+/// headline layout.
+///
+/// `finish` builds the ordinary table's copies of these rows here as well, so
+/// the scoring table cannot drift into a different aggregation: two rows are
+/// macro-averages over runs, two are percentiles of pooled raw samples.
+pub(crate) struct HeadlineGateRows {
+    pub unread_never_spoken: f64,
+    pub readable_availability: f64,
+    pub lag_p50: f64,
+    pub readable_recovery_p50: f64,
+}
+
+impl HeadlineGateRows {
+    /// `samples` must be pooled from the same runs, at the headline layout.
+    pub(crate) fn of<'a>(
+        runs: impl IntoIterator<Item = &'a PerceptualMetrics>,
+        samples: &PerceptualSamples,
+    ) -> Self {
+        let headline: Vec<&PerceptualMetrics> = runs
+            .into_iter()
+            .filter(|r| r.layout == HEADLINE_LAYOUT)
+            .collect();
+        let avg = |f: fn(&PerceptualMetrics) -> f64| -> f64 {
+            mean_of(
+                &headline
+                    .iter()
+                    .map(|r| f(r))
+                    .filter(|x| x.is_finite())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        HeadlineGateRows {
+            unread_never_spoken: avg(|r| r.unread_never_spoken),
+            readable_availability: avg(|r| r.readable_availability),
+            lag_p50: pctl(&samples.temporal_err_ms, 50.0),
+            readable_recovery_p50: pctl(&samples.readable_recovery_ms, 50.0),
+        }
+    }
+
+    fn entries(&self) -> Vec<BenchEntry> {
+        vec![
+            entry("gate.unread_never_spoken", self.unread_never_spoken, "word·s", "lower"),
+            entry("outcome.readable_availability", self.readable_availability, "%", "higher"),
+            entry("time.lag_p50", self.lag_p50, "ms", "lower"),
+            entry("recover.readable_p50", self.readable_recovery_p50, "ms", "lower"),
+        ]
+    }
 }
 
 fn entry(name: &str, value: f64, unit: &str, better: &str) -> BenchEntry {
@@ -64,7 +119,9 @@ fn score_run(
     out: &mut Vec<PerceptualMetrics>,
     pools: &mut PerceptualSamples,
     headline_pools: &mut PerceptualSamples,
+    scoring_pools: &mut PerceptualSamples,
 ) {
+    let scoring = crate::language_gate::is_scoring_run(name);
     let pass = PassGold::derive(gold);
     // Accuracy starts at the first lock, for the same reason `metrics.rs` does
     // it: before then there is no position to judge and a cold start would post
@@ -77,6 +134,9 @@ fn score_run(
         merge(pools, &eval.samples);
         if layout.name == HEADLINE_LAYOUT {
             merge(headline_pools, &eval.samples);
+            if scoring {
+                merge(scoring_pools, &eval.samples);
+            }
         }
         out.push(eval.metrics);
     }
@@ -145,6 +205,7 @@ pub fn run_tier_c(
     let mut runs = Vec::new();
     let mut pools = PerceptualSamples::default();
     let mut headline = PerceptualSamples::default();
+    let mut scoring = PerceptualSamples::default();
 
     for scenario in &suite {
         let performance = expand(&scenario.plan, &scenario.script);
@@ -166,9 +227,12 @@ pub fn run_tier_c(
             &mut runs,
             &mut pools,
             &mut headline,
+            &mut scoring,
         );
     }
 
+    // The synthetic corpus is not a language's evidence, so it carries no
+    // scoring table and the gate refuses it.
     Ok(finish(label, config, runs, headline, pools))
 }
 
@@ -185,6 +249,7 @@ pub fn run_tier_c_captured(
     let mut runs = Vec::new();
     let mut pools = PerceptualSamples::default();
     let mut headline = PerceptualSamples::default();
+    let mut scoring = PerceptualSamples::default();
 
     let mut dirs: Vec<_> = std::fs::read_dir(runs_dir)?
         .filter_map(|e| e.ok())
@@ -224,10 +289,22 @@ pub fn run_tier_c_captured(
             &mut runs,
             &mut pools,
             &mut headline,
+            &mut scoring,
         );
     }
 
-    Ok(finish(label, config, runs, headline, pools))
+    let mut result = finish(label, config, runs, headline, pools);
+    // The gate's rows again, over the scoring fixtures alone.
+    let core: Vec<&PerceptualMetrics> = result
+        .runs
+        .iter()
+        .filter(|r| r.layout == HEADLINE_LAYOUT && crate::language_gate::is_scoring_run(&r.run))
+        .collect();
+    result.scoring = Some(ScoringTable {
+        runs: core.iter().map(|r| r.run.clone()).collect(),
+        table: HeadlineGateRows::of(core.iter().copied(), &scoring).entries(),
+    });
+    Ok(result)
 }
 
 /// Macro-average a per-run field over the headline layout.
@@ -261,10 +338,11 @@ fn finish(
     headline: PerceptualSamples,
     _all: PerceptualSamples,
 ) -> TierCResult {
+    let gate = HeadlineGateRows::of(&runs, &headline);
     // ---- SAFETY GATES (§16.1). Not weighted; gated. ----
     let mut t = vec![entry(
         "gate.unread_never_spoken",
-        macro_avg(&runs, |r| r.unread_never_spoken),
+        gate.unread_never_spoken,
         "word·s",
         "lower",
     )];
@@ -296,7 +374,7 @@ fn finish(
     // ---- HOLISTIC OUTCOMES (§3) ----
     t.push(entry(
         "outcome.readable_availability",
-        macro_avg(&runs, |r| r.readable_availability),
+        gate.readable_availability,
         "%",
         "higher",
     ));
@@ -473,7 +551,7 @@ fn finish(
     // ---- TEMPORAL (§5) ----
     t.push(entry(
         "time.lag_p50",
-        pctl(&headline.temporal_err_ms, 50.0),
+        gate.lag_p50,
         "ms",
         "lower",
     ));
@@ -786,7 +864,7 @@ fn finish(
     // ---- READABLE RECOVERY (§9) ----
     t.push(entry(
         "recover.readable_p50",
-        pctl(&headline.readable_recovery_ms, 50.0),
+        gate.readable_recovery_p50,
         "ms",
         "lower",
     ));
@@ -871,6 +949,7 @@ fn finish(
         table: t,
         runs,
         by_layout,
+        scoring: None,
     }
 }
 

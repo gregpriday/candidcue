@@ -27,6 +27,18 @@
 //! reject work that is perfectly good. What the bar refuses is a language that
 //! is materially worse on the axes that decide whether a presenter can use it.
 //!
+//! The baselines are the 18 scoring fixtures of `bench/runs-local`, replayed
+//! at `ee5174fd` (2026-11-19) with `--layouts 60hz --focus-lead 0`. The first
+//! version of this table was anchored to the same replays averaged over all 21
+//! directories, three `fuzzy-follow` diagnostics included, which understated
+//! the safety row (2.903 against 3.385 on the core at the time) and the
+//! availability row (71.2% against 81.1%). Re-anchoring kept the original
+//! proportional headroom on those two rows — 3.34% above English for unread
+//! exposure, 1.69% below it for availability — rather than the old absolute
+//! limits: 3.0 would fail English itself, and 70% would let a language fall
+//! eleven points short of it where the bar meant to allow one. The other six
+//! limits barely moved their anchors and are unchanged.
+//!
 //! The axis that matters most is DEPTH of overshoot, not how often it happens.
 //! `ahead_worst` is how far the display actually got in front of the reader,
 //! and running ahead is the failure a fade UI cannot survive — a line erased
@@ -38,7 +50,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::suite::SuiteResult;
+use crate::suite::{ScoringTable, SuiteResult};
+use crate::tierc::TierCResult;
 
 /// Which way a metric has to move to be worse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,9 +158,19 @@ pub const REQUIRED_SCRIPT_ROLES: &[&str] = &[
 /// Fixture families that are diagnostics rather than evidence.
 ///
 /// `fuzzy-follow` exists to exercise the reversible dim frontier and is not
-/// part of the scored core; counting it would move the `live.dim_never`
-/// denominator.
+/// part of the scored core. It is excluded from the gate's VALUES as well as
+/// its fixture count: the three English runs score ~0 unread exposure and ~12%
+/// readable availability, so averaging them in moved `gate.unread_never_spoken`
+/// from 3.067 to 2.629 and `outcome.readable_availability` from 81.1% to 71.2%.
 pub const DIAGNOSTIC_ROLES: &[&str] = &["fuzzy-follow"];
+
+/// Does this fixture count towards the gate?
+///
+/// Tier B and Tier C both call this while they still hold the raw samples, to
+/// build the `ScoringTable` the gate reads.
+pub fn is_scoring_run(run: &str) -> bool {
+    !DIAGNOSTIC_ROLES.contains(&role_of(run))
+}
 
 /// The family a fixture belongs to.
 ///
@@ -166,7 +189,7 @@ pub const SHIP_BAR: &[Threshold] = &[
         metric: "live.ahead_worst",
         tier: Tier::B,
         direction: Direction::AtMost,
-        english_baseline: 6.700,
+        english_baseline: 6.976,
         limit: 7.0,
         unit: "atoms",
         why: "Depth of overshoot. The display running ahead erases a line \
@@ -177,10 +200,10 @@ pub const SHIP_BAR: &[Threshold] = &[
         metric: "live.within5",
         tier: Tier::B,
         direction: Direction::AtLeast,
-        english_baseline: 94.03,
+        english_baseline: 95.554,
         limit: 90.0,
         unit: "%",
-        why: "Ordinary following accuracy. Four points of slack below English \
+        why: "Ordinary following accuracy. About five points of slack below English \
               because the recogniser is a different model on a different \
               recording, not because worse tracking is acceptable.",
     },
@@ -200,7 +223,7 @@ pub const SHIP_BAR: &[Threshold] = &[
         metric: "live.dim_never",
         tier: Tier::B,
         direction: Direction::AtMost,
-        english_baseline: 1.0,
+        english_baseline: 0.0,
         limit: 1.0,
         unit: "count",
         why: "WORDS the display never reached before the take ended, summed \
@@ -208,15 +231,16 @@ pub const SHIP_BAR: &[Threshold] = &[
               rather than a rate, deliberately: a raw word count does not \
               scale cleanly between a corpus and its translation, so the only \
               honest thing to say about it across languages is that it must \
-              essentially not happen. English scores 1 word across all 18 \
-              runs.",
+              essentially not happen. English scores 0 across its 18 scoring \
+              runs; the one word its corpus never dims is in a fuzzy-follow \
+              diagnostic.",
     },
     Threshold {
         metric: "gate.unread_never_spoken",
         tier: Tier::C,
         direction: Direction::AtMost,
-        english_baseline: 2.903,
-        limit: 3.0,
+        english_baseline: 3.067,
+        limit: 3.17,
         unit: "word·s",
         why: "The safety gate, measured on the RENDERED stage: text faded \
               before it was spoken, weighted by how likely the eye was on it. \
@@ -227,8 +251,8 @@ pub const SHIP_BAR: &[Threshold] = &[
         metric: "outcome.readable_availability",
         tier: Tier::C,
         direction: Direction::AtLeast,
-        english_baseline: 71.2,
-        limit: 70.0,
+        english_baseline: 81.129,
+        limit: 79.76,
         unit: "%",
         why: "How much of the take the next line was actually readable on the \
               glass. The outcome a presenter would describe as 'it worked'.",
@@ -237,7 +261,7 @@ pub const SHIP_BAR: &[Threshold] = &[
         metric: "time.lag_p50",
         tier: Tier::C,
         direction: Direction::AtMost,
-        english_baseline: 697.0,
+        english_baseline: 708.542,
         limit: 800.0,
         unit: "ms",
         why: "Rendered lag, as opposed to the engine's own estimate of it.",
@@ -246,7 +270,7 @@ pub const SHIP_BAR: &[Threshold] = &[
         metric: "recover.readable_p50",
         tier: Tier::C,
         direction: Direction::AtMost,
-        english_baseline: 2738.0,
+        english_baseline: 2737.5,
         limit: 3000.0,
         unit: "ms",
         why: "How long the stage takes to become readable again after a skip \
@@ -405,6 +429,120 @@ pub fn metrics_of(result: &SuiteResult) -> BTreeMap<String, f64> {
     map
 }
 
+/// Judge a language from saved Tier B and Tier C results.
+///
+/// Reads each tier's [`ScoringTable`], never its ordinary `table`: the ordinary
+/// table is aggregated over every fixture in the directory, diagnostics
+/// included, and the bar is defined over the scoring fixtures alone. A result
+/// without a scoring table — saved before it existed, or from a synthetic
+/// corpus — is refused rather than read the old way.
+///
+/// Errors mean the files are not the evidence the gate reads; a report with
+/// corpus problems means they are, but of the wrong corpus.
+pub fn evaluate_saved(
+    language: &str,
+    tier_b: &SuiteResult,
+    tier_c: &TierCResult,
+) -> anyhow::Result<LanguageGateReport> {
+    // The bar's Tier C numbers were measured on the as-shipped rig. A
+    // whole-sweep result averages seven layouts and a corridor the product
+    // does not have, so it is not the same measurement.
+    //
+    // This catches the wrong LAYOUT set. It cannot catch a 60 Hz run made with
+    // a non-zero `focus_lead_atoms`, because `Layout` is not serialised into
+    // the result — see bench/README.md, "Known gaps".
+    let layouts: Vec<&String> = tier_c.by_layout.keys().collect();
+    if layouts != vec![&"60hz".to_string()] {
+        anyhow::bail!(
+            "Tier C evidence must be the as-shipped rig alone \
+             (--layouts 60hz --focus-lead 0); this result carries {:?}",
+            layouts
+        );
+    }
+
+    let missing = |tier: &str, command: &str| {
+        anyhow::anyhow!(
+            "the {tier} result has no scoring table, so its only numbers are \
+             aggregated over every fixture including diagnostics. Re-run \
+             `cc-bench {command} --runs DIR` on the captured corpus to produce one"
+        )
+    };
+    let b = tier_b.scoring.as_ref().ok_or_else(|| missing("Tier B", "tier-b"))?;
+    let c = tier_c.scoring.as_ref().ok_or_else(|| missing("Tier C", "tier-c"))?;
+
+    // A scoring table is only meaningful if it covers exactly the result's own
+    // scoring runs. Anything else is a file that was edited or assembled by
+    // hand, and its rows describe a corpus nobody can name.
+    check_scoring_runs("Tier B", b, tier_b.runs.iter().map(|r| r.run.as_str()))?;
+    check_scoring_runs(
+        "Tier C",
+        c,
+        tier_c
+            .runs
+            .iter()
+            .filter(|r| r.layout == "60hz")
+            .map(|r| r.run.as_str()),
+    )?;
+
+    // The two tiers use disjoint metric prefixes today, so merging them is
+    // safe. It is not safe BY CONSTRUCTION, though, and a collision would
+    // silently judge a Tier B threshold against a Tier C value — so refuse one
+    // rather than let the last writer win.
+    let mut metrics: BTreeMap<String, f64> = BTreeMap::new();
+    for entry in b.table.iter().chain(&c.table) {
+        if metrics.insert(entry.name.clone(), entry.value).is_some() {
+            anyhow::bail!(
+                "{} appears more than once across the Tier B and Tier C scoring \
+                 tables; the gate cannot tell which one a threshold means",
+                entry.name
+            );
+        }
+    }
+
+    let mut report = evaluate(language, &metrics, &b.runs);
+
+    // Both halves of a verdict have to describe the same fixtures. Diagnostics
+    // may differ between the two directories; the scoring runs may not.
+    let in_b: std::collections::BTreeSet<&String> = b.runs.iter().collect();
+    let in_c: std::collections::BTreeSet<&String> = c.runs.iter().collect();
+    if in_b != in_c {
+        let only = |a: &std::collections::BTreeSet<&String>,
+                    z: &std::collections::BTreeSet<&String>| {
+            a.difference(z)
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        report.corpus_problems.push(format!(
+            "Tier B and Tier C scored different fixtures (only in Tier B: [{}]; \
+             only in Tier C: [{}]), so the verdict would combine two corpora",
+            only(&in_b, &in_c),
+            only(&in_c, &in_b)
+        ));
+    }
+    Ok(report)
+}
+
+fn check_scoring_runs<'a>(
+    tier: &str,
+    scoring: &ScoringTable,
+    runs: impl Iterator<Item = &'a str>,
+) -> anyhow::Result<()> {
+    let mut expected: Vec<&str> = runs.filter(|r| is_scoring_run(r)).collect();
+    let mut claimed: Vec<&str> = scoring.runs.iter().map(|r| r.as_str()).collect();
+    expected.sort_unstable();
+    claimed.sort_unstable();
+    if expected != claimed {
+        anyhow::bail!(
+            "the {tier} scoring table lists {} fixtures but the result scored {} \
+             non-diagnostic ones; the file has been altered since the tier wrote it",
+            claimed.len(),
+            expected.len()
+        );
+    }
+    Ok(())
+}
+
 /// Judge a language against [`SHIP_BAR`].
 ///
 /// `run_names` is every fixture the result scored, named
@@ -420,8 +558,18 @@ pub fn evaluate(
 
     let core: Vec<&String> = run_names
         .iter()
-        .filter(|r| !DIAGNOSTIC_ROLES.contains(&role_of(r)))
+        .filter(|r| is_scoring_run(r))
         .collect();
+
+    let distinct: std::collections::BTreeSet<&String> = core.iter().copied().collect();
+    if distinct.len() != core.len() {
+        corpus_problems.push(format!(
+            "corpus names {} scoring runs but only {} distinct ones; a fixture \
+             scored twice is not two pieces of evidence",
+            core.len(),
+            distinct.len()
+        ));
+    }
 
     if core.len() != REQUIRED_CORE_RUNS {
         corpus_problems.push(format!(
@@ -858,6 +1006,178 @@ mod tests {
                 "bench/README.md does not say why {metric} is not gating"
             );
         }
+    }
+
+    /// Saved results as captured Tier B and Tier C write them: ordinary tables
+    /// over every fixture, scoring tables over the core alone.
+    fn saved(
+        corpus: &[String],
+        ordinary: &BTreeMap<String, f64>,
+        scoring: &BTreeMap<String, f64>,
+    ) -> (SuiteResult, TierCResult) {
+        use crate::metrics::RunMetrics;
+        use crate::perceptual::PerceptualMetrics;
+        use crate::suite::BenchEntry;
+
+        let rows = |tier: Tier, values: &BTreeMap<String, f64>| -> Vec<BenchEntry> {
+            SHIP_BAR
+                .iter()
+                .filter(|t| t.tier == tier)
+                .filter_map(|t| {
+                    values.get(t.metric).map(|v| BenchEntry {
+                        name: t.metric.to_string(),
+                        value: *v,
+                        unit: t.unit.to_string(),
+                        better: "lower".to_string(),
+                    })
+                })
+                .collect()
+        };
+        let core: Vec<String> = corpus.iter().filter(|r| is_scoring_run(r)).cloned().collect();
+        let tier_b = SuiteResult {
+            label: "t".into(),
+            config: cc_align::AlignmentConfig::default(),
+            table: rows(Tier::B, ordinary),
+            runs: corpus
+                .iter()
+                .map(|r| RunMetrics {
+                    run: r.clone(),
+                    ..Default::default()
+                })
+                .collect(),
+            scoring: Some(ScoringTable {
+                runs: core.clone(),
+                table: rows(Tier::B, scoring),
+            }),
+        };
+        let tier_c = TierCResult {
+            label: "t".into(),
+            config: cc_align::AlignmentConfig::default(),
+            table: rows(Tier::C, ordinary),
+            runs: corpus
+                .iter()
+                .map(|r| PerceptualMetrics {
+                    run: r.clone(),
+                    layout: "60hz".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            by_layout: [("60hz".to_string(), Vec::new())].into_iter().collect(),
+            scoring: Some(ScoringTable {
+                runs: core,
+                table: rows(Tier::C, scoring),
+            }),
+        };
+        (tier_b, tier_c)
+    }
+
+    /// The defect this replaced: diagnostics that score ~0 unread exposure
+    /// diluted the ordinary table enough to pass a corpus whose core fails.
+    #[test]
+    fn the_gate_reads_the_scoring_table_not_the_ordinary_one() {
+        let good = english_baseline_metrics();
+        let mut bad = good.clone();
+        bad.insert("gate.unread_never_spoken".into(), 3.5);
+        bad.insert("live.within5".into(), 80.0);
+
+        let (b, c) = saved(&english_corpus(), &good, &bad);
+        let report = evaluate_saved("en", &b, &c).unwrap();
+        let failed: Vec<&str> = report.failures().map(|r| r.threshold.metric).collect();
+        assert_eq!(failed, vec!["live.within5", "gate.unread_never_spoken"]);
+
+        let (b, c) = saved(&english_corpus(), &bad, &good);
+        assert!(evaluate_saved("en", &b, &c).unwrap().passed());
+    }
+
+    /// A file saved before scoring tables existed holds only the diluted
+    /// numbers, and reading them would reproduce the defect.
+    #[test]
+    fn a_result_without_a_scoring_table_is_refused() {
+        let m = english_baseline_metrics();
+        let (mut b, c) = saved(&english_corpus(), &m, &m);
+        b.scoring = None;
+        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        assert!(err.contains("Tier B") && err.contains("tier-b"), "{err}");
+
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.scoring = None;
+        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        assert!(err.contains("Tier C") && err.contains("tier-c"), "{err}");
+    }
+
+    #[test]
+    fn a_scoring_table_that_disagrees_with_its_own_runs_is_refused() {
+        let m = english_baseline_metrics();
+
+        // A diagnostic counted into the scoring set.
+        let (mut b, c) = saved(&english_corpus(), &m, &m);
+        b.scoring.as_mut().unwrap().runs.push("fuzzy-follow__fuzzy_voice__xai".into());
+        assert!(evaluate_saved("en", &b, &c).is_err());
+
+        // A core fixture the result scored, missing from the set.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.scoring.as_mut().unwrap().runs.pop();
+        assert!(evaluate_saved("en", &b, &c).is_err());
+    }
+
+    /// Two different 18-fixture corpora would each pass the count and the
+    /// coverage check, and the verdict would combine them.
+    #[test]
+    fn both_tiers_must_score_the_same_fixtures() {
+        let m = english_baseline_metrics();
+        let (b, _) = saved(&english_corpus(), &m, &m);
+        let mut other = english_corpus();
+        let swapped = other
+            .iter()
+            .position(|r| r == "starter__exact__gemini")
+            .unwrap();
+        other[swapped] = "starter__exact__qwen".into();
+        let (_, c) = saved(&other, &m, &m);
+
+        let report = evaluate_saved("en", &b, &c).unwrap();
+        assert!(!report.passed());
+        let problem = report.corpus_problems.join("\n");
+        assert!(
+            problem.contains("starter__exact__gemini") && problem.contains("starter__exact__qwen"),
+            "{problem}"
+        );
+
+        // Diagnostics, by contrast, may differ between the two directories.
+        let core_only: Vec<String> = english_corpus()
+            .into_iter()
+            .filter(|r| is_scoring_run(r))
+            .collect();
+        let (_, c) = saved(&core_only, &m, &m);
+        assert!(evaluate_saved("en", &b, &c).unwrap().passed());
+    }
+
+    #[test]
+    fn a_fixture_named_twice_is_not_two_fixtures() {
+        let m = english_baseline_metrics();
+        let mut runs = english_corpus();
+        let first = runs[0].clone();
+        let at = runs.iter().position(|r| r == "starter__exact__gemini").unwrap();
+        runs[at] = first;
+        let report = evaluate("en", &m, &runs);
+        assert!(!report.passed());
+        assert!(report.corpus_problems.iter().any(|p| p.contains("distinct")));
+    }
+
+    #[test]
+    fn tier_c_must_be_the_as_shipped_layout_alone() {
+        let m = english_baseline_metrics();
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.by_layout.insert("30hz".into(), Vec::new());
+        assert!(evaluate_saved("en", &b, &c).is_err());
+    }
+
+    #[test]
+    fn a_metric_in_both_scoring_tables_is_refused() {
+        let m = english_baseline_metrics();
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        let shadow = b.scoring.as_ref().unwrap().table[0].clone();
+        c.scoring.as_mut().unwrap().table.push(shadow);
+        assert!(evaluate_saved("en", &b, &c).is_err());
     }
 
     #[test]
