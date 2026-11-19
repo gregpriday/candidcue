@@ -81,7 +81,7 @@ pub async fn run_startup_reconciliation(
         .unwrap_or_else(|_| "failed".into());
     report.integrity_ok = check == "ok";
     if !report.integrity_ok {
-        // Fail closed (spec §47.6, §48.5): a database that failed its
+        // Fail closed (spec §47.6, §48.6): a database that failed its
         // integrity check must not be written to. Every step below mutates
         // something — deleting temp files, inserting recovered rows, purging
         // trash — so none of them may run. The evidence is preserved in the
@@ -138,7 +138,7 @@ pub async fn run_startup_reconciliation(
             }
             // A directory whose name is not a canonical UUID is not ours; it
             // must never be adopted as a script id and turned back into a
-            // path (C1).
+            // path.
             let Ok(script_id) = ScriptId::parse(&dir_name) else {
                 report
                     .notes
@@ -204,7 +204,7 @@ pub async fn run_startup_reconciliation(
     // silently treated as healthy — rows whose recorded hash disagrees with
     // the file on disk are repaired. That mismatch is exactly the crash state
     // where the atomic rename landed but the database commit did not, so it
-    // must be detected by content, not by mere existence (H3). The file is
+    // must be detected by content, not by mere existence. The file is
     // the authority for source content (spec §48.1), so the database is
     // brought up to the file; disk content is never replaced here.
     //

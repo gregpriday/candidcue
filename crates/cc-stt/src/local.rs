@@ -9,7 +9,7 @@
 //! Two things about the shipping model are worth knowing before reading the
 //! code:
 //!
-//! * It emits **punctuation and true case**. The first bundled model did not
+//! * It emits **punctuation and true case**. The first on-device model did not
 //!   (UPPERCASE, unpunctuated), and nothing downstream cared either way —
 //!   `cc_align::normalize` folds case and strips punctuation before matching.
 //! * It is a *streaming* transducer, not a windowed encoder-decoder. A new
@@ -18,8 +18,9 @@
 //!   recorded at. We emit on every CHANGE rather than on a timer: the engine
 //!   costs ~90 µs an event, and earlier evidence is the entire product.
 //!
-//! The bundle is not fixed: [`ModelFiles::detect`] works out how a given one
-//! names its graphs, because upstream is not consistent and ships no manifest.
+//! The model archive is not fixed: [`ModelFiles::detect`] works out how a given
+//! one names its graphs, because upstream is not consistent and ships no
+//! manifest.
 //!
 //! Utterance identity is minted here in the shape the replay corpora already
 //! hold — ids are `"{generation}-{ordinal}"` — so a log captured today and one
@@ -331,7 +332,7 @@ pub struct LocalSttConfig {
     /// tracker nothing while a missing word costs it evidence. Past 3.0 the
     /// guesses stop being anchored to anything and every metric turns.
     ///
-    /// Re-swept when the bundled model changed, because a decoder constant
+    /// Re-swept when the shipping model changed, because a decoder constant
     /// tuned against one model is not evidence about another. The shipping
     /// x-asr model agrees, and reproduces the same inversion:
     ///
@@ -367,11 +368,11 @@ pub struct LocalSttConfig {
 /// evidence about another — the doc comments on the corresponding
 /// [`LocalSttConfig`] fields carry the sweeps that produced them. When they
 /// were reachable through a default, every caller silently got one model's
-/// numbers no matter which bundle it had opened, and that is not a mistake the
+/// numbers no matter which model it had opened, and that is not a mistake the
 /// type system was helping with. It is now: a config cannot be built without
 /// naming whose tuning it is using.
 ///
-/// Every bundled model declares its own in [`crate::models`].
+/// Every catalogued model declares its own in [`crate::models`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LocalModelTuning {
     /// See [`LocalSttConfig::rule1_min_trailing_silence`].

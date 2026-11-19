@@ -1,6 +1,6 @@
 //! Tier C orchestration: replay → render → score, across the layout sweep.
 //!
-//! Pooling rule (§17): metrics are computed PER RUN and then macro-averaged
+//! Pooling rule: metrics are computed PER RUN and then macro-averaged
 //! across scenarios, never pooled frame-by-frame across the whole suite. At
 //! 60 Hz a nine-minute `longform` read contributes 32,000 frames and a
 //! 40-second `retake` contributes 2,400, so a frame-pooled average is a report
@@ -339,7 +339,7 @@ fn finish(
     _all: PerceptualSamples,
 ) -> TierCResult {
     let gate = HeadlineGateRows::of(&runs, &headline);
-    // ---- SAFETY GATES (§16.1). Not weighted; gated. ----
+    // ---- SAFETY GATES. Not weighted; gated. ----
     let mut t = vec![entry(
         "gate.unread_never_spoken",
         gate.unread_never_spoken,
@@ -371,7 +371,7 @@ fn finish(
         "lower",
     ));
 
-    // ---- HOLISTIC OUTCOMES (§3) ----
+    // ---- HOLISTIC OUTCOMES ----
     t.push(entry(
         "outcome.readable_availability",
         gate.readable_availability,
@@ -405,7 +405,7 @@ fn finish(
         "s",
         "higher",
     ));
-    // §3.2 survival: the fraction of takes that reached a milestone with nothing
+    // Survival: the fraction of takes that reached a milestone with nothing
     // conspicuous having happened. Closer to how trust actually develops than any
     // average — one visible problem in a 20-minute take matters more than
     // thousands of well-scored frames.
@@ -444,7 +444,7 @@ fn finish(
         "higher",
     ));
 
-    // ---- OPACITY (§4) ----
+    // ---- OPACITY ----
     t.push(entry(
         "ink.first_response_p50",
         pctl(&headline.first_response_ms, 50.0),
@@ -548,7 +548,7 @@ fn finish(
         "lower",
     ));
 
-    // ---- TEMPORAL (§5) ----
+    // ---- TEMPORAL ----
     t.push(entry(
         "time.lag_p50",
         gate.lag_p50,
@@ -611,7 +611,7 @@ fn finish(
         "lower",
     ));
 
-    // ---- READING BAND (§6) ----
+    // ---- READING BAND ----
     t.push(entry(
         "band.occupancy",
         macro_avg(&runs, |r| r.band_occupancy_pct),
@@ -658,7 +658,7 @@ fn finish(
         "count",
         "lower",
     ));
-    // §6.3 the readable corridor. `future_reserve` above is the same question
+    // The readable corridor. `future_reserve` above is the same question
     // asked geometrically — it counts lines drawn below the focus and cannot
     // see opacity, so a corridor dimmed to the far past scores identically to a
     // bright one. These rows count only text that is still legible, measured
@@ -697,7 +697,7 @@ fn finish(
         "lower",
     ));
 
-    // ---- MOTION (§7) ----
+    // ---- MOTION ----
     t.push(entry(
         "motion.plant_err_p95",
         pctl(&headline.plant_err_lines, 95.0),
@@ -788,7 +788,7 @@ fn finish(
         "lines/s",
         "lower",
     ));
-    // §7.2 event-triggered average: the mean velocity change 0–250 ms after a
+    // Event-triggered average: the mean velocity change 0–250 ms after a
     // snapshot lands. If the stage visibly accelerates on every recogniser
     // update, this is the row that says so in one number.
     t.push(entry(
@@ -805,7 +805,7 @@ fn finish(
         "lower",
     ));
 
-    // ---- HONESTY (§8) ----
+    // ---- HONESTY ----
     t.push(entry(
         "honest.fce_3_pct",
         macro_avg(&runs, |r| r.fce_3_pct),
@@ -861,7 +861,7 @@ fn finish(
             / n
     }, "score", "lower"));
 
-    // ---- READABLE RECOVERY (§9) ----
+    // ---- READABLE RECOVERY ----
     t.push(entry(
         "recover.readable_p50",
         gate.readable_recovery_p50,
@@ -893,7 +893,7 @@ fn finish(
         "higher",
     ));
 
-    // ---- RELIABILITY (§10) ----
+    // ---- RELIABILITY ----
     t.push(entry(
         "health.freshness_p95",
         pctl(&headline.freshness_ms, 95.0),

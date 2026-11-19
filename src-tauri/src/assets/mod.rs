@@ -16,7 +16,7 @@ use crate::util::{new_uuid, now_iso, sha256_hex};
 /// Hard limit for an imported image (spec Appendix A.10).
 pub const MAX_IMPORTED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 
-/// Decompression-bomb guards (spec §50.7). A 30000×30000 PNG is ~100 bytes on
+/// Decompression-bomb guards (spec §24.1). A 30000×30000 PNG is ~100 bytes on
 /// the wire and 3.6 GB decoded, so the header dimensions are checked BEFORE any
 /// decoder is allowed to allocate.
 pub const MAX_IMAGE_DIMENSION: u32 = 16_384;
@@ -55,7 +55,7 @@ pub struct AssetUrlEntry {
 /// verbatim, which meant `<svg><script>…</script></svg>` could be written into a
 /// script's asset directory and then rendered by the stage webview — an active
 /// content format inside the one window that is supposed to have no script
-/// surface of its own (spec §50.10). The bundle importer already refused it;
+/// surface of its own (spec §24.1). The bundle importer already refused it;
 /// now every import path does.
 pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() < 12 {

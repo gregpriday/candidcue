@@ -1,7 +1,7 @@
 //! Live transcription commands.
 //!
 //! There is no key lifecycle here any more, and that absence is the point. The
-//! recogniser is a bundled resource: nothing to paste, nothing to validate,
+//! recogniser runs on-device: nothing to paste, nothing to validate,
 //! nothing to store, nothing to revoke, and no reason for a take to fail that
 //! is not visible on the machine it runs on. The commands that used to save,
 //! validate, test and delete an API key are gone along with the credential
@@ -36,14 +36,16 @@ async fn selected_model(db: &Database) -> Result<&'static BundledModel, AppError
 
 /// What Settings shows in place of "is the key still good?".
 ///
-/// The honest questions about a bundled recogniser are whether its files are
+/// The honest questions about an on-device recogniser are whether its files are
 /// present and whether it has been loaded, so those are the questions this
 /// answers.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechEngineStatus {
-    /// Always true for a healthy installation — false means the bundle is
-    /// broken, which is a reinstall rather than anything the user can fix.
+    /// Whether the selected model's files resolve and pass their checks. False
+    /// when no model is installed (Settings › Speech downloads one), when its
+    /// files are missing or unusable, or when the selection cannot be read;
+    /// `detail` says which.
     pub available: bool,
     /// Whether the model is resident in memory right now.
     pub loaded: bool,
@@ -56,9 +58,9 @@ pub struct SpeechEngineStatus {
 
 /// Whether this installation can transcribe, and whether it is warm.
 ///
-/// Never fails: a broken bundle is reported as `available: false` with a
-/// reason, because Settings asking "can I transcribe?" wants an answer rather
-/// than an exception.
+/// Never fails: a missing or broken model is reported as `available: false`
+/// with a reason, because Settings asking "can I transcribe?" wants an answer
+/// rather than an exception.
 #[tauri::command]
 pub async fn get_speech_engine_status<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -182,10 +184,10 @@ pub async fn preload_speech_engine<R: tauri::Runtime>(
 
 /// What the renderer may choose about a session.
 ///
-/// Still empty after §153, and now deliberately so rather than incidentally.
+/// Still empty after #153, and now deliberately so rather than incidentally.
 /// The language is a SETTING, read here from the database, and a per-take
 /// override would create a second authority over which recogniser is listening
-/// — which is exactly the mid-session switching §153 rules out. A renderer that
+/// — which is exactly the mid-session switching #153 rules out. A renderer that
 /// could name a model per take could also name a different one from the one
 /// Settings is showing.
 ///
@@ -291,7 +293,7 @@ pub async fn stop_transcription(
 
 /* -------------------------------------------------------------- model install
  *
- * §152: the recogniser is no longer inside the app. These four are how a
+ * #152: the recogniser is no longer inside the app. These four are how a
  * machine gets one.
  *
  * The download runs in RUST rather than in the webview, and not for tidiness:
@@ -364,7 +366,7 @@ pub async fn delete_speech_model<R: tauri::Runtime>(
 
 /* ------------------------------------------------------------ language choice
  *
- * §153: the user picks a LANGUAGE. The model is an implementation detail of
+ * #153: the user picks a LANGUAGE. The model is an implementation detail of
  * that choice, which is why these two commands speak in language tags and the
  * four above speak in model ids.
  */
@@ -450,7 +452,7 @@ pub async fn select_speech_language<R: tauri::Runtime>(
 
     // Activating a language whose weights are not on the machine would leave
     // the app claiming to listen in a language it cannot load — the take would
-    // fail at its top, which is the outcome §153 exists to move earlier.
+    // fail at its top, which is the outcome #153 exists to move earlier.
     if model_manager::resolve_for(&app, offer.entry).is_none() {
         return Err(AppError::structured(
             "STT_MODEL_NOT_INSTALLED",
@@ -513,7 +515,7 @@ fn refuse_test_during_take(caller: &str, coordinator: &AppCoordinator) -> Result
 /// between this returning false and the write landing. The consequence is
 /// bounded and benign — `ensure_loaded` hands a running session its own `Arc`,
 /// so a take already under way finishes on the recogniser it started with, and
-/// the new choice applies to the next one. That is the behaviour §153 asks for
+/// the new choice applies to the next one. That is the behaviour #153 asks for
 /// ("a change applies to the next take"), reached by a different route than
 /// intended. Closing the window properly means latching the selection into the
 /// session at `begin_session`, which is a change to the take lifecycle rather

@@ -210,8 +210,7 @@ pub async fn export_all_data(
     //
     // Redundant with the database snapshot when that succeeded, and that is
     // the point: settings are small, and a plain-text copy is readable by a
-    // human staring at a broken restore. It is also the section that used to
-    // be missing entirely.
+    // human staring at a broken restore.
     write_settings_document(pool, &staging, &mut sections, &mut warnings).await;
 
     // 4. Checksum everything actually present, then the manifest.
@@ -1505,7 +1504,7 @@ fn exported_database_name(manifest: &ExportManifest) -> Option<&'static str> {
 /// Everything the restore is about to copy must be listed, intact, and inside
 /// the export.
 ///
-/// Two directions, and the second one is the half that used to be missing.
+/// Two directions.
 ///
 /// Forwards: every file the manifest lists is present, the right size, hashes
 /// to the recorded digest, is a regular file, and resolves inside the export.

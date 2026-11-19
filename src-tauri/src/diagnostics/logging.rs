@@ -1,4 +1,4 @@
-//! Logs that survive the app (spec §44.11, §179).
+//! Logs that survive the app (spec §44.11, #179).
 //!
 //! The whole point of this module is a single measured fact: a macOS `.app`
 //! launched from Finder has its stdout and stderr wired to `/dev/null` by

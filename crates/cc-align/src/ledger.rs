@@ -30,7 +30,7 @@ pub enum StabilityClass {
 }
 
 impl StabilityClass {
-    /// Evidence multiplier in milli. Tuned constants, see spec §7.3.
+    /// Evidence multiplier in milli. Tuned constants.
     pub fn multiplier_milli(self) -> u32 {
         match self {
             StabilityClass::Final => 1000,

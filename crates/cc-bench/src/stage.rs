@@ -694,7 +694,7 @@ const REANCHOR_FADE_MS: f64 = 200.0;
 const REANCHOR_THRESHOLD_LINES: f64 = 4.25;
 
 /* --------------------------------------------------------------- §30.5 --
- * Backward is not the mirror of forward, and this port used to say it was.
+ * Backward is not the mirror of forward.
  *
  * The branch below was symmetric (`.abs() >= threshold`), so a retake more than
  * about four lines back was modelled as a fade and a plant overwrite — which is

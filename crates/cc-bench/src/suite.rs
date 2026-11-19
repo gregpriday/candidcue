@@ -2,9 +2,9 @@
 //! benchmark table — the numbers the optimisation phase moves and the final
 //! report presents.
 //!
-//! The table is deliberately multi-dimensional (spec §19.1): safety,
-//! accuracy, responsiveness, robustness, recovery, viewport, ambiguity and
-//! runtime are separate rows. The lexicographic rule applies when comparing
+//! The table is deliberately multi-dimensional: safety, accuracy,
+//! responsiveness, robustness, recovery, viewport, ambiguity and runtime are
+//! separate rows. The lexicographic rule applies when comparing
 //! configurations: a config that improves accuracy but adds a false jump is
 //! a regression.
 

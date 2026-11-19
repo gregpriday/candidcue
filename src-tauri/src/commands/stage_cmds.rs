@@ -67,7 +67,7 @@ pub async fn open_stage<R: Runtime>(app: AppHandle<R>, request: OpenStageRequest
 }
 
 fn open_stage_now<R: Runtime>(app: &AppHandle<R>, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
-    // M2: opening the stage used to add BOTH managed roots to the asset scope
+    // Opening the stage used to add BOTH managed roots to the asset scope
     // recursively, every time, and nothing ever took them back out. That put
     // every script's canonical Markdown and revision history behind an
     // `asset://` url the stage could fetch — the one window that is supposed to

@@ -368,7 +368,7 @@ pub enum UnsafeKind {
     UnreadInk,
 }
 
-/// Perturbation cost weights (§13.2). Substitutions are cheap — real recognisers
+/// Perturbation cost weights. Substitutions are cheap — real recognisers
 /// make them constantly; retractions and large timing shifts are expensive
 /// because a recogniser that does those is broken in a way the user would notice
 /// independently.
@@ -664,7 +664,7 @@ pub fn adversarial_search(
     }
 }
 
-/// Parameter-neighbourhood robustness (§13.4): evaluate a configuration across a
+/// Parameter-neighbourhood robustness: evaluate a configuration across a
 /// local box rather than at one point, so a sharp optimum cannot be mistaken for
 /// a good setting.
 ///

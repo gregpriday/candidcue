@@ -141,7 +141,7 @@ const MAX_PRE_MIGRATION_BACKUPS: usize = 5;
 /// to. The error preserves the on-disk evidence (the `.sqlite3`, `-wal` and
 /// `-shm` files are left exactly as they are) so the user can be offered a
 /// rebuild from the canonical Markdown files, which remain the authority for
-/// script content (spec §48.1, §48.5).
+/// script content (spec §48.1, §48.6).
 pub fn corrupt_database_error(detail: &str) -> AppError {
     AppError::structured(
         "DATABASE_CORRUPT",
@@ -255,7 +255,7 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
     // Integrity BEFORE migrations. Migrations are the single most destructive
     // thing the app does to the database, and running them against a corrupt
     // file can turn a recoverable problem into an unrecoverable one — so this
-    // check has to come first, not after (H7).
+    // check has to come first, not after.
     let check: String = sqlx::query_scalar("PRAGMA quick_check")
         .fetch_one(&pool)
         .await

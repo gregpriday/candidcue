@@ -1,7 +1,7 @@
 //! The evaluator: compares a replayed display trajectory against the gold
 //! timeline and produces the benchmark numbers.
 //!
-//! Two levels (spec §19): render-time product metrics come from sampling the
+//! Two levels: render-time product metrics come from sampling the
 //! display trajectory on a uniform 50 ms grid (a long freeze cannot hide
 //! between events); event-level metrics (pre-final movement) come from the
 //! per-item traces. There is deliberately no single aggregate score — safety,

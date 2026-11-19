@@ -54,7 +54,7 @@ pub mod events {
      * `src/shared/contracts/updates.ts`, with its own test holding the two
      * spellings together.
      */
-    /// A speech model's install progressing, finishing, or failing (§152).
+    /// A speech model's install progressing, finishing, or failing (#152).
     ///
     /// Its own name rather than a shared "download progress" event: a screen
     /// listening for "something is downloading" could not otherwise tell a
@@ -66,7 +66,7 @@ pub mod events {
     /// Rust → every window: the settings document changed, and here it is.
     ///
     /// Broadcast rather than targeted, because Settings now lives in its own
-    /// window (§14.1) and each webview holds its own copy of the store. It
+    /// window and each webview holds its own copy of the store. It
     /// carries the whole revisioned document so a listener adopts the new state
     /// without a second round trip — and without a window in between where it
     /// would answer from a copy it already knows is stale.
@@ -118,7 +118,7 @@ pub mod events {
 
     // Stage → Rust (listened in app setup).
     /// The stage's event subscriptions are registered and it can now receive
-    /// a document (spec §43.3 step 0).
+    /// a document (handshake step 0).
     ///
     /// A webview event is delivered by evaluating JS in the target webview and
     /// is not queued, so anything emitted to the stage before its bundle runs
@@ -131,7 +131,7 @@ pub mod events {
     pub const STAGE_LAYOUT_READY: &str = "stage://layout-ready";
     pub const STAGE_HEARTBEAT_ACK: &str = "stage://heartbeat-ack";
     pub const STAGE_MEDIA_ERROR: &str = "stage://media-error";
-    // S1: the stage emits these two under names control does NOT listen for.
+    // The stage emits these two under names control does NOT listen for.
     // A webview `emit` is a broadcast — Tauri delivers it to every webview's JS
     // listeners as well as to the Rust `listen_any` handlers, and a listener
     // with the default `Any` target matches whatever the emitter targeted. When
@@ -661,7 +661,7 @@ fn schedule_identify_close<R: Runtime>(app: &AppHandle<R>, delay_ms: u32) {
 pub struct OpenStageRequest {
     #[serde(default)]
     pub display_fingerprint: Option<String>,
-    /// Mandatory (M1). It used to be optional, so a stage could be registered
+    /// Mandatory. It used to be optional, so a stage could be registered
     /// with no owning session at all — and then every downstream check that
     /// compares against the active session had nothing to compare with, and
     /// `close_stage` would happily accept any id.
@@ -905,7 +905,7 @@ pub(super) fn window_monitor_fingerprint<R: Runtime>(
 /// to validate the session and again to read the generation or fingerprint.
 /// Between those two reads the stage can be destroyed and reopened, so a
 /// command could validate against generation N and then act on N+1. One read,
-/// one consistent view (M1).
+/// one consistent view.
 #[derive(Debug, Clone)]
 pub struct ActiveStage {
     pub generation: u64,
@@ -961,7 +961,7 @@ pub enum CloseDecision {
 /// `close_stage` used to destroy the window unconditionally and then clear the
 /// generation it had just read. A close that arrived late — a 4 s display-test
 /// timer, a teardown from an abandoned session — therefore killed the stage
-/// that a DIFFERENT session had opened in the meantime, mid-take (M1).
+/// that a DIFFERENT session had opened in the meantime, mid-take.
 pub fn close_decision(stage: &crate::coordinator::StageState, session_id: &str) -> CloseDecision {
     if !stage.exists {
         return CloseDecision::Cleanup;
@@ -1020,7 +1020,7 @@ pub fn set_stage_fullscreen<R: Runtime>(
 ) -> Result<StageWindowState, AppError> {
     // ONE coordinator read: generation and requested display come from the
     // same consistent view, so a stage that is destroyed and reopened between
-    // them cannot be validated as one generation and acted on as another (M1).
+    // them cannot be validated as one generation and acted on as another.
     let active = require_active_stage(app, session_id)?;
     let generation = active.generation;
     let requested_fingerprint = active.display_fingerprint.clone();
@@ -1219,7 +1219,7 @@ pub struct StageDocumentEnvelope {
 }
 
 
-/// The header every control→stage payload MUST carry (M1).
+/// The header every control→stage payload MUST carry.
 ///
 /// `schemaVersion`, `sessionId` and `stageGeneration` used to be read with
 /// `if let Some(...)`, so a payload that simply omitted `stageGeneration`
@@ -1282,7 +1282,7 @@ pub fn validate_stage_payload_header(
 
 /// Whether a stage document envelope may be emitted.
 ///
-/// C4: `publish_stage_document` used to call `validate_stage_payload_header`
+/// `publish_stage_document` used to call `validate_stage_payload_header`
 /// with a bare `?` and discard the `HeaderVerdict` it returns, so a `Drop` — an
 /// envelope carrying a session generation that is no longer current — was
 /// emitted to the stage anyway. `publish_stage_snapshot` honours the same
@@ -1412,7 +1412,7 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     // Same failure class as the transcript: this status readout was produced
     // by control and disappeared on the direct webview-to-webview event road.
     "voicePill",
-    // Voice following switched on or off (§48). The stage cannot infer this
+    // Voice following switched on or off. The stage cannot infer this
     // from the snapshots stopping: an absence is indistinguishable from a
     // presenter who has gone quiet until the staleness window expires, and for
     // those seconds the script would keep drifting on prediction — which is the

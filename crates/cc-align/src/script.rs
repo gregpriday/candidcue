@@ -892,8 +892,8 @@ pub struct TokenInput {
     /// business; the engine brakes wherever it is told to.
     ///
     /// `false` everywhere is a valid answer. It costs nothing but the finer
-    /// ceiling: paragraph ends are still sentence ends, so prediction brakes
-    /// exactly where it used to.
+    /// ceiling: paragraph ends are still sentence ends, so prediction still
+    /// brakes at every paragraph end.
     pub sentence_end: bool,
 }
 

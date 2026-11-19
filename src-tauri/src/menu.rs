@@ -1,4 +1,4 @@
-//! The native application menu (desktop refinement §6).
+//! The native application menu.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY THIS FILE EXISTS AT ALL
@@ -461,7 +461,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      *
      * On Windows and Linux there is no application menu: About and Quit belong
      * to Help and File respectively, and inventing a "Speaking Glass" menu there
-     * would be macOS mimicry of exactly the kind §22.3 warns against.
+     * would be macOS mimicry on platforms that have no such convention.
      */
     #[cfg(target_os = "macos")]
     {
@@ -601,7 +601,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     menu.append(&edit)?;
 
     /*
-     * Insert — §11.4's "clearly discoverable Insert menu in the native menu bar".
+     * Insert — a clearly discoverable Insert menu in the native menu bar.
      *
      * These are the editor's formatting-row controls, given names and keys. The
      * row is a set of glyphs and icons whose meanings have to be hovered for;
@@ -625,7 +625,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &sep()?,
             // The teleprompter's own two. They are last and ruled off because
             // they are the ones that mean something to a TAKE rather than to a
-            // document — §11.4's grouping.
+            // document.
             &item("insert.cue", "Cue", None)?,
             &item("insert.take-marker", "Part Break", None)?,
         ],
@@ -662,9 +662,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             /*
              * NO "Enter Full Screen" ITEM, and its absence is deliberate.
              *
-             * §6.2 lists one, and adding `PredefinedMenuItem::fullscreen` is a
-             * one-line change. It is also the one menu entry in this file that
-             * would actively break the product.
+             * Adding `PredefinedMenuItem::fullscreen` is a one-line change. It is
+             * also the one menu entry in this file that would actively break the
+             * product.
              *
              * On macOS that predefined item calls AppKit's `toggleFullScreen:`
              * directly. That is the native fullscreen transition this
@@ -722,11 +722,11 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let maximize = PredefinedMenuItem::maximize(app, None)?;
     let separator = sep()?;
     let main_window = item("window.main", "Speaking Glass", None)?;
-    // §20.4: the Settings window is listed, and choosing it brings the existing
+    // The Settings window is listed, and choosing it brings the existing
     // one forward rather than making a second.
     let settings_window = item("window.settings", "Speaking Glass Settings", None)?;
     /*
-     * §13.4: the Stage window is listed WHILE IT EXISTS.
+     * The Stage window is listed WHILE IT EXISTS.
      *
      * Which is not most of the time — production presentation is single-window,
      * so the control window is the prompter and there is no second window to
@@ -815,7 +815,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 }
 
 /// Finder on macOS, File Explorer on Windows, and on Linux the generic name,
-/// since each desktop's file manager is called something else (§25.3).
+/// since each desktop's file manager is called something else.
 ///
 /// A compile-time choice rather than a runtime one: the binary only ever runs on
 /// the platform it was built for, and a `cfg` cannot drift the way a
