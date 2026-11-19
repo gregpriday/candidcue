@@ -70,6 +70,13 @@ vi.mock('../../../src/control/stores/compiled', async (orig) => {
   };
 });
 
+/** The destination readout, set directly — its own suite covers how it is resolved. */
+vi.mock('../../../src/control/stores/destination', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/stores/destination')>();
+  const { writable } = await import('svelte/store');
+  return { ...actual, takeDestination: writable(null) };
+});
+
 /** The settings document, swapped for one a test can write. */
 vi.mock('../../../src/control/stores/settings', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/stores/settings')>();
@@ -91,6 +98,9 @@ import type { SpeechModelReadiness } from '../../../src/control/stores/speech-mo
 import { settings } from '../../../src/control/stores/settings';
 import { editor } from '../../../src/control/stores/editor';
 import { compiled } from '../../../src/control/stores/compiled';
+import { takeDestination } from '../../../src/control/stores/destination';
+import { setInitialRoute } from '../../../src/control/stores/router';
+import type { TakeDestination } from '../../../src/control/lib/take-destination';
 import {
   defaultAppSettings,
   type AppSettings,
@@ -156,6 +166,8 @@ beforeEach(() => {
   settingsDoc.set(defaultAppSettings());
   editorDoc.set({ scriptId: null, loading: false });
   compileDoc.set({ status: 'idle', result: null, error: null, scriptId: null });
+  (takeDestination as unknown as Writable<TakeDestination | null>).set(null);
+  setInitialRoute({ name: 'library', view: 'all' });
 });
 
 describe('checkThenStartTake', () => {
@@ -578,5 +590,56 @@ describe('microphone access before the take', () => {
     await allowing;
     expect(h.startTake).not.toHaveBeenCalled();
     expect(get(takeReadinessPrompt)).toBeNull();
+  });
+});
+
+/* ------------------------------------------------- camera above this screen */
+
+describe('a take under the camera above this screen (#238)', () => {
+  /** The editor watching a destination that warns: the pinned glass's rig is being missed. */
+  function editorWithMismatch(): void {
+    setInitialRoute({ name: 'editor', scriptId: 'script-1' } as never);
+    (takeDestination as unknown as Writable<TakeDestination | null>).set({
+      mismatch: {
+        title: 'This take will open on Built-in Retina Display, which has no calibrated rig.',
+        detail: 'Elgato rig is calibrated for Elgato Prompter.',
+        suggestion: 'Choose Elgato Prompter in Settings.',
+      },
+    } as unknown as TakeDestination);
+  }
+
+  it('does not hold the launch on the readout for plain Present, which it does not go to', async () => {
+    editorWithMismatch();
+    // From a reading-window default: still checked as the prompter take it is.
+    settingsDoc.set({ ...defaultAppSettings(), stage: { ...defaultAppSettings().stage, presentationMode: 'reader' } });
+    await checkThenStartTake('script-1', { cameraAboveScreen: true });
+    expect(get(takeReadinessPrompt)).toBeNull();
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { cameraAboveScreen: true });
+  });
+
+  it('still raises the readout for a plain prompter launch', async () => {
+    editorWithMismatch();
+    await checkThenStartTake('script-1', { presentationMode: 'prompter' });
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toContain('destination');
+  });
+
+  it('keeps every other check: a missing model still holds it, without the destination', async () => {
+    editorWithMismatch();
+    model.set(MISSING);
+    await checkThenStartTake('script-1', { cameraAboveScreen: true });
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toContain('model_missing');
+    expect(findingIds()).not.toContain('destination');
+  });
+
+  it('keeps the camera launch through a recheck from the sheet', async () => {
+    editorWithMismatch();
+    model.set(MISSING);
+    await checkThenStartTake('script-1', { cameraAboveScreen: true });
+    const held = get(takeReadinessPrompt)!;
+    model.set(INSTALLED);
+    await held.recheck({ microphoneRefused: false });
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { cameraAboveScreen: true });
   });
 });

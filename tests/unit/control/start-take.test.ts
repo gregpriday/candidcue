@@ -114,6 +114,7 @@ const stageCalls = vi.hoisted(() => ({
   waitForStageReady: vi.fn(),
   setStageFullscreen: vi.fn(),
   closeStage: vi.fn(),
+  currentWindowDisplay: vi.fn(),
 }));
 vi.mock('../../../src/control/services/stage', () => stageCalls);
 
@@ -122,6 +123,7 @@ const { defaultAppSettings, opticalRigKey, READER_RIG_NAME } = await import(
 );
 const { defaultOpticalProfile } = await import('../../../src/shared/contracts/optical');
 const { resolveLandedDisplay, startTake } = await import('../../../src/control/lib/start-take');
+const cameraRigModule = await import('../../../src/control/lib/camera-above-rig');
 
 type PresentationState = {
   presenting: boolean;
@@ -1599,5 +1601,245 @@ describe('recording one part of a script', () => {
       expect(opened().startTokenIndex).toBe(25);
       expect(glass()).toBe(25);
     });
+  });
+});
+
+/* ------------------------------------------------- camera above this screen */
+
+/**
+ * "Camera above this screen" (#238): a laptop recording under its built-in
+ * camera, one choice away, and a way back to the glass that touches nothing.
+ *
+ * Every assertion reads what `startLiveSession` was handed and what was
+ * written to `optical`, because those are the two halves of the promise: this
+ * take is laid out for the camera, and the NEXT plain Present finds the right
+ * rig and mirror on whichever panel it lands.
+ */
+describe('a take under the camera above this screen', () => {
+  const { CAMERA_ABOVE_RIG_NAME } = cameraRigModule;
+
+  /** A laptop whose panel reports its own millimetres, so it can be sized. */
+  const LAPTOP: DisplayDescriptor = {
+    id: 'display-laptop',
+    name: 'Built-in Retina Display',
+    primary: true,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 3024, height: 1964 },
+    logicalSize: { width: 1512, height: 982 },
+    scaleFactor: 2,
+    fingerprint: 'panel-laptop',
+    topologyHash: 'topology-laptop',
+    physicalSizeMm: { width: 302, height: 196 },
+  };
+  /** The 9-inch Elgato, recognised by its 1024 x 600 grid. */
+  const ELGATO: DisplayDescriptor = {
+    id: 'display-elgato',
+    name: 'Monitor #1234',
+    primary: false,
+    physicalPosition: { x: 3024, y: 0 },
+    physicalSize: { width: 1024, height: 600 },
+    logicalSize: { width: 1024, height: 600 },
+    scaleFactor: 1,
+    fingerprint: 'panel-elgato',
+    topologyHash: 'topology-elgato',
+  };
+
+  type Opened = {
+    presentationMode: string;
+    stageDisplay: DisplayDescriptor | null;
+    stageSettings: {
+      mirrorX: boolean;
+      mirrorY: boolean;
+      readingBandCenterPercent: number;
+      opticalProfile?: { rigName: string; lensPlacement: string; viewingDistanceMm: number | null };
+      optics?: { calibrated: boolean };
+    };
+    stageEnvelope: { stageSettings: { mirrorX: boolean } };
+  };
+  const opened = (): Opened => calls.startLiveSession.mock.calls.at(-1)![0] as Opened;
+  const opticalWrites = (): AppSettings['optical'][] =>
+    calls.patchSettings.mock.calls
+      .filter(([section]) => section === 'optical')
+      .map(([, patch]) => patch as AppSettings['optical']);
+
+  function landOn(display: DisplayDescriptor | null): void {
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: display?.logicalSize.width ?? 1512,
+      height: display?.logicalSize.height ?? 982,
+      ...(display ? { displayFingerprint: display.fingerprint } : {}),
+    });
+  }
+
+  beforeEach(() => {
+    // The glass is pinned and mirrored, the way the rig this app is for has it.
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.displayFingerprint = ELGATO.fingerprint;
+    settingsState.value!.optical = {
+      profiles: {},
+      activeRig: {},
+      panelMirror: {
+        [ELGATO.fingerprint]: { horizontal: true, vertical: false },
+        // A laptop mirrored by mistake is exactly what this choice must undo.
+        [LAPTOP.fingerprint]: { horizontal: true, vertical: false },
+      },
+    };
+    stageCalls.listDisplays.mockResolvedValue([LAPTOP, ELGATO]);
+    // Writes land, so a later take reads what an earlier one stored.
+    calls.patchSettings.mockImplementation(async (section: string, patch: unknown) => {
+      if (section === 'optical') settingsState.value!.optical = patch as AppSettings['optical'];
+      if (section === 'stage') {
+        settingsState.value!.stage = { ...settingsState.value!.stage, ...(patch as object) };
+      }
+    });
+  });
+
+  it('fills the screen the window is on, lays out for the camera, and remembers it', async () => {
+    landOn(LAPTOP);
+    await expect(
+      startTake(SCRIPT.id, { cameraAboveScreen: true }),
+    ).resolves.toBe(true);
+
+    // The pinned glass is not asked for: Rust's fallback is the window's monitor.
+    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null, null);
+    expect(opened().stageDisplay?.fingerprint).toBe(LAPTOP.fingerprint);
+    expect(opened().presentationMode).toBe('prompter');
+
+    // Under the camera: the band near the top edge, 600 mm, nothing mirrored.
+    const stage = opened().stageSettings;
+    expect(stage.opticalProfile?.lensPlacement).toBe('above');
+    expect(stage.opticalProfile?.viewingDistanceMm).toBe(600);
+    expect(stage.optics?.calibrated).toBe(true);
+    expect(stage.readingBandCenterPercent).toBeLessThanOrEqual(10);
+    expect(stage.mirrorX).toBe(false);
+    expect(stage.mirrorY).toBe(false);
+    expect(opened().stageEnvelope.stageSettings.mirrorX).toBe(false);
+
+    // Stored against the laptop, and only the laptop's mirror cleared.
+    const [written] = opticalWrites();
+    expect(written?.activeRig[LAPTOP.fingerprint]).toBe(CAMERA_ABOVE_RIG_NAME);
+    expect(written?.panelMirror[LAPTOP.fingerprint]).toEqual({ horizontal: false, vertical: false });
+    expect(written?.panelMirror[ELGATO.fingerprint]).toEqual({ horizontal: true, vertical: false });
+    expect(written?.activeRig[ELGATO.fingerprint]).toBeUndefined();
+    // The session knows, so a mid-take ⌃⌘F back to the prompter stays here.
+    expect(calls.startLiveSession.mock.calls[0]![0]).toMatchObject({ cameraAboveScreen: true });
+  });
+
+  it('goes back to the mirrored glass on a plain Present, and back under the camera without it', async () => {
+    landOn(LAPTOP);
+    await startTake(SCRIPT.id, { cameraAboveScreen: true });
+
+    // The Elgato plugged back in: a plain Present asks for the pin and is mirrored.
+    calls.enterPresentation.mockClear();
+    landOn(ELGATO);
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null, ELGATO.fingerprint);
+    expect(opened().stageSettings.mirrorX).toBe(true);
+    expect(opened().stageSettings.opticalProfile?.lensPlacement).not.toBe('above');
+
+    // Unplugged again: the same plain Present falls back to the laptop, under its camera.
+    stageCalls.listDisplays.mockResolvedValue([LAPTOP]);
+    landOn(LAPTOP);
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(opened().stageSettings.mirrorX).toBe(false);
+    expect(opened().stageSettings.opticalProfile?.rigName).toBe(CAMERA_ABOVE_RIG_NAME);
+    expect(opened().stageSettings.readingBandCenterPercent).toBeLessThanOrEqual(10);
+  });
+
+  it('is a teleprompter take from a reading-window default, and leaves that default alone', async () => {
+    settingsState.value!.stage.presentationMode = 'reader';
+    landOn(LAPTOP);
+    // An explicit shape alongside it is ignored too: the camera action is never a default.
+    await startTake(SCRIPT.id, { cameraAboveScreen: true, presentationMode: 'reader' });
+    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null, null);
+    expect(opened().presentationMode).toBe('prompter');
+    expect(opened().stageSettings.opticalProfile?.lensPlacement).toBe('above');
+    expect(calls.patchSettings.mock.calls.filter(([section]) => section === 'stage')).toHaveLength(0);
+    expect(settingsState.value!.stage.presentationMode).toBe('reader');
+  });
+
+  it('leaves recognised prompter glass alone, and says why', async () => {
+    landOn(ELGATO);
+    await expect(
+      startTake(SCRIPT.id, { cameraAboveScreen: true }),
+    ).resolves.toBe(true);
+
+    expect(opticalWrites()).toHaveLength(0);
+    expect(calls.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('This screen is a teleprompter'),
+      'info',
+    );
+    // The take still opens, as the mirrored glass it landed on.
+    expect(opened().stageSettings.mirrorX).toBe(true);
+  });
+
+  it('sets up nothing on a panel nobody named, and opens it as a plain take there', async () => {
+    // The glass first in the list, so a guess of "the first display" is wrong.
+    stageCalls.listDisplays.mockResolvedValue([ELGATO, LAPTOP]);
+    landOn(null);
+    stageCalls.currentWindowDisplay.mockResolvedValue(null);
+    await expect(startTake(SCRIPT.id, { cameraAboveScreen: true })).resolves.toBe(true);
+
+    expect(opticalWrites()).toHaveLength(0);
+    expect(calls.showToast).toHaveBeenCalledWith(expect.stringContaining('could not tell which screen'), 'info');
+    // The guess is the primary display, never the pinned glass — composed as a
+    // plain Present would compose it, so nothing unsaved can be taken back mid-take.
+    expect(opened().stageDisplay?.fingerprint).toBe(LAPTOP.fingerprint);
+    expect(opened().stageSettings.opticalProfile?.lensPlacement).not.toBe('above');
+    expect(opened().stageSettings.mirrorX).toBe(true);
+  });
+
+  it('takes the window monitor Rust names when the presentation did not say', async () => {
+    // Not the primary display, so this cannot pass by persisting the guess.
+    const DESK: DisplayDescriptor = {
+      ...LAPTOP,
+      id: 'display-desk',
+      name: 'Desk monitor',
+      primary: false,
+      fingerprint: 'panel-desk',
+      physicalPosition: { x: -3024, y: 0 },
+    };
+    stageCalls.listDisplays.mockResolvedValue([LAPTOP, DESK, ELGATO]);
+    landOn(null);
+    stageCalls.currentWindowDisplay.mockResolvedValue(DESK);
+    await startTake(SCRIPT.id, { cameraAboveScreen: true });
+
+    const [written] = opticalWrites();
+    expect(written?.activeRig[DESK.fingerprint]).toBe(CAMERA_ABOVE_RIG_NAME);
+    expect(written?.activeRig[LAPTOP.fingerprint]).toBeUndefined();
+    expect(opened().stageDisplay?.fingerprint).toBe(DESK.fingerprint);
+  });
+
+  it('leaves a mirrored panel with a glass rig chosen alone', async () => {
+    // Somebody's own beamsplitter on an ordinary monitor: no Elgato grid to
+    // recognise, but a chosen rig with the camera behind the picture, mirrored.
+    const hood = { ...defaultOpticalProfile(), rigName: 'Studio hood', viewingDistanceMm: 1500 };
+    settingsState.value!.optical.profiles = { [opticalRigKey(LAPTOP.fingerprint, hood.rigName)]: hood };
+    settingsState.value!.optical.activeRig = { [LAPTOP.fingerprint]: hood.rigName };
+    landOn(LAPTOP);
+    await startTake(SCRIPT.id, { cameraAboveScreen: true });
+
+    expect(opticalWrites()).toHaveLength(0);
+    expect(calls.showToast).toHaveBeenCalledWith(expect.stringContaining('This screen is a teleprompter'), 'info');
+    expect(opened().stageSettings.mirrorX).toBe(true);
+  });
+
+  it('opens a plain take when the rig cannot be saved, so nothing is taken back mid-take', async () => {
+    calls.patchSettings.mockRejectedValue(new Error('revision conflict'));
+    landOn(LAPTOP);
+    await expect(startTake(SCRIPT.id, { cameraAboveScreen: true })).resolves.toBe(true);
+
+    expect(opticalWrites()).toHaveLength(1);
+    expect(opened().stageSettings.opticalProfile?.lensPlacement).not.toBe('above');
+    expect(opened().stageSettings.mirrorX).toBe(true);
+  });
+
+  it('is ignored by a practice, which always opens in a window', async () => {
+    landOn(LAPTOP);
+    await startTake(SCRIPT.id, { practice: true, cameraAboveScreen: true, presentationMode: 'prompter' });
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null, ELGATO.fingerprint);
+    expect(opticalWrites()).toHaveLength(0);
+    expect(calls.patchSettings.mock.calls.filter(([section]) => section === 'stage')).toHaveLength(0);
+    expect(calls.startLiveSession.mock.calls[0]![0]).not.toHaveProperty('cameraAboveScreen');
   });
 });

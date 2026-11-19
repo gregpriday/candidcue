@@ -301,6 +301,13 @@ export interface CalibratedRig {
   display: DisplayDescriptor;
   /** The rig's own name, off the profile, where it is authoritative. */
   rigName: string;
+  /**
+   * The rig's camera is above or below the panel, not behind glass (#238).
+   * It still counts as the landing panel's own rig, but it is no evidence that
+   * a take on ANOTHER panel is missing measured optics: a laptop set up for its
+   * built-in camera says nothing about how the prompter should be sized.
+   */
+  cameraOffPanel?: boolean;
 }
 
 export type DestinationConfidence =
@@ -479,11 +486,14 @@ function resolveMismatch(
   }
 
   if (landing === null) return null;
-  if (rigs.length === 0) return null;
+  const glassRigs = rigs.filter((r) => r.cameraOffPanel !== true);
+  if (glassRigs.length === 0) return null;
 
-  const elsewhere = rigs[0]!;
+  const elsewhere = glassRigs[0]!;
   const others =
-    rigs.length > 1 ? ` (and ${rigs.length - 1} other calibrated ${rigs.length === 2 ? 'display' : 'displays'})` : '';
+    glassRigs.length > 1
+      ? ` (and ${glassRigs.length - 1} other calibrated ${glassRigs.length === 2 ? 'display' : 'displays'})`
+      : '';
   return {
     title: `This take will open on ${displayName(landing)}, which has no calibrated rig.`,
     detail: `${rigLabel(elsewhere.rigName)} is calibrated for ${displayName(elsewhere.display)}${others}, so this take will size its text from the panel it lands on rather than from measured optics.`,

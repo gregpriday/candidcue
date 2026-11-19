@@ -133,7 +133,8 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
   {
     id: 'desk-webcam',
     label: 'Desk and webcam',
-    description: 'A monitor on your desk with a separate webcam. No glass, so the picture reads normally.',
+    description:
+      'A laptop’s built-in camera, or a webcam above a monitor. No glass, so the picture reads normally.',
     patch: {
       hardwareKind: 'generic',
       viewingDistanceMm: DESK_AND_WEBCAM_DISTANCE_MM,

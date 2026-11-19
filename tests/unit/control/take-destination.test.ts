@@ -222,6 +222,34 @@ describe('resolveTakeDestination', () => {
     expect(destination.mismatch!.detail).toMatch(/1 other calibrated display\b/);
   });
 
+  it('does not count a camera-above-the-screen rig as calibration the glass is missing (#238)', () => {
+    /*
+     * The laptop is set up for its built-in camera, and Present lands on the
+     * pinned Elgato, which runs automatic sizing. That rig says nothing about
+     * how the glass should be sized, so naming it as "calibrated for" another
+     * display would raise the readiness sheet on every return to the glass.
+     */
+    const laptopCamera = { ...rig(DELL, 'Camera above screen'), cameraOffPanel: true };
+    expect(
+      resolveTakeDestination(input({ currentDisplay: BUILT_IN, calibratedRigs: [laptopCamera] })).mismatch,
+    ).toBeNull();
+    // A glass rig alongside it is still named, and counted alone.
+    const destination = resolveTakeDestination(
+      input({ currentDisplay: BUILT_IN, calibratedRigs: [laptopCamera, rig(ELGATO, 'Elgato rig')] }),
+    );
+    expect(destination.mismatch!.detail).toContain('Elgato rig');
+    expect(destination.mismatch!.detail).not.toMatch(/other calibrated/);
+  });
+
+  it('stays quiet when the take lands on the panel its camera rig is for', () => {
+    const laptopCamera = { ...rig(BUILT_IN, 'Camera above screen'), cameraOffPanel: true };
+    expect(
+      resolveTakeDestination(
+        input({ currentDisplay: BUILT_IN, calibratedRigs: [laptopCamera, rig(DELL, 'Elgato rig')] }),
+      ).mismatch,
+    ).toBeNull();
+  });
+
   it('stays quiet when nothing is calibrated at all', () => {
     // Display-based defaults are the ordinary case for a user with no glass.
     // Calling that a mismatch would nag every such user on every take.

@@ -749,7 +749,12 @@ import { onShortcut } from '../lib/shortcuts';
         suspendReaderPaper(true);
         if (wasPaper) await painted();
       }
-      const switched = await switchPresentationMode(next, $settings.stage.displayFingerprint);
+      // A take under the camera above its screen (#238) asks for no panel, so
+      // returning to the prompter stays on that screen instead of the pin.
+      const switched = await switchPresentationMode(
+        next,
+        $session.cameraAboveScreen ? null : $settings.stage.displayFingerprint,
+      );
       /*
        * Switching AWAY from reader mode reports the bounds the reading window
        * had a moment ago, and this is the only time they are reported outside a

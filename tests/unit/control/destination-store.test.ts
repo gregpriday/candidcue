@@ -115,6 +115,40 @@ describe('refreshTakeDestination', () => {
     expect(destination?.mismatch?.detail).toContain('“Elgato rig”');
   });
 
+  it('does not hold up a return to the glass over a laptop set up for its camera (#238)', async () => {
+    // The Elgato is pinned and runs automatic sizing; the laptop has the
+    // camera-above rig. Neither panel is missing measured optics.
+    const LAPTOP = display({ fingerprint: 'dsp-laptop', name: 'Built-in Retina Display' });
+    const camera = { ...rig('Camera above screen'), hardwareKind: 'generic' as const, lensPlacement: 'above' as const };
+    backend({ displays: [LAPTOP, ELGATO], window: LAPTOP });
+    await refreshTakeDestination({
+      mode: 'prompter',
+      optical: {
+        profiles: { [opticalRigKey('dsp-laptop', camera.rigName)]: camera },
+        activeRig: { 'dsp-laptop': camera.rigName },
+        panelMirror: {},
+      },
+      pinnedFingerprint: 'dsp-elgato',
+    });
+    expect(get(takeDestination)?.summary).toBe('Teleprompter · Elgato Prompter');
+    expect(get(takeDestination)?.mismatch).toBeNull();
+  });
+
+  it('does not name an unplugged camera monitor’s rig as optics the take goes without', async () => {
+    const camera = { ...rig('Camera above screen'), hardwareKind: 'generic' as const, lensPlacement: 'above' as const };
+    backend({ displays: [STUDIO], window: STUDIO });
+    await refreshTakeDestination({
+      mode: 'prompter',
+      optical: {
+        profiles: { [opticalRigKey('dsp-webcam', camera.rigName)]: camera },
+        activeRig: { 'dsp-webcam': camera.rigName },
+        panelMirror: {},
+      },
+      pinnedFingerprint: 'dsp-webcam',
+    });
+    expect(get(takeDestination)?.mismatch).toBeNull();
+  });
+
   /*
    * A reading take, which the store used to describe without reading the one
    * setting that decides where it goes: the remembered frame. Every reading

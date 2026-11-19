@@ -917,6 +917,20 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
+   * "Camera above this screen" (#238): a teleprompter take on the screen this
+   * window is on, from the top, under its camera. Through the same readiness
+   * check as every launch; `startTake` stores the camera rig for the panel it
+   * lands on.
+   */
+  async function checkThenPresentUnderCamera(): Promise<void> {
+    const id = scriptId;
+    await checkThenStart(id, { mode: 'prompter', cameraAboveScreen: true }, async () => {
+      await saveNow();
+      await startTake(id, { cameraAboveScreen: true });
+    });
+  }
+
+  /**
    * Present opens the stage. There is no screen in between — everything the
    * old Preflight page asked for is in Settings, and the take reports its own
    * microphone, display and connection from the stage (lib/start-take.ts).
@@ -1109,7 +1123,11 @@ import type { PresentationMode } from '../services/settings-types';
   const presentModeItems = $derived([
     ...withGroup(presentStartItems, 'Start'),
     ...withGroup(
-      presentMenuItems($settings.stage.presentationMode, (mode) => void checkThenPresent(mode)),
+      presentMenuItems(
+        $settings.stage.presentationMode,
+        (mode) => void checkThenPresent(mode),
+        () => void checkThenPresentUnderCamera(),
+      ),
       'Present as',
     ),
     /*

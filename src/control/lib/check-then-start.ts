@@ -38,6 +38,13 @@ export interface LaunchIntent {
   mode?: PresentationMode;
   /** A rehearsal, which always opens in its own window. */
   practice?: boolean;
+  /**
+   * A teleprompter take on the screen the window is on, under its camera
+   * (#238). It goes where the window is rather than to the pinned panel, so
+   * the destination readout — which describes plain Present — is not this
+   * take's, and its mismatch is not raised.
+   */
+  cameraAboveScreen?: boolean;
   /** Somebody asked to see the sheet ("Review take setup…"). */
   requested?: boolean;
   /**
@@ -216,7 +223,7 @@ export async function resolveTakeReadiness(
       ? (result?.diagnostics ?? []).filter((d) => d.blocking).length
       : 0,
     destinationMismatch:
-      launchMode === 'reader' || !destinationWatched
+      launchMode === 'reader' || intent.cameraAboveScreen === true || !destinationWatched
         ? null
         : (get(takeDestination)?.mismatch ?? null),
     requested: intent.requested ?? false,
@@ -267,7 +274,11 @@ export function checkThenStartTake(
   return checkThenStart(
     scriptId,
     {
-      ...(options.presentationMode === undefined ? {} : { mode: options.presentationMode }),
+      ...(options.cameraAboveScreen && !options.practice
+        ? { mode: 'prompter' as const, cameraAboveScreen: true }
+        : options.presentationMode === undefined
+          ? {}
+          : { mode: options.presentationMode }),
       ...(options.practice ? { practice: true } : {}),
     },
     () => startTake(scriptId, options),
