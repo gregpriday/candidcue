@@ -32,8 +32,10 @@
     /**
      * Whether the take listens at all (#243). A Read take does not, so it has
      * no voice to hold or to follow, and the switch between the two is not
-     * offered. The single steps and the assertion still are: they are how a
-     * Read take is moved by hand. Unwired callers keep the switch.
+     * offered. Nor is "Set my place": it asks the engine to find the presenter
+     * from what they say next, which a take that hears nothing never answers.
+     * The single steps stay — they are how a Read take is moved by hand, along
+     * with scrolling. Unwired callers keep everything.
      */
     voiceInput?: boolean;
   }
@@ -96,7 +98,7 @@
     under the buttons put the same sentence on screen twice.
   -->
   {#if part !== 'candidates'}
-    <div class="routine" class:no-voice={!voiceInput}>
+    <div class="routine">
       {#if voiceInput}
         <Button
           variant={follow.followingPaused && userHold ? 'primary' : 'default'}
@@ -105,8 +107,8 @@
         >
           {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
         </Button>
+        <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
       {/if}
-      <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
       <Button onclick={() => smoothFollow.nudge('back')}>{TAKE_ACTIONS.previousSentence}</Button>
       <Button onclick={() => smoothFollow.nudge('forward')}>{TAKE_ACTIONS.nextSentence}</Button>
     </div>
@@ -125,11 +127,6 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
-  }
-  /* Three controls without the switch: the assertion takes the first row
-     whole, and the two steps keep their pair beneath it. */
-  .routine.no-voice > :global(:first-child) {
-    grid-column: 1 / -1;
   }
 
   .candidates {

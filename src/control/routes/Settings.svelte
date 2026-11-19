@@ -208,7 +208,7 @@
       id: 'general',
       label: 'General',
       keywords:
-        'on launch / open the script library / open the most recent script / startup / session mode / follow voice / read / read mode / without microphone / no microphone / remember the reading window / window position size restore / confirm before ending an active session / follow headings as spoken lines / headings read aloud',
+        'on launch / open the script library / open the most recent script / startup / session mode / follow voice / read / remember the reading window / window position size restore / confirm before ending an active session / follow headings as spoken lines / headings read aloud',
     },
     {
       id: 'speech',
@@ -630,6 +630,13 @@
    * and where the motion comes from instead. A stored 'fixed' is an earlier
    * version's value: it is named, and the sentence says what to do about it.
    */
+  /*
+   * Named here rather than built in the markup: `error-copy-user-facing.test.ts`
+   * reads each option's availability out of this file's source, and an option
+   * whose label is a template literal is one it cannot parse.
+   */
+  const LEGACY_FIXED_LABEL = `${SESSION_MODE_LABELS.fixed} (earlier version)`;
+
   function sessionModeDescription(mode: SessionMode): string {
     if (mode === 'voice') {
       return 'Takes open listening, and the script follows your voice. Needs the speech data in Settings › Speech and the microphone.';
@@ -647,7 +654,9 @@
    * the switch two sections away. Said beside the download, with the switch.
    */
   const readModeWithModel = $derived(
-    $settings.general.defaultSessionMode !== 'voice' && modelStatus?.installed === true,
+    $settings.general.defaultSessionMode === 'manual' &&
+      modelStatus?.installed === true &&
+      !isModelBusy(modelStatus),
   );
 
   $effect(() => {
@@ -2723,13 +2732,7 @@
               { value: 'voice', label: SESSION_MODE_LABELS.voice },
               { value: 'manual', label: SESSION_MODE_LABELS.manual },
               ...($settings.general.defaultSessionMode === 'fixed'
-                ? [
-                    {
-                      value: 'fixed',
-                      label: `${SESSION_MODE_LABELS.fixed} (earlier version)`,
-                      disabled: true,
-                    },
-                  ]
+                ? [{ value: 'fixed', label: LEGACY_FIXED_LABEL, disabled: true }]
                 : []),
             ]}
             description={sessionModeDescription($settings.general.defaultSessionMode)}

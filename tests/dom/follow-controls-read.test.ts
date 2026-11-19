@@ -3,8 +3,9 @@
  *
  * A Read take opens no microphone, so "Hold text" / "Follow voice" would be a
  * switch for a voice that is not there — and pressing "Follow voice" would hand
- * the script away from a running Auto-scroll to nothing. The single steps and
- * "Set my place" are how a Read take is moved by hand, so they stay.
+ * the script away from a running Auto-scroll to nothing; "Set my place" asks
+ * the engine to find the presenter from speech it will never hear. The single
+ * steps are how a Read take is moved by hand, so they stay.
  *
  * Both directions are asserted: dropping the switch everywhere would pass the
  * Read case and break every voice take.
@@ -41,13 +42,13 @@ describe('FollowControls', () => {
     ]);
   });
 
-  it('keeps the hand controls and drops the switch in a Read take', () => {
+  it('keeps the single steps and drops what needs a voice in a Read take', () => {
     const { container } = render(FollowControls, {
       props: { follow: followState(), part: 'routine', voiceInput: false },
     });
     flushSync();
+    // "Set my place" asks the engine to re-find the presenter from speech.
     expect(labels(container)).toEqual([
-      TAKE_ACTIONS.setPlace,
       TAKE_ACTIONS.previousSentence,
       TAKE_ACTIONS.nextSentence,
     ]);

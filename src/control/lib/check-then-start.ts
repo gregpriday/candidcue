@@ -23,7 +23,7 @@ import { getVoiceFacade } from '../services/voice-facade';
 import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
 import { describeError } from '../services/errors';
 import { showToast } from '../stores/toasts';
-import type { AppSettings, PresentationMode } from '../services/settings-types';
+import type { AppSettings, PresentationMode, SessionMode } from '../services/settings-types';
 import type { AudioDeviceInfo, MicrophonePermission } from '../../shared/contracts';
 import { compiled } from '../stores/compiled';
 import { takeDestination } from '../stores/destination';
@@ -63,6 +63,18 @@ export interface TakeReadinessPrompt {
    * otherwise the sheet shows the new verdict.
    */
   recheck: (witnessed: { microphoneRefused: boolean }) => Promise<void>;
+  /**
+   * The session mode the verdict was reached for (#243).
+   *
+   * Settings is another window, and a held sheet can sit open while somebody
+   * switches between Follow voice and Read there. A verdict for one is not a
+   * verdict for the other — a Read check asks nothing about the microphone —
+   * so the sheet's actions compare this with the mode now and check again
+   * rather than act on an answer to a different question.
+   */
+  sessionMode: SessionMode;
+  /** This same launch, checked again from the start. */
+  rerun: () => Promise<void>;
 }
 
 const prompt = writable<TakeReadinessPrompt | null>(null);
@@ -250,6 +262,8 @@ export async function checkThenStart(
   const mine = ++generation;
   const verdict = await resolveTakeReadiness(scriptId, intent);
   if (mine !== generation) return;
+  // Read after the check, as `resolveTakeReadiness` reads it for `voiceTake`.
+  const sessionMode = get(settings).general.defaultSessionMode;
   if (!verdict.show) {
     // A sheet held over an earlier attempt is answered by this one. Left up,
     // it would sit over the take with that attempt's launch still behind it.
@@ -267,6 +281,8 @@ export async function checkThenStart(
       mine === generation
         ? checkThenStart(scriptId, { ...intent, microphoneRefused: witnessed.microphoneRefused }, launch)
         : Promise.resolve(),
+    sessionMode,
+    rerun: () => (mine === generation ? checkThenStart(scriptId, intent, launch) : Promise.resolve()),
   });
 }
 
@@ -303,9 +319,18 @@ export function dismissTakeReadiness(): void {
  */
 export async function startAnyway(): Promise<void> {
   const held = get(prompt);
+  if (held !== null && modeChangedSince(held)) {
+    await held.rerun();
+    return;
+  }
   dismissTakeReadiness();
   if (held === null || held.verdict.blocked) return;
   await held.start();
+}
+
+/** Has Settings switched between Follow voice and Read since `held` was checked? */
+function modeChangedSince(held: TakeReadinessPrompt): boolean {
+  return get(settings).general.defaultSessionMode !== held.sessionMode;
 }
 
 /**
@@ -328,6 +353,12 @@ export async function startAnyway(): Promise<void> {
 export async function allowMicrophoneForTake(): Promise<void> {
   const held = get(prompt);
   if (held === null) return;
+  // Switched to Read since this sheet asked: nothing needs the microphone now,
+  // so it is not opened — the launch is checked again as what it now is.
+  if (modeChangedSince(held)) {
+    await held.rerun();
+    return;
+  }
   let answer: 'granted' | 'denied';
   try {
     answer = await getVoiceFacade().requestMicrophoneAccess();

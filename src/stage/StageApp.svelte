@@ -2823,7 +2823,9 @@
           <!-- Control emits these; Rust emits the snapshots. If this stays 0
                while the summary reports taps sent, the control -> stage channel
                is the fault and the snapshots are arriving by a different road. -->
-          <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
+          <!-- A Read take (#243) sends no taps at all; its snapshots come from
+               hand moves, so the pair is not a fault there. -->
+          <div class:diag-fault={voiceInput && transcriptTapsArrived === 0 && alignmentArrived > 0}>
             taps: {transcriptTapsArrived} arrived
           </div>
           <div>viewport: {vw}×{vh}</div>

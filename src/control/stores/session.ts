@@ -2429,6 +2429,9 @@ const followActions = {
    * see, and the engine's own position is the thing being disputed.
    */
   reAnchor(): void {
+    // A search for the presenter in what they say next. A Read take (#243)
+    // hears nothing, so it would leave "Finding your place" up for good.
+    if (get(state).mode !== 'voice') return;
     driver?.reacquire();
     noteReposition();
     acknowledgeOnStage('Re-finding your place');

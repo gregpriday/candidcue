@@ -1372,6 +1372,21 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(s.followPausedByUser).toBe(false);
   });
 
+  it('does not start a search for the presenter in a Read take (#243)', async () => {
+    await startScript('manual');
+    const before = lastAck();
+    // "Set my place" re-finds the presenter from what they say next.
+    smoothFollow.reAnchorHere();
+    expect(lastAck(), 'nothing claims to be finding a place').toBe(before);
+
+    // The same control in a voice take still asks.
+    stopSession();
+    clearSession();
+    await startScript();
+    smoothFollow.reAnchorHere();
+    expect(lastAck()).toBe('Re-finding your place');
+  });
+
   it('ignores an end report from a roll the voice has already taken over', async () => {
     await startScript();
     toggleAutoScroll();

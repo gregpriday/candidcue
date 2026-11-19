@@ -264,9 +264,9 @@
         // and a take in Read (#243), which a new profile starts in, does not
         // listen at all, so that is said too: the download alone turns nothing on.
         detail:
-          $settings.general.defaultSessionMode === 'voice'
-            ? 'Speech data is installed. Transcription happens on this machine.'
-            : 'Speech data is installed. Takes open in Read mode until you choose Follow voice in Settings › General.',
+          $settings.general.defaultSessionMode === 'manual'
+            ? 'Speech data is installed. Takes open in Read mode until you choose Follow voice in Settings › General.'
+            : 'Speech data is installed. Transcription happens on this machine.',
         emphasis: 'quiet',
       };
     }
