@@ -2341,6 +2341,61 @@ describe('a release names every missing credential before it spends anything', (
   });
 });
 
+/* -------------------------------------- the settings, by their current names */
+
+describe('the release settings are read, checked and documented under one set of names', () => {
+  /*
+   * The app was renamed from CandidCue on 2026-10-21 and the workflows moved
+   * to `SPEAKING_GLASS_*` settings, while the repository still held the old
+   * ones (#451). Only the owner can create settings, so the names the
+   * workflows read, the names the gate reports and the names the runbook
+   * tells the owner to create must be the same names.
+   */
+  const OBSOLETE = ['CANDIDCUE_PUBLIC_URL', 'CANDIDCUE_R2_BUCKET', 'CANDIDCUE_UPDATER_PUBKEY'];
+  const sources = [...Object.values(RELEASE_WORKFLOWS), PUBLISH_ACTION, RECEIVE_ACTION];
+  const referenced = (kind: 'secrets' | 'vars') =>
+    new Set(
+      sources.flatMap((relPath) =>
+        [...stripComments(readWorkflow(relPath)).matchAll(new RegExp(`\\b${kind}\\.([A-Z_0-9]+)`, 'g'))].map(
+          (match) => match[1]!,
+        ),
+      ),
+    );
+  const runbook = readWorkflow('docs/release-runbook.md');
+  const credentials = runbook.slice(
+    runbook.indexOf('### The credentials, by name'),
+    runbook.indexOf('### The dry run'),
+  );
+
+  it('reads every secret the gate checks, and no other but the optional key password', async () => {
+    const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
+    const checked = new Set([...Object.values(REQUIRED.build).flat(), ...REQUIRED.publish]);
+    expect([...referenced('secrets')].sort()).toEqual([...checked, 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'].sort());
+  });
+
+  it('reads one repository variable, the public origin', () => {
+    expect([...referenced('vars')]).toEqual(['SPEAKING_GLASS_PUBLIC_URL']);
+  });
+
+  it('documents every setting the release reads where the runbook lists them', () => {
+    expect(credentials, 'the runbook section moved').not.toBe('');
+    for (const name of [...referenced('secrets'), ...referenced('vars')]) {
+      expect(credentials, name).toContain(`\`${name}\``);
+    }
+  });
+
+  it('reads none of the CandidCue-era settings, and the runbook names them only to delete them', () => {
+    const scripts = ['scripts/release-credentials.mjs', 'scripts/release-feed.mjs', 'scripts/release-notes.mjs'];
+    for (const relPath of [...sources, ...scripts]) {
+      expect(readWorkflow(relPath), relPath).not.toMatch(/\bCANDIDCUE_[A-Z_]+/);
+    }
+    const mentions = runbook.split('\n').filter((line) => /\bCANDIDCUE_[A-Z_]+/.test(line));
+    expect(mentions.length, 'the runbook says which old settings to delete').toBeGreaterThan(0);
+    for (const line of mentions) expect(line, 'an old name outside the deletion step').toMatch(/^- \[ \] Delete /);
+    for (const name of OBSOLETE) expect(runbook).toContain(`\`${name}\``);
+  });
+});
+
 /* --------------------------------------- what the GitHub Release carries */
 
 describe('the files a release attaches beside the stage are declared once and checked on receipt', () => {

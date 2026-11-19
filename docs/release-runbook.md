@@ -175,9 +175,82 @@ The R2 secrets are checked as the first step of each `publish` job instead,
 because that is the only job that names the `release-stable` /
 `release-prerelease` environment, and so the only one that can see R2 secrets
 kept there. A tag pushed without them builds, stages and then stops before
-publishing anything; add them and re-run only the failed `publish` job. The
-`SPEAKING_GLASS_PUBLIC_URL` repository variable is optional: unset, the feed
-uses `https://updates.speakingglass.com`.
+publishing anything; add them and re-run only the failed `publish` job.
+
+One repository **variable** sits beside them:
+
+| Variable | Holds | Read by |
+|---|---|---|
+| `SPEAKING_GLASS_PUBLIC_URL` | the origin the bucket is served from: `https://updates.speakingglass.com` | staging (build job) and publishing |
+
+It is optional: unset, the feed uses `https://updates.speakingglass.com`,
+which is also the only value that reaches anyone, because installed copies poll
+the base compiled into the app (`UPDATE_BASE_URL` in
+`src-tauri/src/updater.rs`). Staging prints the origin it used, and whether it
+came from the variable, and warns (`Unexpected update origin`) on any other.
+Keep it at repository level only. The build job that stages names no
+environment, so it cannot see an environment variable; publishing can, and an
+environment value that differs from the repository one makes publishing refuse
+the stage (`the release was staged for …`).
+
+### Where each setting lives, and how to check it
+
+All of them are under Settings → Secrets and variables → Actions:
+
+- **Signing secrets** (`APPLE_*`, `TAURI_SIGNING_PRIVATE_KEY` and its
+  password): repository level, always.
+- **R2 secrets** (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`,
+  `SPEAKING_GLASS_R2_BUCKET`): repository level, or all four on **both** the
+  `release-stable` and `release-prerelease` environments. A publish job sees
+  only the environment its tag selects, so a secret kept on `release-stable`
+  alone is missing for every RC tag, and an environment secret silently
+  overrides a repository one of the same name. Keep the four together.
+- **`SPEAKING_GLASS_PUBLIC_URL`**: repository level only (above).
+
+Check names, never values:
+
+```bash
+gh secret list                           # repository secrets: names and dates
+gh variable list                         # repository variables, with values
+gh secret list --env release-stable      # only if the R2 secrets live on environments
+gh secret list --env release-prerelease
+```
+
+A secret cannot be read back, so a wrong `SPEAKING_GLASS_R2_BUCKET` shows only
+when publishing reads its own upload back from the public origin: `Every file
+must be readable at its public URL` fails, before the feed is touched, so no
+installed copy is pointed at it. Copy the name from Cloudflare (R2, the bucket
+whose Settings › Custom Domains lists `updates.speakingglass.com`) rather than
+from memory.
+
+### The CandidCue-era settings, renamed
+
+The workflows read new names since the app's rename (#445); the repository
+still held the old ones on 19 November 2026 (#451). Until the new secret
+exists, a tag builds and stages, then stops at publishing with
+`SPEAKING_GLASS_R2_BUCKET` reported missing. The owner's checklist:
+
+- [ ] Create the repository secret `SPEAKING_GLASS_R2_BUCKET`, holding the name
+  of the bucket `updates.speakingglass.com` serves (#445 named `speaking-glass`;
+  confirm it in Cloudflare as above). Scope the R2 API token to that bucket
+  (#306).
+- [ ] Optionally, create the repository variable `SPEAKING_GLASS_PUBLIC_URL` =
+  `https://updates.speakingglass.com`, with no path. Leaving it unset does the
+  same thing.
+- [ ] `gh secret list` shows `SPEAKING_GLASS_R2_BUCKET` beside
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_ENDPOINT`, and
+  `gh variable list` shows `SPEAKING_GLASS_PUBLIC_URL` with exactly that value,
+  or not at all.
+- [ ] Run the three dry runs (next section). In each, `Stage the release`
+  prints `origin: https://updates.speakingglass.com/releases/` and no
+  `Unexpected update origin` warning, and the `receive-speaking-glass` step
+  after the upload unpacks the artifact just uploaded (the handover publishing
+  will make). A dry run proves nothing about R2: its publish job never runs.
+- [ ] Delete `CANDIDCUE_PUBLIC_URL`, `CANDIDCUE_R2_BUCKET` and `CANDIDCUE_UPDATER_PUBKEY`; nothing reads them, and the updater's public key is `plugins.updater.pubkey` in `tauri.conf.json`.
+- [ ] Leave the first real publish to its own release decision (§5). In it,
+  `Every publishing credential must be present` lists all four R2 secrets
+  `present`, and `Every file must be readable at its public URL` is the step
+  that proves the bucket and the origin agree.
 
 ### The dry run
 

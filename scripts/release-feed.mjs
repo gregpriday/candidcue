@@ -433,6 +433,28 @@ export function checkOrigin(stageDir, publicUrl) {
 }
 
 /**
+ * What staging says about the origin it wrote into every feed entry.
+ *
+ * A dry run never publishes, so this line in the `Stage the release` log is
+ * the one place a dry run shows which origin the `SPEAKING_GLASS_PUBLIC_URL`
+ * repository variable produced. Installed copies poll a base compiled into
+ * the app, which `DEFAULT_PUBLIC_URL` is held equal to, so any other origin
+ * gets a workflow warning: it would publish where no installed copy looks.
+ */
+export function originReport(publicUrl, { fromVariable }) {
+  const source = fromVariable ? 'from SPEAKING_GLASS_PUBLIC_URL' : 'the default; SPEAKING_GLASS_PUBLIC_URL is not set';
+  const lines = [`origin: ${releasesUrl(publicUrl)}/ (${source})`];
+  if (releasesUrl(publicUrl) !== releasesUrl(DEFAULT_PUBLIC_URL)) {
+    lines.push(
+      `::warning title=Unexpected update origin::this release is staged for ${releasesUrl(publicUrl)}/, ` +
+        `but installed copies poll ${releasesUrl(DEFAULT_PUBLIC_URL)}/. ` +
+        'Correct or delete the SPEAKING_GLASS_PUBLIC_URL repository variable unless that is deliberate.',
+    );
+  }
+  return lines;
+}
+
+/**
  * Refuse a version that is not newer than what each platform's feed already
  * serves; report when every platform already serves exactly this version.
  */
@@ -799,6 +821,9 @@ async function main(argv) {
         pubkey,
       });
       console.log(`staged ${release.os} ${release.version} for the ${release.channel} channel`);
+      for (const line of originReport(publicUrl, { fromVariable: Boolean(process.env.SPEAKING_GLASS_PUBLIC_URL) })) {
+        console.log(line);
+      }
       for (const name of readdirSync(join(required(args, '--out'), 'files', version))) console.log(`  ${version}/${name}`);
       for (const name of readdirSync(join(required(args, '--out'), 'feed'))) console.log(`  ${name}`);
       return;

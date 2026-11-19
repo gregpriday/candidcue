@@ -414,6 +414,30 @@ describe('a release is published through the origin it was staged for', () => {
     // Trailing slashes trimmed the way the script's own releasesUrl() does.
     expect(`${feed.DEFAULT_PUBLIC_URL.replace(/\/+$/, '')}/releases/`).toBe(base);
   });
+
+  /*
+   * A dry run never publishes, so the staging log is where the owner reads
+   * which origin the SPEAKING_GLASS_PUBLIC_URL variable produced (#451).
+   */
+  it('says in the staging log which origin it staged for, and where it came from', () => {
+    expect(feed.originReport(feed.DEFAULT_PUBLIC_URL, { fromVariable: false })).toEqual([
+      'origin: https://updates.speakingglass.com/releases/ (the default; SPEAKING_GLASS_PUBLIC_URL is not set)',
+    ]);
+    expect(feed.originReport(`${feed.DEFAULT_PUBLIC_URL}/`, { fromVariable: true })).toEqual([
+      'origin: https://updates.speakingglass.com/releases/ (from SPEAKING_GLASS_PUBLIC_URL)',
+    ]);
+  });
+
+  it('warns when the variable points staging anywhere installed copies do not poll', () => {
+    for (const origin of [PUBLIC, 'https://updates.candidcue.com']) {
+      const lines = feed.originReport(origin, { fromVariable: true });
+      expect(lines[0]).toBe(`origin: ${origin}/releases/ (from SPEAKING_GLASS_PUBLIC_URL)`);
+      expect(lines).toHaveLength(2);
+      expect(lines[1]).toMatch(/^::warning title=Unexpected update origin::/);
+      expect(lines[1]).toContain('installed copies poll https://updates.speakingglass.com/releases/');
+      expect(lines[1]).toContain('SPEAKING_GLASS_PUBLIC_URL');
+    }
+  });
 });
 
 describe('only the newest stable release may be called Latest', () => {
