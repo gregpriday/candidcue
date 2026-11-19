@@ -174,11 +174,12 @@ publishes Windows or Linux builds**, dry-run `release-windows.yml` and
 Windows and Linux drill in §7 before tagging: nothing after the tag waits for
 it. A wording fix that drill calls for changes the commit, so it goes through
 `develop` and a new release merge, and the dry run is repeated on the new one.
-Then tag that commit:
+Note the SHA the dry runs built, then tag that commit, and only that one:
 
 ```bash
 git fetch origin
 git switch -C main origin/main # the release merge, and nothing after it
+git rev-parse HEAD             # the SHA the dry runs built? if main moved, stop and dry-run the new tip
 pnpm version:tag v1.0.0-rc.2   # the tag must name the version the artifact reports
 pnpm notes:check v1.0.0-rc.2   # CHANGELOG.md must describe it
 git tag -s v1.0.0-rc.2 -m "Speaking Glass 1.0.0-rc.2"
