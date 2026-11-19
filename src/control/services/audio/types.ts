@@ -47,7 +47,7 @@ export interface PermissionsLike {
 
 /**
  * Minimal analyser surface (subset of `AnalyserNode`). The concrete graph
- * must never be routed to speakers — analysis only (spec §28.4).
+ * must never be routed to speakers — analysis only.
  */
 export interface AnalyserLike {
   readonly fftSize: number;

@@ -3,11 +3,11 @@
  * stage.
  *
  * ---------------------------------------------------------------------------
- * WHAT THIS REPLACED, AND WHY
+ * A READOUT, NOT A GATE
  * ---------------------------------------------------------------------------
- * There was a full-screen microphone check here: it opened its own capture
- * between the stage going full screen and the transport opening, and it refused
- * to start the take until it had heard a voice it approved of.
+ * Do not put a pre-take microphone check back in front of the take. There was
+ * a full-screen one here: it opened its own capture before the recogniser, and
+ * it refused to start the take until it had heard a voice it approved of.
  *
  * It was too eager to be believed. Two and a half seconds of silence — which is
  * how long it takes to read the sentence asking you to speak — and it announced
@@ -29,16 +29,16 @@
  * ---------------------------------------------------------------------------
  * Deliberately few, because every fault state is an interruption:
  *
- *   • no audio — the input is gone (§28.6 reports it), the level frames have
- *     stopped arriving, or none ever did;
+ *   • no audio — the input is gone (the device watcher reports it), the
+ *     level frames have stopped arriving, or none ever did;
  *   • not heard — several seconds of SPEECH have gone by with no recogniser
  *     text at all. That is the failure this whole idea exists for: the mic
  *     works, the meter moves, and the script does not follow because nothing is
- *     coming back off the socket.
+ *     coming back from the recogniser.
  *
  * What it deliberately does NOT report: quiet audio, hot audio, gaps between
- * words. Those are Preflight's job, on a screen with room to explain them, and
- * the presenter mid-take can act on none of them.
+ * words. Those are Settings › Audio's job, on a screen with room to explain
+ * them, and the presenter mid-take can act on none of them.
  *
  * Pure and time-injected, so the decision — which is the part that can be
  * subtly wrong — is unit-testable without a microphone or a wall clock. The
@@ -103,7 +103,7 @@ export type VoicePillFault = 'no_audio' | 'not_heard' | 'offline';
 /** What the session knows that the level frames cannot say on their own. */
 export interface VoicePillConditions {
   /**
-   * §28.6 — the DEVICE is gone: unplugged, muted in hardware, refused.
+   * The DEVICE is gone: unplugged, muted in hardware, refused.
    *
    * Deliberately NOT the session's `inputDeviceLost` flag, which is also raised
    * by `SilentInputDetector` after five seconds without signal. Wiring that
@@ -115,13 +115,14 @@ export interface VoicePillConditions {
    */
   deviceLost: boolean;
   /**
-   * The transcription transport is down for good (not merely reconnecting).
+   * The recogniser session is down for good (offline, not merely reporting a
+   * recoverable failure).
    *
-   * Without it a pill that had already confirmed and faded would stay silently
-   * confirmed through a dead socket until four more seconds of speech happened
-   * to accumulate — and if the presenter stopped before that, forever.
-   * Reconnecting is deliberately excluded: it is usually over in a second, and
-   * the Live status line already reports it.
+   * Without it a pill that had already confirmed would stay silently confirmed
+   * through a dead session until four more seconds of speech happened to
+   * accumulate — and if the presenter stopped before that, forever. A
+   * recoverable failure is deliberately excluded: the Live status line already
+   * reports it.
    */
   transportOffline: boolean;
   /**
@@ -222,7 +223,7 @@ export function reduceVoicePillLevel(
   const peakAtMs = expired || rising ? nowMs : state.peakAtMs;
 
   /*
-   * The trace is drawn against the held peak, exactly as the Preflight meter is
+   * The trace is drawn against the held peak, exactly as the Settings meter is
    * (see METER_REFERENCE_PEAK): raw RMS from an ordinary microphone at
    * conversational distance sits around 0.05–0.15, and a waveform drawn from
    * that directly is a flat line that says "we cannot hear you" while the
@@ -253,7 +254,7 @@ export function reduceVoicePillLevel(
  * answered, which is the entire claim being made; waiting for a final would
  * hold the tick back by another second for no additional proof.
  *
- * Empty text is not evidence: the transport emits empty partials while an
+ * Empty text is not evidence: the recogniser emits empty partials while an
  * utterance is opening, and treating those as words coming back would confirm a
  * session that has transcribed nothing.
  */
@@ -397,7 +398,7 @@ export function voicePillVisible(state: VoicePillState): boolean {
 }
 
 /**
- * The reading in words (§20: colour is never the only signal).
+ * The reading in words (colour is never the only signal).
  *
  * Short enough to sit inside a pill, and phrased as an observation rather than
  * an instruction — the presenter is mid-take and there is nothing here they are
@@ -419,10 +420,8 @@ export function voicePillLabel(state: VoicePillState): string {
 /**
  * Everything the stage needs to draw, in one pure step.
  *
- * No clock any more. Every field here is now a function of the state alone —
- * `tickVoicePill` is where time enters, and it already folds it in. The `nowMs`
- * this used to take was read by the confirmation fade and nothing else, so
- * keeping it would leave callers passing a timestamp that decides nothing.
+ * No clock: every field here is a function of the state alone —
+ * `tickVoicePill` is where time enters, and it already folds it in.
  */
 export function voicePillView(
   state: VoicePillState,

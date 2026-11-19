@@ -1,6 +1,6 @@
 <!--
   Compact 32px icon control. `label` is mandatory — it becomes the accessible
-  name and tooltip (spec §20).
+  name and tooltip.
 
   `compact` is the 28px tier (`--toolbar-control-h`), the size of a small
   `Button` and of every control in the editor's 36px formatting row. A 32px
@@ -102,7 +102,7 @@
     color: var(--text-primary);
   }
   /*
-   * A press does not shrink (§23.5, §9.3), and it does not sink either.
+   * A press does not shrink, and it does not sink either.
    *
    * Icon buttons come in rows of five or six, and a row of shrinking squares is
    * the clearest tell that a desktop toolbar was built out of web components.

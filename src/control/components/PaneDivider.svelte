@@ -1,12 +1,11 @@
 <!--
-  A draggable boundary between two panes (desktop refinement §21.1).
+  A draggable boundary between two panes.
 
   ---------------------------------------------------------------------------
   WHY THIS EXISTS AT ALL
   ---------------------------------------------------------------------------
-  Every side rail in this application used to be `flex: 0 0 264px` with a media
-  query that hid it below some width. That is a LAID-OUT application: the
-  designer decided how wide the outline is and the user lives with it. A desktop
+  A fixed-width rail hidden below some width makes a LAID-OUT application: the
+  designer decides how wide the outline is and the user lives with it. A desktop
   tool is an OPERATED one — you drag the rail to suit the script you are working
   on, and it is still that width tomorrow.
 
@@ -22,8 +21,8 @@
   KEYBOARD, BECAUSE A SEPARATOR IS A CONTROL
   ---------------------------------------------------------------------------
   `role="separator"` with `aria-valuenow` is the ARIA window-splitter pattern,
-  and it comes with an obligation: arrow keys must move it. §23.1 lists splitter
-  keyboard resize as a requirement rather than a nicety, and it is the one
+  and it comes with an obligation: arrow keys must move it. Splitter keyboard
+  resize is a requirement rather than a nicety, and it is the one
   affordance a pointer-only implementation silently removes from anybody who
   cannot drag. Arrows step by 16px, Shift+arrows by 64, Home/End go to the
   extremes, and Enter restores the default — the same thing a double-click does.
@@ -52,8 +51,8 @@
   THE DRAG IS NOT THE WRITE
   ---------------------------------------------------------------------------
   `onresize` fires per pointer frame so the layout tracks the cursor; `oncommit`
-  fires once when the gesture ends. Writing storage per frame was the specific
-  thing §21.1 asks not to do, and on a 120Hz trackpad it is a JSON serialise per
+  fires once when the gesture ends. Storage is never written per frame: on a
+  120Hz trackpad that would be a JSON serialise per
   8ms in the middle of the one gesture the user is judging the app's
   responsiveness by. The workspace store debounces its own writes, so a caller
   that writes through it needs no `oncommit` at all — and none of them pass one,
@@ -394,8 +393,8 @@
   separator with `aria-valuenow` is the ARIA WINDOW SPLITTER — the one variant of
   the role that is explicitly focusable and explicitly keyboard-operable. Silencing
   the rule rather than dropping the tabindex, because dropping it is what would
-  actually break accessibility: §23.1 lists splitter keyboard resize as a
-  requirement, and a splitter nobody can focus is a pane only a pointer can move.
+  actually break accessibility: splitter keyboard resize is a requirement,
+  and a splitter nobody can focus is a pane only a pointer can move.
 -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

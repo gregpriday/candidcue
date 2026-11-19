@@ -1,5 +1,5 @@
 <!--
-  §153: pick a language, and fetch the model that serves it.
+  Pick a speech language, and fetch the model that serves it.
 
   ONE component for two screens. Welcome asks the question at first run and
   Settings changes the answer afterwards, but the state machine underneath is
@@ -28,12 +28,12 @@
   WHAT THIS SHOWS BEFORE ANYTHING DOWNLOADS
   -----------------------------------------
   The transfer size, the size on disk, and the host the bytes come from. All
-  three are named by §153 as things worth knowing on a metered connection, and
+  three are worth knowing on a metered connection, and
   all three come from Rust rather than being restated here — the origin in
   particular is derived from the function the downloader itself uses, so this
   cannot name a host the download does not contact.
 
-  The licence is shown and never gated on. §153 is explicit that attribution is
+  The licence is shown and never gated on. Attribution is
   an obligation the app carries, not a decision to put in front of the user, so
   there is no accept step and no checkbox anywhere in this flow.
 
@@ -687,7 +687,8 @@
 {/snippet}
 
 <!--
-  The three facts §153 asks for, before any button that spends bandwidth, and
+  The transfer size, the disk size and the host, before any button that spends
+  bandwidth, and
   the disk figure afterwards — "how much disk is this using?" is as real a
   question as "how much will this cost me to fetch?". Once the model is
   installed the transfer size is history, so the line stops quoting it.
@@ -717,7 +718,7 @@
 
 <!--
   The attribution, stated and not gated. It also travels in the model
-  directory as ATTRIBUTION.md (§157); this is the copy a user can read without
+  directory as ATTRIBUTION.md; this is the copy a user can read without
   going to look for a file.
 -->
 {#snippet attribution(option: SpeechLanguageOption)}
@@ -844,7 +845,7 @@
             }))}
             onchange={(value) => {
               // Looking is not choosing. Changing this starts no download and
-              // saves no setting — §153 wants the sizes seen before anything
+              // saves no setting — the sizes are seen before anything
               // happens.
               highlighted = value;
               confirmingDelete = null;
@@ -859,7 +860,7 @@
         {#if !activeOption}
           <p class="line">No language this version can follow is selected.</p>
         {:else if shown && !shown.active}
-          <!-- §153: which language is listening has to survive looking at
+          <!-- Which language is listening has to survive looking at
                another one. Welcome's row owns the readiness, so this names the
                choice and claims nothing about whether it can follow yet. -->
           <p class="line">
@@ -868,8 +869,8 @@
         {/if}
         {#if shown && status}
           {#if !shown.active}{@render inspected(shown, status)}{/if}
-          <!-- Language, then what it costs, then the button that spends it:
-               the order §153 asks for, in reading order as well as on screen. -->
+          <!-- Language, then what it costs, then the button that spends it,
+               in reading order as well as on screen. -->
           {@render facts(shown, status)}
           {#if busy}{@render progress(shown, status)}{/if}
           <!-- Welcome's row says the language needs downloading; only this
@@ -892,7 +893,7 @@
       {:else}
         <div class="card">
           <!--
-            §153 asks for "a clear indication of which language is active", and
+            Which language is active has to stay clearly indicated, and
             that has to survive the user looking at a DIFFERENT row — so this
             line is about the active language whatever the dropdown shows.
           -->
@@ -915,7 +916,7 @@
                   meanwhile.
                 </p>
               {:else if isDamaged(active)}
-                <!-- §153: a model the app expects and cannot find must fail
+                <!-- A model the app expects and cannot find must fail
                      somewhere the user can act on it. This is that screen. -->
                 <p class="summary-body" role="alert">
                   {activeName}’s speech data on this machine is damaged, so voice following cannot
@@ -952,8 +953,8 @@
               <div class="facts-row">
                 {@render facts(shown, status)}
                 <!--
-                  §153 asks for a way to remove a model that is no longer
-                  wanted, and the language on screen is the commonest thing
+                  A model that is no longer wanted can be removed, and the
+                  language on screen is the commonest thing
                   somebody wants to reclaim — including the active one, which is
                   the only model most installations have. It sits on the disk
                   line because the disk is what it changes.

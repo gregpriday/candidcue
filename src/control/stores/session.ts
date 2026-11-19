@@ -1,14 +1,14 @@
 /**
- * Live session store (spec §15, §45.2 RealtimeStore/TrackingStore facade for
- * the Live screen). Owns session identity, the alignment feed, the realtime
- * voice pipeline, §15.3 pause semantics, the elapsed clock, the transcript
- * tail, and the F.17 summary.
+ * Live session store. Owns session identity, the alignment feed, the voice
+ * pipeline, pause semantics, the elapsed clock, the transcript tail, and the
+ * take summary.
  *
- * Note what this store no longer does: it does not carry motion to the stage.
- * The alignment engine publishes snapshots to the stage directly from Rust, so
- * control is out of the motion path entirely and receives its own copy purely
- * to report on. A take summary built here can therefore never disagree with
- * what the presenter saw — both are derived from the same published snapshots.
+ * Motion is not computed here, but a take's motion is fed from this store:
+ * `Live.svelte` embeds `StageApp` in this window and hands it this store's
+ * copy of each alignment snapshot. The take summary is built from the same
+ * published snapshots, so it reports the run the stage was fed — though the
+ * stage may aim at the observed position while the summary records the
+ * confirmed one.
  */
 import { derived, get, writable } from 'svelte/store';
 import type {
@@ -90,13 +90,12 @@ import { osCopy } from '../lib/os-copy';
  */
 const TOAST_AUDIO_DROPPED = 'audio-dropped';
 /**
- * §28.2: the take is running on an input the operator did not choose.
+ * The take is running on an input the operator did not choose.
  *
  * A CONDITION, not an event, so it is keyed: it stands until the operator
- * picks a different input or the take ends. It used to be an ordinary `info`
- * toast, which meant it expired on the four-second default — a notice whose
- * entire body is an instruction ("pick another input") that removed itself
- * before the instruction could be carried out.
+ * picks a different input or the take ends. An ordinary timed toast would
+ * expire before its one instruction ("pick another input") could be carried
+ * out.
  */
 const TOAST_INPUT_FELL_BACK = 'input-fell-back';
 
@@ -130,8 +129,8 @@ export interface SessionCounts {
  *   - `restOfScript` — from where the pass began to the end of the document
  *     ("From here", "From last ending", or a retake on an unbounded take).
  *
- * It used to be the whole script, always, so a part read to its last word
- * scored a quarter and a take started near the end could never look complete.
+ * Never simply the whole script: a part read to its last word would score a
+ * quarter, and a take started near the end could never look complete.
  */
 export type CoverageScope = 'script' | 'part' | 'restOfPart' | 'restOfScript';
 
@@ -142,8 +141,8 @@ export interface SessionSummary {
    * Distinct sections the take was in, across every pass (#285).
    *
    * A section is a PART on a divided script and an outline heading otherwise —
-   * see `sectionIdForToken`. It used to be distinct BLOCKS, and every paragraph
-   * is a block, so two headings over six paragraphs reported six.
+   * see `sectionIdForToken`. Not distinct BLOCKS: every paragraph is a block,
+   * so two headings over six paragraphs would report six.
    *
    * The session row's `metrics.sectionsReached` is this same number; both are
    * taken from one value in `stopSession`.
@@ -153,20 +152,15 @@ export interface SessionSummary {
   reconnects: number;
   endingLocation: string;
   /**
-   * Times the operator JUMPED the script — sentence steps and outline moves.
+   * Times the operator moved the script by hand — `counts.jumps`: sentence
+   * steps, outline moves, an accepted suggestion, and scrolling the stage by
+   * wheel or key (`anchorManualScroll`). Restarting a paragraph books a retake
+   * instead.
    *
-   * Named for what `counts.jumps` actually counts, which is narrower than
-   * "everything the operator did by hand": a wheel scroll on the stage is
-   * deliberately not counted (the tracker re-acquires around it and no
-   * correction was requested), and restarting a paragraph books a retake
-   * instead. Calling it "manual corrections" would have promised a total that
-   * this number is not.
-   *
-   * Already counted and already persisted onto the session record as
-   * `manualCorrectionCount`; it simply was never shown to the person doing the
-   * jumping. It is the plainest measure of how hard following worked — a take
-   * that needed no help and one that needed eleven are the same take by every
-   * other number on this summary.
+   * Also persisted onto the session record as `manualCorrectionCount`. It is
+   * the plainest measure of how hard following worked — a take that needed no
+   * help and one that needed eleven are the same take by every other number on
+   * this summary.
    */
   manualJumps: number;
   /**
@@ -227,8 +221,7 @@ export interface SessionSummary {
    */
   microphoneRefused: boolean;
   /**
-   * Where this take stopped, and the start of the section it stopped in
-   * (CCUX-008, CCUX-016).
+   * Where this take stopped, and the start of the section it stopped in.
    *
    * Both carried on the summary rather than re-read from the session row,
    * because the summary is what "Present again from here" is offered on and a
@@ -243,10 +236,10 @@ export interface SessionSummary {
   sectionStartTokenIndex: number | null;
   /**
    * The part this take was recording, and whether the presenter read to the end
-   * of it (§parts).
+   * of it.
    *
-   * `part` is null for a take that was not bounded to one — every take before
-   * §parts, and every "from the beginning" launch since. `partComplete` is then
+   * `part` is null for a take that was not bounded to one, such as every "from
+   * the beginning" launch. `partComplete` is then
    * false, and both the "reached the end" line and the "record the next part"
    * action are hidden rather than answered about a part that does not exist.
    *
@@ -290,7 +283,7 @@ export interface FollowingTime {
 }
 
 /**
- * The part a take is bounded to (§parts).
+ * The part a take is bounded to.
  *
  * A reduced {@link ScriptPart} — identity, name, position and span, and nothing
  * derived. The session store must not carry a second opinion about how a script
@@ -312,7 +305,7 @@ export interface SessionState {
   scriptTitle: string;
   mode: SessionMode;
   /**
-   * This take is a rehearsal (§practice).
+   * This take is a rehearsal.
    *
    * Beside `mode` rather than inside it, because it is a different question.
    * `mode` says how the script MOVES — a practice follows a voice exactly as a
@@ -331,7 +324,7 @@ export interface SessionState {
    */
   cameraAboveScreen: boolean;
   /**
-   * The part this take is recording, or null for an unbounded one (§parts).
+   * The part this take is recording, or null for an unbounded one.
    *
    * ADVISORY. It does not truncate the document, gate the recogniser or stop
    * the take — the engine is still given the whole script and the presenter can
@@ -346,8 +339,8 @@ export interface SessionState {
    */
   part: TakePart | null;
   /**
-   * The part after {@link SessionState.part}, or null when this is the last one
-   * (§parts).
+   * The part after {@link SessionState.part}, or null when this is the last
+   * one.
    *
    * Resolved at LAUNCH, from the same compile the take is running on, and then
    * carried. The alternative is to look it up when the summary asks — but by
@@ -357,7 +350,7 @@ export interface SessionState {
    */
   nextPart: TakePart | null;
   /**
-   * The take has reached the end of the part (§parts).
+   * The take has reached the end of the part.
    *
    * LATCHED. It is set the first time the confirmed position reaches the part's
    * last token and never cleared while the take runs — the aligner can and does
@@ -389,13 +382,13 @@ export interface SessionState {
   displayLabel: string;
   startedAtMs: number;
   elapsedSeconds: number;
-  /** False until the user (or a voice command) starts prompting (§9.1). */
+  /** False until prompting starts — which `startLiveSession` does itself. */
   prompting: boolean;
   paused: PauseKind;
   stageBlanked: boolean;
   voiceFollow: boolean;
   /**
-   * §48. Following is off because somebody switched it off — the dock's own
+   * Following is off because somebody switched it off — the dock's own
    * control, the transport checkbox, or the Live panel's button.
    *
    * Narrower than `!voiceFollow`, which also goes false for an automatic hold
@@ -407,36 +400,37 @@ export interface SessionState {
   connection: 'connected' | 'reconnecting' | 'offline';
   micState: 'live' | 'muted' | 'disconnected';
   /**
-   * §28.2/§28.6: the INPUT is the thing that failed — unplugged, silent, or
-   * refused — as opposed to the realtime transport dying, which also leaves
-   * `micState` at 'disconnected'. Only this one is fixable by choosing another
-   * device, so it is what gates the Live screen's input picker. Offering a
-   * microphone switch as the cure for a rejected API key would be the same
+   * The INPUT is the thing that failed — unplugged or silent — as opposed to
+   * the recogniser session failing, which also leaves `micState` at
+   * 'disconnected'. A permission refusal is `microphoneRefused` instead, and
+   * leaves this false. Only a failed input is fixable by choosing another
+   * device, so this (with `usingFallbackInput`) is what gates the Live
+   * screen's input picker. Offering a microphone switch
+   * as the cure for a missing speech model would be the same
    * unfollowable-instruction defect in a new place.
    */
   inputDeviceLost: boolean;
   /**
-   * §28.2 — the take is capturing, but not from the input that was asked for.
+   * The take is capturing, but not from the input that was asked for.
    *
    * Distinct from `inputDeviceLost`, and the distinction is the point: nothing
    * failed here. The chosen device was busy, the system default was opened
    * instead, and the take is running normally on audio the operator did not
    * choose. `micState` stays 'live' because it IS live — flagging this as a
-   * fault would be the false accusation §28.6 exists to avoid.
+   * fault would be a false accusation of working hardware.
    *
    * It is a separate flag because it must still OFFER THE PICKER. The notice
-   * for this condition says "pick another input", and until this existed the
-   * picker was gated on `inputDeviceLost` alone — so the one instruction the
-   * app gave had no control behind it, which is the same unfollowable-
-   * instruction defect §115 was filed about.
+   * for this condition says "pick another input", and a picker gated on
+   * `inputDeviceLost` alone would leave that one instruction with no control
+   * behind it — the unfollowable-instruction defect again.
    */
   usingFallbackInput: boolean;
   /**
    * #303 — the OS refused this application the microphone.
    *
-   * Not `inputDeviceLost`, and the distinction is the fix. Every `MIC_*` start
-   * failure used to raise that flag, so a refusal offered the input picker —
-   * and another input cannot answer a refusal, only the privacy pane can. This
+   * Not `inputDeviceLost`, and the distinction is the fix. Raising that flag
+   * for a refusal would offer the input picker — and another input cannot
+   * answer a refusal, only the privacy pane can. This
    * gates that remedy instead, and is cleared only once a retry has actually
    * reopened capture: opening System Settings proves nothing.
    */
@@ -469,7 +463,7 @@ export interface SessionState {
    */
   heardAnything: boolean;
   /**
-   * The take moved to a different panel after it opened (CCUX-010).
+   * The take moved to a different panel after it opened.
    *
    * Null while the take is on the panel it was measured against. Non-null names
    * the panel it is on NOW, and is a statement about typography rather than a
@@ -477,16 +471,16 @@ export interface SessionState {
    * were resolved once at the opening, and a take cannot re-resolve them
    * without rebuilding the stage document underneath the presenter.
    *
-   * `start-take.ts` has recorded this as a known gap for as long as the reader
-   * has existed: "a reader who drags their window to another display MID-TAKE
-   * and changes nothing else still keeps the opening panel's scale". Silently
-   * keeping it is the part that is hard to understand, so now it says so.
+   * `start-take.ts` records this as a known gap: "a reader who drags their
+   * window to another display MID-TAKE and changes nothing else still keeps the
+   * opening panel's scale". Silently keeping it is the part that is hard to
+   * understand, so this says so.
    */
   displayChangedTo: string | null;
   /** Exact stage instrument payload, rendered locally in single-window mode. */
   voicePill: StageVoicePillPayload | null;
   /**
-   * §33.10. The answer the glass gives to the last command pressed mid-take —
+   * The answer the glass gives to the last command pressed mid-take —
    * "Pricing", "170 wpm", "Mirrored for this take" — read by the stage's
    * acknowledgement chip through its bridge. One slot: a newer answer replaces
    * the last, and `seq` makes the same answer twice count as two.
@@ -511,14 +505,14 @@ export interface SessionState {
    * What the stage is prompting at RIGHT NOW, for the in-session sheet to open
    * on.
    *
-   * The saved settings would be the wrong source: `+`/`-` and a voice command
-   * already move the size mid-take, so a sheet seeded from the document would
+   * The saved settings would be the wrong source: `+`/`-` already move the
+   * size mid-take, so a sheet seeded from the document would
    * show a number the glass disagrees with — and the first slider touched would
    * snap the type back to it.
    */
   stageAppearance: StageAppearance;
   /**
-   * §17.2: a saved rig decided this take's appearance, so none of it is the
+   * A saved rig decided this take's appearance, so none of it is the
    * in-session sheet's to set — see `isRigResolvedStage`.
    *
    * Never true for a reading window, though one always runs a profile: its
@@ -549,7 +543,7 @@ export interface SessionState {
   /** The take's size ceiling, fixed at its opening size — see `takeFontCeilingPx`. */
   stageFontCeilingPx: number;
   /**
-   * The fixed-pace transport (§autoscroll): the fallback for a take that voice
+   * The fixed-pace transport: the fallback for a take that voice
    * following cannot carry.
    *
    * Held whole rather than as two fields because it is one instruction and the
@@ -634,12 +628,11 @@ let inputFallbackCount = 0;
 /**
  * The Rust coordinator's session generation for this take.
  *
- * C1: this used to default to a hard-coded 1 while nothing ever invoked
- * `start_session`, so the coordinator stayed at its `Default` of 0 and
- * `validate_stage_payload_header` dropped every snapshot control published.
- * Rust assigns it now (`AppCoordinator::begin_session`) and control adopts
- * whatever it is handed — 0 means "no session record", which is only ever true
- * in browser dev.
+ * Rust assigns it (`AppCoordinator::begin_session`) and control adopts
+ * whatever it is handed. A generation control invents — it once defaulted to a
+ * hard-coded 1 — disagrees with the coordinator, and
+ * `validate_stage_payload_header` then drops every snapshot control publishes.
+ * 0 means "no session record", which is only ever true in browser dev.
  */
 let sessionGeneration = 0;
 let stageSettings: StageSettings | null = null;
@@ -720,7 +713,7 @@ let stageRenderedFontSizePx: number | null = null;
  */
 let takePresentationMode: PresentationMode | null = null;
 /**
- * The panel this take's geometry was resolved against (§52), or null when the
+ * The panel this take's geometry was resolved against, or null when the
  * displays could not be enumerated. Kept because a rebuild without it silently
  * demotes a calibrated rig to the uncalibrated layout — the type would jump the
  * first time somebody touched a slider, on the one screen where a jump is most
@@ -760,7 +753,7 @@ let takeMirror: PanelMirror | null = null;
 let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
 
 /* ---------------------------------------------------------------------------
- * §36.3 the pass being performed
+ * The pass being performed
  *
  * A take is one or more passes: a restarted paragraph closes the pass that was
  * running and opens the next. The end-of-take summary reports on the LAST pass,
@@ -773,7 +766,7 @@ interface ActiveTake {
   startedAtMs: number;
   startTokenIndex: number;
   /**
-   * §36.3 unique coverage: the furthest the CONFIRMED anchor ever reached.
+   * Unique coverage: the furthest the CONFIRMED anchor ever reached.
    *
    * A high-water mark rather than the last position, which is what makes this
    * honest — jumping to the closing line does not retroactively cover the
@@ -781,7 +774,7 @@ interface ActiveTake {
    * read.
    */
   maxConfirmedToken: number;
-  /** §36.3 availability: milliseconds spent in `following`. */
+  /** Availability: milliseconds spent in `following`. */
   followingMs: number;
   /** Wall time of the previous snapshot, for accumulating `followingMs`. */
   lastSnapshotAtMs: number | null;
@@ -895,11 +888,10 @@ function noteSuspension(s: SessionState): void {
 state.subscribe(noteSuspension);
 
 /**
- * Words the recogniser returned this take (§36 summary).
+ * Words the recogniser returned this take, for the summary.
  *
- * The end-of-take summary reported duration, sections, retakes and cost —
- * every one of which reads the same whether the microphone was working or the
- * take was nine seconds of silence. There was nothing in it that answered "did
+ * Duration, sections and retakes read the same whether the microphone was
+ * working or the take was nine seconds of silence. This is what answers "did
  * it hear me", which is the first thing anyone wants to know and the only one
  * that distinguishes a working session from a broken one.
  */
@@ -914,14 +906,14 @@ function countSpokenWords(text: string): number {
 }
 
 /**
- * Polls the panel the presenting window is on (CCUX-010).
+ * Polls the panel the presenting window is on.
  *
- * POLLED, and it has to be. Rust already watches the display TOPOLOGY and emits
- * on plug/unplug/rearrange, but dragging a window between two monitors that
- * were both already there changes no topology at all — there is no event in
- * this app for "the window moved". Two seconds is slow enough to cost nothing
- * and fast enough that the presenter is told before they have read a paragraph
- * at the wrong size.
+ * POLLED, and it has to be. Rust emits the display-change event on
+ * plug/unplug/rearrange, and forwards the control window's moves onto it only
+ * while NOT presenting — so dragging a presenting window between two monitors
+ * that were both already there emits nothing at all. Two seconds is slow
+ * enough to cost nothing and fast enough that the presenter is told before
+ * they have read a paragraph at the wrong size.
  */
 let displayWatchTimer: ReturnType<typeof setInterval> | null = null;
 const DISPLAY_WATCH_INTERVAL_MS = 2000;
@@ -936,12 +928,11 @@ export interface StartSessionInput {
   sentences: SentenceUnit[];
   totalTokens: number;
   /**
-   * Where this take begins, already snapped to a readable unit (CCUX-014).
+   * Where this take begins, already snapped to a readable unit.
    *
-   * Absent means the beginning, which is what every take got before start
-   * points existed. The SNAPPING is the caller's job and must already have
-   * happened: `lib/take-start-point.ts` owns it, so an arbitrary caret offset
-   * can never reach the aligner as an anchor inside half a clause.
+   * Absent means the beginning. The SNAPPING is the caller's job and must
+   * already have happened: `lib/take-start-point.ts` owns it, so an arbitrary
+   * caret offset can never reach the aligner as an anchor inside half a clause.
    */
   startTokenIndex?: number;
   /** Integration inputs — optional so the store degrades in browser dev. */
@@ -966,13 +957,13 @@ export interface StartSessionInput {
    * thing that is right.
    */
   presentationMode?: PresentationMode;
-  /** §practice. A rehearsal: the whole document, and no report at the end. */
+  /** A rehearsal: it may be bounded to a part, and no summary at the end. */
   practice?: boolean;
   /** #238. Opened under the camera above this screen; see `cameraAboveScreen`. */
   cameraAboveScreen?: boolean;
-  /** §parts. The part this take is recording; absent means the whole script. */
+  /** The part this take is recording; absent means the whole script. */
   part?: TakePart | null;
-  /** §parts. The part after it, so the summary can offer to record it next. */
+  /** The part after it, so the summary can offer to record it next. */
   nextPart?: TakePart | null;
   /** The panel the geometry was resolved against; see `stageDisplay`. */
   stageDisplay?: DisplayDescriptor | null;
@@ -980,19 +971,19 @@ export interface StartSessionInput {
   micDeviceId?: string;
   /** The name `micDeviceId` was remembered by, to find it again under a new id. */
   micDeviceLabel?: string;
-  /** §28.3 capture processing (Settings → Audio / Preflight → Advanced). */
+  /** Capture processing (Settings › Audio). */
   audioProcessing?: {
     echoCancellation?: boolean;
     noiseSuppression?: boolean;
     autoGainControl?: boolean;
   };
   /**
-   * §28.4 local voice-detection sensitivity (0–1, 0.5 = A.6 defaults). Omitted
+   * Local voice-detection sensitivity (0–1; 0.5 is the default). Omitted
    * means "read the saved setting", which is what production does — the value
    * is only ever passed explicitly by a preview or a test.
    */
   vadSensitivity?: number;
-  /** §47 follow settings for this session; defaults to the saved settings. */
+  /** Follow settings for this session; defaults to the saved settings. */
   following?: FollowingSettings;
 }
 
@@ -1038,11 +1029,8 @@ export function startLiveSession(input: StartSessionInput): string {
     stageSettings?.fontSizePx ?? takeTeleprompter.fontSizePx,
   );
   resetTranscriptCounters();
-  // §60: evidence never crosses a take boundary. A fresh watcher is cheaper and
-  // more obviously correct than resetting one, and it is the same lifetime as
-  // every other take-scoped detector in this store.
   /*
-   * Where this take begins (CCUX-014). Clamped, because a caller handing an
+   * Where this take begins. Clamped, because a caller handing an
    * index past the end of the script would anchor the aligner outside the
    * token array it was given.
    */
@@ -1051,7 +1039,7 @@ export function startLiveSession(input: StartSessionInput): string {
     Math.min(Math.round(input.startTokenIndex ?? 0), Math.max(0, input.totalTokens - 1)),
   );
 
-  // Smooth-following store (§50.1): user-visible following state + §48 actions.
+  // Smooth-following store: user-visible following state and its actions.
   const following = input.following ?? currentFollowingSettings();
   smoothFollow.beginSession(sessionId, following);
   configureFollowActions(followActions);
@@ -1083,12 +1071,7 @@ export function startLiveSession(input: StartSessionInput): string {
     stagePresentationMode: takePresentationMode ?? 'prompter',
     stageFontCeilingPx: takeFontCeilingPx,
     /*
-     * The saved pace, and finally something that reads it.
-     *
-     * `fixedSpeedWpm` has been persisted through Rust and offered in Settings
-     * since before there was any motion path to spend it on — a setting with a
-     * writer and no reader, which is the defect the Settings screen keeps
-     * calling out in its own copy. This is the reader.
+     * The saved pace (`fixedSpeedWpm`, set in Settings), read at the opening.
      */
     autoScroll: {
       running: false,
@@ -1096,12 +1079,10 @@ export function startLiveSession(input: StartSessionInput): string {
     },
   });
 
-  // §36.3: the session's first pass opens with it — after the state above, so
+  // The session's first pass opens with it — after the state above, so
   // that it starts from this take's pause and follow switch, not the last one's.
   beginTake(startTokenIndex);
 
-  // Voice mode without a Tauri runtime has no realtime feed — keep the
-  // animated mock driver so browser dev stays demonstrable.
   // Voice mode without a Tauri runtime has no Rust to align in — keep the
   // animated mock driver so browser dev stays demonstrable.
   const useRealDriver = Boolean(input.compiled) && (isTauriRuntime() || input.mode !== 'voice');
@@ -1121,19 +1102,11 @@ export function startLiveSession(input: StartSessionInput): string {
   /*
    * Starting a take IS starting to prompt.
    *
-   * The worker driver pauses the aligner the instant it is built — §9.1, "hold
-   * position until the user explicitly starts prompting" — and a paused engine
-   * discards every transcript event before it looks at a token. Nothing on the
-   * take path ever resumed it. Only the `Start` button in the Live transport
-   * bar did, and a presenter who has just pressed `Present`, watched the stage
-   * open and begun speaking has no reason to believe a second, differently
-   * named button stands between them and a teleprompter that follows.
-   *
-   * What that cost: the microphone recorded, the provider transcribed, the
-   * ledger filled, "Words heard: 26" counted up — and every one of those words
-   * was dropped on the floor. "0 of 26 words (0%)", four takes running, with a
-   * summary card that showed the evidence and the result side by side and no
-   * hint of what sat between them.
+   * The driver is built gated: it publishes no snapshot (manual anchors
+   * aside) until `start()` opens it. When only a
+   * second, separate Start button resumed it, real takes recorded and
+   * transcribed while the text stood still — "Words heard: 26" beside "0 of 26
+   * words (0%)", four takes running.
    *
    * The explicit start survives as `Pause`, which is the control a presenter
    * actually reaches for. `Present` is the start.
@@ -1141,7 +1114,7 @@ export function startLiveSession(input: StartSessionInput): string {
   startPrompting();
 
   /*
-   * ANCHOR THE ALIGNER WHERE THE TAKE ACTUALLY BEGINS (CCUX-014).
+   * ANCHOR THE ALIGNER WHERE THE TAKE ACTUALLY BEGINS.
    *
    * Without this the engine opens its search at token 0 while the glass shows
    * a section six minutes down, so the first sentence the presenter reads is
@@ -1152,12 +1125,11 @@ export function startLiveSession(input: StartSessionInput): string {
    * chose this line and is about to read it. It resets evidence continuity in
    * the engine, so nothing from before the anchor can drag the cursor back.
    *
-   * Guarded, so a take from the beginning issues no command at all and its
-   * behaviour is bit-identical to what it was before start points existed.
+   * Guarded, so a take from the beginning issues no command at all.
    */
   if (startTokenIndex > 0) driver?.moveToToken(startTokenIndex);
 
-  // Voice pipeline: realtime transcription + command routing (§29, §33).
+  // Voice pipeline: on-device transcription for the take.
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
     // Before the pipeline, so the first level frame it produces has somewhere
     // to land and the pill is on the stage while the device is being acquired.
@@ -1175,19 +1147,19 @@ export function startLiveSession(input: StartSessionInput): string {
       deviceId: input.micDeviceId,
       ...(input.micDeviceLabel === undefined ? {} : { deviceLabel: input.micDeviceLabel }),
       audioProcessing: input.audioProcessing,
-      // §28.4: the slider had no reader at all. The saved value is the default
-      // so every caller of `startLiveSession` gets it, not only Preflight.
+      // The saved value is the default, so every caller of `startLiveSession`
+      // gets it.
       vadSensitivity: input.vadSensitivity ?? currentVadSensitivity(),
-      // §29.2 steps 1–2, enforced by the controller that specifies them rather
-      // than by whichever screen happened to run first.
+      // Flush the save and check the compile before voice starts, enforced by
+      // the controller rather than by whichever screen happened to run first.
       startSequence: buildStartSequenceGate(input),
-      // §29.2 step 9, the half that lives above the pipeline.
+      // Transcript recovery: the half that lives above the pipeline.
       onResetTranscriptState: () => {
         state.update((s) => ({ ...s, transcriptTail: [] }));
         resetTranscriptCounters();
       },
       /*
-       * The pill's waveform, from the ONE capture the take already owns (§5.3).
+       * The pill's waveform, from the ONE capture the take already owns.
        * A second `getUserMedia` for an indicator would contend with the take's
        * own stream — see `services/audio/ownership.ts` for what that costs.
        */
@@ -1198,9 +1170,10 @@ export function startLiveSession(input: StartSessionInput): string {
       /*
        * The device is about to be asked for. The pill's "no audio" window runs
        * from HERE rather than from the take's first instant, because everything
-       * before this line — the §29.2 gate, the permission check, the socket
-       * subscription — is time in which no capture has been attempted, and a
-       * cross that means "we have not asked yet" is a lie about the microphone.
+       * before this line — the start-sequence gate, the permission check, the
+       * event subscription — is time in which no capture has been attempted,
+       * and a cross that means "we have not asked yet" is a lie about the
+       * microphone.
        */
       onCaptureAttempt: () => {
         if (voicePill === null || pillEpoch !== voicePillEpoch) return;
@@ -1209,7 +1182,7 @@ export function startLiveSession(input: StartSessionInput): string {
       onTranscriptText: (text, final) => {
         // Words coming back is the only evidence that the whole chain works,
         // and it is what turns the pill's dot into a tick. Epoch-checked: a
-        // late partial from a superseded transport must not certify this take.
+        // late partial from a superseded pipeline must not certify this take.
         if (voicePill !== null && pillEpoch === voicePillEpoch) {
           voicePill = reduceVoicePillText(voicePill, text);
         }
@@ -1274,7 +1247,7 @@ export function startLiveSession(input: StartSessionInput): string {
         }
         if (final) {
           wordsInFlight = 0;
-          // §36 "did it hear me": was anything transcribed at all.
+          // "Did it hear me": was anything transcribed at all.
           wordsHeard += countSpokenWords(text);
         }
       },
@@ -1315,9 +1288,9 @@ export function startLiveSession(input: StartSessionInput): string {
            * The store initialises `connection: 'connected'` — an optimistic
            * placeholder, since nothing has connected yet — and the pipeline
            * announces `reconnecting` on its way to opening the very first
-           * socket. That transition satisfied the test below, so EVERY healthy
-           * take reported exactly one reconnect, from its first second, having
-           * lost nothing.
+           * recogniser session. That transition satisfied the test below, so
+           * EVERY healthy take reported exactly one reconnect, from its first
+           * second, having lost nothing.
            *
            * It cost more than a wrong number. "Reconnects: 1" appeared on every
            * summary of a take that was not working and was read, repeatedly, as
@@ -1345,13 +1318,13 @@ export function startLiveSession(input: StartSessionInput): string {
           };
         });
         if (connection === 'connected') everConnected = true;
-        // §59: an interrupted transcript is a first-class degraded state.
+        // An interrupted transcript is a first-class degraded state.
         smoothFollow.reportTranscriptStatus(
           connection === 'connected' ? 'live' : 'interrupted',
           connection === 'offline' ? 'Speech recognition is off.' : null,
         );
       },
-      // H5: transcription is untrustworthy — stop following visibly rather
+      // Transcription is untrustworthy — stop following visibly rather
       // than letting the stage drift on stale or absent speech.
       onFollowingHold: (held, reason) => {
         trace('hold', `${held ? 'held' : 'released'} — ${reason ?? 'none'}`);
@@ -1361,67 +1334,59 @@ export function startLiveSession(input: StartSessionInput): string {
         // fault it is.
         smoothFollow.setFollowingPaused(held, false);
         /*
-         * No toast. A hold is a STATE, and the Live status line already reports
-         * it — "Reconnecting — position held", "Microphone disconnected —
-         * position held" — accurately and with no history.
+         * No toast. A hold is a STATE, and the stage's hold ladder and audio
+         * readout already report it, as does `liveStatusLabel` ("Voice starting
+         * — position held", "Microphone disconnected — position held") —
+         * accurately and with no history.
          *
-         * A notification was the wrong instrument twice over. During a take the
-         * presenter is looking at the stage, full screen, with the control
-         * window behind it: the toast is invisible exactly when it is relevant.
+         * A notification is the wrong instrument twice over. During a take this
+         * window IS the prompter, so a toast is one more card over the script.
          * And because `danger` toasts never expire, an ordinary take — a few
-         * pauses between sentences, one transport blip — delivered the whole
-         * stack at once afterwards, describing a microphone no longer in use,
-         * on the summary screen of a take that had scored 96%.
-         *
-         * The stage's transcript bar is the live instrument now; the status
-         * line is the durable one. Neither accumulates.
+         * pauses between sentences, one blip — delivered the whole stack at
+         * once afterwards, describing a microphone no longer in use, on the
+         * summary screen of a take that had scored 96%.
          */
       },
-      // H5: a dead input is not a provider problem; the user must act.
+      // A dead input is not a recogniser problem; the user must act.
       onInputDeviceLost: (code) => {
-        // §12.7: device loss outranks every acoustic reading on the mic tile.
+        // Device loss outranks every acoustic reading on the mic tile.
         state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
         /*
          * The pill takes only the HARD half of this signal.
          *
-         * `MIC_NO_SIGNAL` is the §28.6 detector reporting five seconds without
-         * signal, which a presenter collecting their thoughts in a treated room
-         * produces several times a take. The status bar can afford to call that
-         * a disconnected input; a cross on the stage saying "No audio" cannot —
-         * it is the microphone check's false accusation with a longer fuse.
+         * `MIC_NO_SIGNAL` is the no-signal detector reporting five seconds
+         * without signal, which a presenter collecting their thoughts in a
+         * treated room produces several times a take. The status bar can afford
+         * to call that a disconnected input; a cross on the stage saying "No
+         * audio" cannot — it is the microphone check's false accusation with a
+         * longer fuse.
          */
         if (code !== 'MIC_NO_SIGNAL' && pillEpoch === voicePillEpoch) {
           voicePillDeviceLost = true;
         }
-        // §28.2/§28.6: the remedy named here is one the Live screen can
-        // actually perform — `switchMicrophone` below drives the transport's
-        // track replacement, and the take controls grow an input picker while
-        // `micState` is 'disconnected'.
+        // The remedy named here is one the Live screen can actually perform —
+        // `switchMicrophone` below drives the pipeline's input switch, and the
+        // take controls grow an input picker while the input is lost or a
+        // fallback input was chosen for it.
         /*
          * No toast: `micState: 'disconnected'` is what the take controls
          * render, and they grow the input picker that fixes it. The toast said
          * the same thing in a form that expired never and appeared behind the
          * stage.
          *
-         * §115: that used to be a promise nothing kept. The picker lived in the
-         * Live status bar, which renders only when NO take is running, so the
-         * one state it exists for — a microphone dying mid-take — was the one
-         * state it could not be reached in. It is now in the take-controls
-         * drawer, which is mounted for the duration of the take, and the
-         * attention dot on its tab is what points at it.
+         * The picker belongs in the take-controls drawer, which is mounted for
+         * the duration of the take, and the attention dot on its tab is what
+         * points at it. The Live status bar renders only when NO take is
+         * running, so a picker there cannot be reached in the one state it
+         * exists for — a microphone dying mid-take.
          */
       },
       /*
-       * §28.6: the input came back on its own — the mic was replugged, or the
-       * track unmuted. "Reconnect it and we resume" is a promise the product
-       * has to keep without being asked twice, so the pills clear themselves.
-       */
-      /*
-       * §28.2: the chosen device was busy, is not connected, or could not be
+       * The chosen device was busy, is not connected, or could not be
        * found, and the system default was opened instead. Said out loud, once: a take running on the
        * built-in microphone when the user selected an interface is a take whose
-       * audio is not what they think it is, and the status bar's input picker
-       * is where they change it.
+       * audio is not what they think it is, and the take controls' input
+       * picker is where they change it.
        */
       onInputFellBackToDefault: (reason) => {
         /*
@@ -1437,12 +1402,11 @@ export function startLiveSession(input: StartSessionInput): string {
         inputFallbackCount += 1;
         /*
          * Keyed and unexpiring. This notice's whole body is an instruction, and
-         * on the `info` default it removed itself after four seconds — long
-         * enough to be seen, nowhere near long enough to be acted on, and the
+         * a timed notice would be gone long before it could be acted on — the
          * take it describes runs for minutes. Keyed rather than `danger`
          * because nothing is broken: audio is being captured and the take is
          * fine, it is simply not the input that was asked for. `danger` would
-         * be the accusation the product is careful not to make (§28.6), so this
+         * be the accusation the product is careful not to make, so this
          * stays calm and stays put. `clearConditionToasts` retires it with the
          * take; a successful switch retires it immediately.
          */
@@ -1487,6 +1451,11 @@ export function startLiveSession(input: StartSessionInput): string {
           /* a remembered preference is a convenience, never a gate */
         });
       },
+      /*
+       * The input came back on its own — the mic was replugged, or the track
+       * unmuted. "Reconnect it and we resume" is a promise the product has to
+       * keep without being asked twice, so the pills clear themselves.
+       */
       onInputRestored: () => {
         if (pillEpoch === voicePillEpoch) voicePillDeviceLost = false;
         const before = get(state);
@@ -1501,26 +1470,26 @@ export function startLiveSession(input: StartSessionInput): string {
         // Nothing to announce: the status line goes back to normal on its own,
         // and "the microphone is back" answers a warning we no longer give.
       },
-      // H1: a session-level provider failure must never leave a green UI.
+      // A session-level recogniser failure must never leave a green UI.
       onSessionFailure: (code, fatal) => {
         state.update((s) => ({
           ...s,
           connection: fatal ? 'offline' : 'reconnecting',
           micState: fatal ? 'disconnected' : s.micState,
         }));
-        // §44.12 / E.7: the code is an internal contract. `describeError`
-        // turns it into authored copy that says what happened and what to do;
-        // the raw code goes to Settings → Diagnostics, not to the toast.
+        // The code is an internal contract. `describeError` turns it into
+        // authored copy that says what happened and what to do; the raw code
+        // stays out of the toast.
         showToast(
           `${fatal ? 'Voice following stopped.' : 'Voice following interrupted.'} ${describeError(code)}`,
           'danger',
         );
       },
       /*
-       * M3: a soft pause keeps the microphone and the recogniser open, so one
+       * A soft pause keeps the microphone and the recogniser open, so one
        * that outlasts its limit closes the recogniser. This fires as it
-       * closes, not before — and the wake word cannot reopen a recogniser that
-       * is gone, so the toast names the key that does. Only Space: the stage
+       * closes, not before — and nothing reopens a recogniser that is gone by
+       * itself, so the toast names the key that does. Only Space: the stage
        * has no Resume button, and while it is mounted Live leaves play-pause to
        * the stage's own keyboard handler — so Session › Resume, which arrives on
        * the shortcut bus rather than as a key, goes nowhere.
@@ -1567,8 +1536,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * the pill reports "Voice off" — blaming speech recognition for a
        * failure that was the input device, which is the one thing the
        * presenter could have fixed. The no-capture window would eventually
-       * reach the same conclusion, several seconds late and after they had
-       * already gone looking at their wifi.
+       * reach the same conclusion, several seconds late.
        */
       const micFailure = code !== null && code.startsWith('MIC_');
       // The pill's "no audio" is true of a refusal too: nothing is captured.
@@ -1584,10 +1552,10 @@ export function startLiveSession(input: StartSessionInput): string {
        * all, which is the same never-show-a-confident-state-you-do-not-have
        * defect the manual-mode pills were fixed for.
        *
-       * `inputDeviceLost` is narrower on purpose: it is what offers the §28.2
+       * `inputDeviceLost` is narrower on purpose: it is what offers the
        * mid-session input picker, and a picker is only an answer when the
-       * DEVICE is what failed. Swapping microphones cannot fix a refused
-       * credential, and offering it there is the same unfollowable instruction
+       * DEVICE is what failed. Swapping microphones cannot fix a missing
+       * speech model, and offering it there is the same unfollowable instruction
        * as advice pointing at a control that does not exist.
        *
        * And a refused speech model is recorded as exactly that. The microphone
@@ -1677,13 +1645,13 @@ export function startLiveSession(input: StartSessionInput): string {
 }
 
 /* ---------------------------------------------------------------------------
- * §29.2 start sequence, steps 1–3
+ * The voice start sequence: save, then compile check
  * ------------------------------------------------------------------------- */
 
 /**
- * A precondition of the start sequence was not met. Thrown out of the gate,
- * caught by `RealtimeSessionController.start`, which tears the attempt down and
- * rethrows — so the transport is never subscribed and nothing billable begins.
+ * A precondition of the start sequence was not met. Thrown out of the gate
+ * inside `VoiceSessionPipeline.start`, which tears the attempt down and rethrows
+ * — so no event subscription, microphone or recogniser is opened.
  */
 export class StartSequenceError extends Error {
   constructor(
@@ -1696,23 +1664,23 @@ export class StartSequenceError extends Error {
 }
 
 /**
- * Build the §29.2 steps 1–2 gate for this take.
+ * Build the start-sequence gate for this take: flush the save, then check the
+ * compile.
  *
- * These steps were being performed in `Preflight.svelte` before
- * `startLiveSession` was ever called, which made the ordering true by accident.
- * The accident is the defect: the controller re-runs its whole start sequence on
- * every resume-after-sleep and every recovery from a hard pause, long after
- * Preflight is gone, and any future caller — a retake, a restored session, a
- * second entry point — inherits nothing.
+ * The gate travels with the pipeline rather than living in whichever screen
+ * launches the take, because the pipeline re-runs its whole start sequence on
+ * every resume-after-sleep and every recovery from a hard pause, and any other
+ * caller — a retake, a restored session, a second entry point — has to
+ * inherit the same ordering.
  *
- * So each step is expressed as the CHECK it really is. Step 1 flushes, which is
- * a no-op when there is nothing pending. Step 2 asks whether the compile is
+ * So each step is expressed as the CHECK it really is. The flush is a no-op
+ * when there is nothing pending. The compile check asks whether the compile is
  * current, and refuses the start when it is not. Running them a second time
  * therefore costs nothing on the happy path and is the only thing standing
  * between a future caller and a take that starts against a stale script.
  *
- * Step 3, the stage's hydration ack, has no counterpart: the stage renders in
- * this webview, so there is no second window to wait for.
+ * Nothing waits on a stage hydration ack: the stage renders in this webview,
+ * so there is no second window to wait for.
  */
 function buildStartSequenceGate(input: StartSessionInput): {
   flushScriptSave(): Promise<void>;
@@ -1766,7 +1734,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
           `The script has ${blocking.length === 1 ? 'a problem' : `${blocking.length} problems`} that must be fixed first: ${blocking[0]?.message ?? ''}`,
         );
       }
-      // §45.3: a compile that has moved on since this session was assembled
+      // A compile that has moved on since this session was assembled
       // means the stage is prompting text the aligner was not built from.
       if (
         store.status === 'ready' &&
@@ -1800,9 +1768,9 @@ const WHOLE_SCRIPT_SECTION = 'whole-script';
  * Which section a token position falls in, for `sectionsReached` (#285).
  *
  * A PART on a divided script, and the innermost outline heading otherwise —
- * which is what the issue asked for and what a presenter means by the word.
- * It used to be the authored BLOCK, and every paragraph is a block, so a
- * script with two headings and six paragraphs reported six sections reached.
+ * which is what a presenter means by the word. Not the authored BLOCK: every
+ * paragraph is a block, so a script with two headings and six paragraphs would
+ * report six sections reached.
  *
  * Parts are the compiler's division, read off the compile this take runs on
  * rather than re-derived: `TakePart` says why the store must not hold a second
@@ -1837,7 +1805,7 @@ function sectionIdForToken(s: SessionState, token: number): string | null {
 function handleSnapshot(snapshot: AlignmentSnapshot): void {
   const nowMs = monotonicNowMs();
   if (activeTake !== null) {
-    // §36.3 unique coverage: the high-water mark of the conservative anchor.
+    // Unique coverage: the high-water mark of the conservative anchor.
     // `confirmed` is monotone except across an accepted retake or a manual
     // move, and taking the maximum is what makes a retake cost nothing it
     // already earned while still refusing to credit a jump to the end.
@@ -1845,7 +1813,7 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
       activeTake.maxConfirmedToken = snapshot.confirmedToken;
     }
     /*
-     * §36.3 availability: time spent in `following`, accumulated between
+     * Availability: time spent in `following`, accumulated between
      * snapshots. Measured rather than inferred from a state count, because
      * snapshots arrive on transcript events and a long confident passage
      * produces no more of them than a stuttering one.
@@ -1856,9 +1824,10 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
      * OPENED it, so a gap of any length is credited to whatever was true when it
      * began. That is fine at the cadence snapshots actually arrive at, and badly
      * wrong for the gaps that are not cadence at all: following gets paused for
-     * ten minutes of auto-scroll, or the socket drops, and the next snapshot to
-     * arrive silently books the whole silence as time spent following. The
-     * summary then reports its healthiest number for the take that did least.
+     * ten minutes of auto-scroll, or the recogniser drops, and the next
+     * snapshot to arrive silently books the whole silence as time spent
+     * following. The summary then reports its healthiest number for the take
+     * that did least.
      *
      * So an interval longer than a gap the feed could plausibly produce is not
      * evidence of anything and is credited to nothing. Time is never invented
@@ -1896,7 +1865,7 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
     ...s,
     snapshot,
     /*
-     * §parts: the presenter has read to the end of the part they launched.
+     * The presenter has read to the end of the part they launched.
      *
      * Read off `confirmedToken` rather than the provisional or observed
      * frontier, deliberately. The frontier LEADS — it is allowed to, because
@@ -1935,7 +1904,7 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
 }
 
 /**
- * Has a socket ever reached `connected` this take?
+ * Has the recogniser ever reached `connected` this take?
  *
  * The store's initial `connection: 'connected'` is a placeholder, not a fact,
  * so "was connected, is now reconnecting" cannot be read off the state alone.
@@ -1951,7 +1920,7 @@ function resetTranscriptCounters(): void {
 }
 
 /* ---------------------------------------------------------------------------
- * The voice pill (§29.2, and what replaced the microphone check)
+ * The voice pill (what replaced the microphone check)
  * ------------------------------------------------------------------------- */
 
 /**
@@ -2008,7 +1977,7 @@ function stopVoicePill(): void {
 }
 
 /**
- * Restart the evidence at a take boundary (§15.2 retake, §36.3 pass).
+ * Restart the evidence at a take boundary (a retake opens a new pass).
  *
  * Only when a pill is already running: a retake in manual mode has no capture
  * to report on, and starting one there would put a permanent "Listening" on a
@@ -2025,10 +1994,10 @@ function resetVoicePill(): void {
  * store through its `voicePill` prop.
  *
  * The conditions come from the session state rather than from a second set of
- * detectors: `inputDeviceLost` is §28.6's finding, already made by the pipeline
- * on the same level frames, and a pause is a pause. Re-deriving either here
- * would give the stage a chance to disagree with the Live screen about the same
- * microphone.
+ * detectors: `inputDeviceLost` is the input-failure finding, already made by
+ * the pipeline on the same level frames, and a pause is a pause. Re-deriving
+ * either here would give the stage a chance to disagree with the Live screen
+ * about the same microphone.
  */
 function publishVoicePill(): void {
   if (voicePill === null) return;
@@ -2084,7 +2053,7 @@ interface TakeCoverage {
 }
 
 /**
- * §36.3 "unique coverage", the honest form.
+ * Unique coverage, the honest form.
  *
  * The furthest the CONFIRMED anchor reached in this pass, not the position it
  * finished at. Reporting the final position would score a take that lost the
@@ -2095,9 +2064,9 @@ interface TakeCoverage {
  * OUT OF WHAT (#285)
  * ---------------------------------------------------------------------------
  * The span this pass could have covered: from where it began to the end of the
- * part it was bounded to, or to the end of the script. It used to be the whole
- * script whatever the take was given, so a 50-word part read to its last word
- * reported "49 of 200 words (25%)", and a "From here" take near the end of a
+ * part it was bounded to, or to the end of the script. Never the whole script
+ * whatever the take was given: a 50-word part read to its last word would
+ * report "49 of 200 words (25%)", and a "From here" take near the end of a
  * script could never look complete.
  *
  * From the PASS's start rather than the launch's, because that is where the
@@ -2154,11 +2123,11 @@ function takeCoverage(s: SessionState): TakeCoverage {
 /**
  * The furthest ABSOLUTE token this pass reached — a position, not a distance.
  *
- * Split out from `takeCoverage` when start points arrived, because the two
- * numbers stopped being the same the moment a take could open anywhere but
- * zero. This one answers "where did it get to" and is what the session row's
- * ending index and the retake's section are resolved from; the other answers
- * "how far did it travel" and is what the summary shows.
+ * Separate from `takeCoverage`, because a take can open anywhere, not only at
+ * zero, and then the two numbers differ. This one answers "where did it get
+ * to", and the ending index on the session row and the section a retake
+ * returns to are resolved from it; the other answers "how far did it travel"
+ * and is what the summary shows.
  */
 function takeEndToken(): number {
   if (activeTake === null) return 0;
@@ -2166,7 +2135,7 @@ function takeEndToken(): number {
 }
 
 /* ---------------------------------------------------------------------------
- * §36.3 the pass being performed — lifecycle
+ * The pass being performed — lifecycle
  * ------------------------------------------------------------------------- */
 
 /**
@@ -2254,8 +2223,7 @@ const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
  * followed them. A take can transcribe a thousand words and spend half its
  * length holding; the word counts look identical either way.
  *
- * `followingMs` has been accumulated on every snapshot since §36.3 shipped and
- * read by nothing. It is measured between snapshots rather than counted from
+ * `followingMs` is measured between snapshots rather than counted from
  * states on purpose (see `handleSnapshot`): snapshots arrive on transcript
  * events, so a confident passage produces no more of them than a stuttering one
  * and counting would report the stuttering take as the healthier of the two.
@@ -2268,10 +2236,10 @@ const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
  * ---------------------------------------------------------------------------
  * OUT OF THE TIME IT WAS ASKED TO RUN (#287)
  * ---------------------------------------------------------------------------
- * It divided by the whole pass, and so charged following for every second the
+ * Dividing by the whole pass would charge following for every second the
  * presenter had taken it away: twenty seconds followed, a minute of Space, ten
  * more, and the summary said 31% and "Following needed help". Time paused,
- * switched off or rolled by auto-scroll is now left out of the denominator and
+ * switched off or rolled by auto-scroll is left out of the denominator and
  * reported beside the share instead, so the summary can say what happened
  * rather than diagnose a fault. A take with following never on has nothing to
  * divide by, and is null for the same reason as one that saw no snapshots.
@@ -2375,12 +2343,12 @@ export async function awaitPendingPersistence(): Promise<void> {
 }
 
 /* ---------------------------------------------------------------------------
- * Smooth-following actions (companion §48) — the store owns the state, this
+ * Smooth-following actions — the follow store owns the state, this
  * store owns the effects.
  * ------------------------------------------------------------------------- */
 
 /**
- * §28.4. The saved local voice-detection sensitivity, or the neutral midpoint
+ * The saved local voice-detection sensitivity, or the neutral midpoint
  * when settings are unavailable (browser dev, tests). Never an extreme: an
  * unreadable setting must not silently become the most aggressive VAD on offer.
  */
@@ -2402,14 +2370,11 @@ function currentFollowingSettings(): FollowingSettings {
 }
 
 /*
- * A `REACQUIRE_WINDOW_TOKENS` constant used to live here — ±150 atoms around
- * the engine's own `observedToken`, handed to the aligner as a search prior.
- *
- * Two things were wrong with computing it here. The centre was the engine's
- * current answer, which is the position the presenter is disputing; and the
- * control window does not know what is on the glass. The STAGE reports its
- * viewport over `stage://viewport-hint` and Rust already holds it, so the
- * reacquisition uses that and this passes no range at all.
+ * No reacquisition search range is computed here. One centred on the engine's
+ * own `observedToken` would be centred on the position the presenter is
+ * disputing, and this store does not know what is on the glass. The STAGE
+ * reports its viewport over `stage://viewport-hint` and Rust already holds it,
+ * so the reacquisition uses that and this passes no range at all.
  */
 
 const followActions = {
@@ -2417,26 +2382,25 @@ const followActions = {
     moveSentences(deltaSentences);
   },
   /**
-   * "Re-find me here" (§48): reopen the search around what is on screen.
+   * "Re-find me here": reopen the search around what is on screen.
    *
-   * This used to be `driver.moveToToken(snapshot.confirmedToken)` behind a TODO
-   * asking for exactly what is here now. Two things were wrong with it, and the
-   * second is the one that mattered.
+   * Not `driver.moveToToken(snapshot.confirmedToken)`, for two reasons, and the
+   * second is the one that matters.
    *
-   * It seeded the engine with the engine's OWN current answer, so a presenter
-   * pressing "re-find me" asked it to look precisely where it was already
+   * That would seed the engine with its OWN current answer, so a presenter
+   * pressing "re-find me" would ask it to look precisely where it was already
    * looking — the one place it is demonstrably not finding them.
    *
    * And `moveToToken` is "I am here": it asserts a position at high confidence
-   * and returns the engine to `following`, so the display moved off an
+   * and returns the engine to `following`, so the display would move off an
    * assertion the presenter had just disputed, before any evidence arrived to
    * support it. A reacquisition holds instead, which is the safe direction for
    * a follower that must never run ahead.
    *
    * The search prior is the STAGE's own viewport, which Rust already holds
    * from `stage://viewport-hint` — the tokens actually on the glass. Nothing
-   * is computed here: the control window does not know what the reader can
-   * see, and the engine's own position is the thing being disputed.
+   * is computed here: this store does not know what the reader can see, and
+   * the engine's own position is the thing being disputed.
    */
   reAnchor(): void {
     driver?.reacquire();
@@ -2449,9 +2413,8 @@ const followActions = {
     releaseAutoScrollEnd();
   },
   /**
-   * Pausing following is not pausing the session (§15.3, §48): transcription
-   * stays connected and voice commands keep working — only automatic movement
-   * stops.
+   * Pausing following is not pausing the session: transcription stays
+   * running — only automatic movement stops.
    */
   setFollowingPaused(paused: boolean, deliberate = true): void {
     // The follow store owns the "an automatic release may not overrule a
@@ -2498,9 +2461,9 @@ const followActions = {
     if (handover) acknowledgeOnStage(autoScrollOffMessage());
   },
   /**
-   * §62 recovery. Re-issuing the current stage settings ASKS the stage to
-   * measure its line map again. It does not force a relayout, and the two
-   * limits below are why.
+   * Invalid-line-map recovery. Re-issuing the current stage settings ASKS the
+   * stage to measure its line map again. It does not force a relayout, and the
+   * two limits below are why.
    *
    * It re-issues `stageEnvelope` at the SAME stage generation, the identity kick
    * `applyStageAppearance` already uses to wake the embedded stage's own
@@ -2510,20 +2473,16 @@ const followActions = {
    * Which is exactly what caps it. Unchanged values produce an identical
    * fingerprint, so `sameLayout()` in src/stage/renderer/ScriptLayer.svelte
    * classifies the rebuild coverage-only: `layoutGeneration` does not bump, the
-   * §33 semantic re-anchor never runs, and `MAP_REBUILD_THROTTLE_MS` (250 ms)
+   * semantic re-anchor never runs, and `MAP_REBUILD_THROTTLE_MS` (250 ms)
    * returns before measuring at all if a windowed-render coverage build
    * happened inside the last 250 ms. A stuck map that layout has since settled
    * under is still recovered, because the pass re-measures; a map the declared
    * inputs say is fine gets no stronger answer than that.
    *
-   * And the only caller cannot be reached during a take. It is
-   * `smoothFollow.requestLayoutRebuild()`, raised from the `rebuild_layout`
-   * action on the §62 `invalid_line_map` notice, which `FollowStatePanel`
-   * renders — and that panel sits in the `{:else}` arm of
-   * `{#if $session.active}` in src/control/routes/Live.svelte, i.e. the arm
-   * that is NOT shown while a session is running. So this half of the recovery
-   * is pre-positioned for when the panel becomes reachable, not something a
-   * presenter can press mid-take today.
+   * Its caller is `smoothFollow.requestLayoutRebuild()`, raised from the
+   * `rebuild_layout` action on the `invalid_line_map` notice. `FollowStatePanel`
+   * renders that notice both in Live's console arm and in the take-controls
+   * drawer, so a presenter can reach it mid-take.
    */
   rebuildStageLayout(): void {
     state.update((s) =>
@@ -2539,7 +2498,7 @@ const followActions = {
  * "Which panel is display 2?" — answered on the panels themselves.
  *
  * A numbered, always-on-top, click-through card on every connected display
- * (`identify.html`, spec §52.4), raised from Session › Identify Displays.
+ * (`identify.html`), raised from Session › Identify Displays.
  */
 export async function identifyStageDisplays(): Promise<void> {
   try {
@@ -2550,7 +2509,7 @@ export async function identifyStageDisplays(): Promise<void> {
 }
 
 /* ---------------------------------------------------------------------------
- * Transport actions (§15.3)
+ * Transport actions
  * ------------------------------------------------------------------------- */
 
 /** Start (or restart) prompting — the stage begins following. */
@@ -2568,7 +2527,7 @@ export function startPrompting(): void {
  */
 let pauseCount = 0;
 
-/** Listening pause — transcription stays connected (§15.3). */
+/** Listening pause — transcription stays connected. */
 export function pauseListening(): void {
   trace('pause', 'listening pause (user)');
   pauseCount += 1;
@@ -2577,7 +2536,7 @@ export function pauseListening(): void {
   pipeline?.softPause();
 }
 
-/** Hard pause — the realtime connection closes; voice cannot resume (§15.3). */
+/** Hard pause — the microphone and recogniser close; a resume reopens them. */
 export function hardPause(): void {
   // 'muted' is the deliberate-pause label; 'disconnected' means something
   // broke. A hard pause is a choice, so it must not read as a failure.
@@ -2591,14 +2550,12 @@ export function hardPause(): void {
 }
 
 /**
- * H3: resume must NOT optimistically claim the microphone is live.
+ * Resume must NOT optimistically claim the microphone is live.
  *
- * The old version flipped `micState` to 'live' and cleared the pause before
- * awaiting anything, then swallowed the rejection — so a resume that failed
- * (and after a hard pause it always did, on an invalid `idle -> resume`
- * transition) left the UI showing a live microphone over a dead session, which
- * is the single worst outcome this product has. The UI now follows the
- * session, never leads it.
+ * Flipping `micState` to 'live' and clearing the pause before awaiting
+ * anything, then swallowing the rejection, once left the UI showing a live
+ * microphone over a dead session after a failed resume — the single worst
+ * outcome this product has. The UI follows the session, never leads it.
  *
  * Releasing the pause is a different claim from that one. A resume whose voice
  * cannot come back still un-pauses the take (#279), with the microphone marked
@@ -2711,9 +2668,9 @@ export function resumeSession(): Promise<void> {
 /**
  * #303 — the take's notice for a refused microphone, with the way back on it.
  *
- * The notice used to name System Settings and stop there, during a take, with
- * the prompter up: an instruction with no control behind it. The pane opens
- * from the notice itself, and "Try again" is in the take controls, beside the
+ * A notice that only names System Settings — during a take, with the prompter
+ * up — is an instruction with no control behind it. The pane opens from the
+ * notice itself, and "Try again" is in the take controls, beside the
  * state it clears.
  */
 function reportMicrophoneRefused(): void {
@@ -2821,10 +2778,10 @@ export async function retryMicrophone(): Promise<boolean> {
 }
 
 /**
- * §28.2 — is a mid-session input change possible right now?
+ * Is a mid-session input change possible right now?
  *
- * False in manual/fixed takes and in browser dev, where there is no transport
- * to replace a track on. The Live screen uses this to decide whether to offer
+ * False in manual/fixed takes and in browser dev, where there is no voice
+ * pipeline to switch. The Live screen uses this to decide whether to offer
  * the picker at all: an affordance that cannot work is worse than none.
  */
 export function canSwitchMicrophone(): boolean {
@@ -2832,11 +2789,7 @@ export function canSwitchMicrophone(): boolean {
 }
 
 /**
- * §28.2 mid-session microphone switch — the recovery for `MIC_DEVICE_LOST`.
- *
- * The transport has always been able to replace its sender track without a
- * renegotiation; nothing in production ever called it, so the device-lost
- * toast pointed at a control that did not exist. This is that call site.
+ * Mid-session microphone switch — the recovery for `MIC_DEVICE_LOST`.
  *
  * Resolves `true` when the take is following the new input again. On failure
  * the session is left exactly as it was — still held, still saying so — and
@@ -2847,7 +2800,7 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   if (!pipeline || deviceId === '') return false;
   /*
    * The take this switch belongs to, for the same reason `togglePresentationMode`
-   * captures one: replacing a sender track is a round trip, and the take can end
+   * captures one: switching the input is a round trip, and the take can end
    * — or be replaced by "Present again" — while it is in flight. Reporting
    * "voice following has resumed" onto a session that has since stopped, or
    * worse, clearing the NEW take's `inputDeviceLost` because the OLD take's
@@ -2862,9 +2815,9 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   const fallbacksBefore = inputFallbackCount;
   /*
    * Whether a microphone is actually open on the chosen device when this is
-   * done (#303). A pipeline whose start failed has no capture to swap, and its
-   * switch used to resolve anyway — so the store announced "voice following has
-   * resumed" over a take that had opened nothing. The device is that
+   * done (#303). A pipeline whose start failed has no capture to swap, and
+   * resolving anyway would announce "voice following has resumed" over a take
+   * that had opened nothing. The device is that
    * pipeline's choice now, so starting it is the switch. Not under a pause:
    * that is the presenter's to undo, and the resume will open this device.
    */
@@ -2894,11 +2847,12 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
    *
    * The pipeline falls back to the system default when the chosen input is
    * busy, and reports it through `onInputFellBackToDefault` rather than by
-   * rejecting. Treating that as success was the same unfollowable-instruction
-   * defect one level up: it cleared the fallback flag, took the picker away and
-   * announced that following had resumed — for a device the operator had
-   * chosen, been refused, and not been told about. Worse, it would then persist
-   * that device as the remembered preference for every future take.
+   * rejecting. Treating that as success would be the same unfollowable-
+   * instruction defect one level up: clearing the fallback flag, taking the
+   * picker away and announcing that following had resumed — for a device the
+   * operator had chosen, been refused, and not been told about. Worse, it
+   * would then persist that device as the remembered preference for every
+   * future take.
    *
    * So the audio state is updated either way (capture IS live, and the take was
    * held on a dead input a moment ago), but a fallback keeps its notice, keeps
@@ -2920,7 +2874,7 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   // The input is the operator's choice again, so the "we picked one for you"
   // notice has nothing left to report.
   dismissToastByKey(TOAST_INPUT_FELL_BACK);
-  // §28.1: remember the choice, so the next take opens the input that worked
+  // Remember the choice, so the next take opens the input that worked
   // rather than the one that just vanished. The label goes with it — the id
   // alone does not survive a restart (see `matchRememberedMicrophone`).
   void patchSettings('audio', {
@@ -2958,9 +2912,9 @@ export function moveSentences(delta: number): void {
 }
 
 /**
- * Absolute move to a token (§15.1 outline navigation). `moveSentences` is a
+ * Absolute move to a token (outline navigation). `moveSentences` is a
  * RELATIVE move and needs a cursor, so it cannot express "put me here" before
- * the first snapshot exists — which is every moment before Start.
+ * the first snapshot exists.
  */
 export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
@@ -2971,17 +2925,16 @@ export function goToToken(tokenIndex: number): void {
 }
 
 /**
- * §16.9. The presenter scrolled the stage somewhere else; put the tracker
- * there too.
+ * The presenter scrolled the stage somewhere else; put the tracker there too.
  *
- * The gap this closes is the oldest one in the manual-scroll path. A wheel
- * gesture moved the DOCUMENT and told the aligner nothing, so the cursor stayed
- * where it was and the next sentence the presenter spoke was matched against a
- * place they had left — which either dragged the script back at the profile's
- * full forward speed, or held it in the wrong place for however long the
- * aligner took to relocate on evidence alone. The arrow and Page keys arrive
- * here too (#282): they used to ask for a one-sentence step instead, which
- * re-seeded the cursor somewhere other than where the keys had put the glass.
+ * Without this a wheel gesture moves the DOCUMENT and tells the aligner
+ * nothing, so the cursor stays where it was and the next sentence the
+ * presenter speaks is matched against a place they have left — which either
+ * drags the script back at the profile's full forward speed, or holds it in
+ * the wrong place for however long the aligner takes to relocate on evidence
+ * alone. The arrow and Page keys arrive here too (#282) rather than asking for
+ * a one-sentence step, which would re-seed the cursor somewhere other than
+ * where the keys had put the glass.
  *
  * The correction COUNTS — `manualCorrectionCount` in the summary is a measure
  * of how much hand-holding the take needed, and this is exactly that.
@@ -3111,7 +3064,7 @@ function noteReposition(): void {
 }
 
 /**
- * §15.2 retake. This is also the §36.3 pass boundary: the pass that was being
+ * Retake. This is also the pass boundary: the pass that was being
  * performed is over, and the next one starts here. The summary reports on the
  * new pass, so its coverage and following time start again rather than being
  * merged into what came before.
@@ -3120,7 +3073,7 @@ export function restartParagraph(): void {
   driver?.restartParagraph();
   noteReposition();
   const before = get(state);
-  // §36.3: a new pass proves itself again. The evidence that the last one was
+  // A new pass proves itself again. The evidence that the last one was
   // heard says nothing about this one, and the pill coming back is how the
   // presenter knows the retake is being picked up.
   resetVoicePill();
@@ -3141,7 +3094,7 @@ export function restartParagraph(): void {
 }
 
 /**
- * "Blank the screen" (§16.6) — from the Live transport or the voice command.
+ * "Blank the screen" — from Live's controls or its shortcut.
  *
  * WHAT THE USER DECIDES, AND WHAT THEY DO NOT.
  *
@@ -3154,7 +3107,7 @@ export function toggleBlankStage(): void {
 
 /**
  * The transport's "Voice follow" switch and the Live "Pause following" button
- * are the same decision (§48), so both route through the follow store and stay
+ * are the same decision, so both route through the follow store and stay
  * in sync.
  */
 export function toggleVoiceFollow(): void {
@@ -3174,12 +3127,12 @@ export function toggleVoiceFollow(): void {
 /* ---------------------------------------------------------------------------
  * The fixed-pace transport
  *
- * What this is FOR: the takes voice following cannot carry. No speech key
- * entered, no network, a room loud enough that finals stop arriving, a language
- * the recogniser handles badly. In every one of those the stage holds still and
- * is right to — but "holds still" was the whole of the answer, and a presenter
- * standing at a camera with a script that will not move has no recourse they can
- * reach.
+ * What this is FOR: the takes voice following cannot carry. No speech model
+ * installed, a refused microphone, a room loud enough that finals stop
+ * arriving, a language the recogniser handles badly. In every one of those
+ * the stage holds still and is right to — but "holds still" alone leaves a
+ * presenter standing at a camera with a script that will not move and no
+ * recourse they can reach.
  *
  * It is deliberately NOT a second way to prompt. Running it pauses following,
  * and stopping it resumes following, because the alternative is two things
@@ -3236,7 +3189,7 @@ export const autoScrollLive = derived(
 );
 
 /**
- * Answer a command on the glass (§33.10).
+ * Answer a command on the glass.
  *
  * The words are read off the glass mid-sentence at two thirds of body size, so
  * a long answer wraps — and the chip wraps prose evenly, which would happily
@@ -3244,11 +3197,11 @@ export const autoScrollLive = derived(
  * be read whole — "140 wpm", "follow is off" — with no-break spaces (U+00A0),
  * leaving the only break where a reader would put one.
  *
- * Take-time commands used to answer with a toast, and in a single-window take
+ * Take-time commands do not answer with a toast. In a single-window take
  * control's toasts float over the prompter: in the unmirrored layer, so the one
- * confirming a mirror read backwards through the glass; at desk size, a few
+ * confirming a mirror reads backwards through the glass; at desk size, a few
  * pixels tall from where the presenter stands; and one per press, so three
- * taps of the pace key left three cards over the next lines. The stage's chip
+ * taps of the pace key leave three cards over the next lines. The stage's chip
  * is mirrored with the script, sized for the reading distance, and replaces
  * itself — so the answer goes there, and only there.
  *
@@ -3318,9 +3271,9 @@ export function toggleAutoScroll(): void {
  * What stopping the transport left following doing, read off the take AFTER
  * the pause has been given back (#277).
  *
- * It used to say "following your voice again" every time, over a presenter who
- * had switched following off themselves and over a take whose voice never
- * started — in both, following stayed off and the toast said it was back.
+ * Not "following your voice again" every time: over a presenter who had
+ * switched following off themselves, or a take whose voice never started,
+ * following stays off and that message would say it was back.
  *
  * Short, because it is read off the glass mid-sentence: when the voice has the
  * script back, that is the whole answer — it is what moves the script now.
@@ -3387,9 +3340,9 @@ export function nudgeAutoScrollWpm(deltaWpm: number): void {
  * AND IT IS WHERE THE TAKE ENDED (#276)
  * ---------------------------------------------------------------------------
  * The transport pauses following, so a take it carries produces no snapshots
- * for as long as it rolls — and the ending used to be read off the last one,
- * which is wherever the roll BEGAN. A part rolled off the bottom of the glass
- * was reported "stopped part way", with "Record part 3 again" as the primary
+ * for as long as it rolls — and an ending read off the last one is wherever
+ * the roll BEGAN. A part rolled off the bottom of the glass was once reported
+ * "stopped part way", with "Record part 3 again" as the primary
  * action and "From last ending" offering the same start point again, right
  * after this function had toasted that the script was finished.
  *
@@ -3477,7 +3430,7 @@ function releaseAutoScrollEnd(): void {
 export const AUTO_SCROLL_WPM_RANGE = { min: AUTO_SCROLL_MIN_WPM, max: AUTO_SCROLL_MAX_WPM };
 
 /* ---------------------------------------------------------------------------
- * Stage appearance quick-controls (Live screen + voice commands)
+ * Stage appearance quick-controls (the in-session sheet, its keys, Settings)
  * ------------------------------------------------------------------------- */
 
 /** The saved teleprompter section, or its defaults where settings cannot be read. */
@@ -3511,10 +3464,10 @@ function liveStageAppearance(): StageAppearance {
  * ---------------------------------------------------------------------------
  * WHY THE WHOLE THING IS REBUILT
  * ---------------------------------------------------------------------------
- * Every caller here used to patch the one field it cared about straight onto
- * the live `StageSettings`. That is wrong in a way nothing on the glass
- * announces: `readingBandHalfHeightPercent` is derived from size AND line
- * height, so a patched `fontSizePx` left the reading corridor sized for type
+ * Patching the one field a caller cares about straight onto the live
+ * `StageSettings` is wrong in a way nothing on the glass announces:
+ * `readingBandHalfHeightPercent` is derived from size AND line height, so a
+ * patched `fontSizePx` left the reading corridor sized for type
  * that is no longer there — the band the presenter aligns to their lens quietly
  * stops matching the text inside it. Recomposing through
  * `stageSettingsFromSettings` is the same path a take opens with, so a stage
@@ -3523,7 +3476,7 @@ function liveStageAppearance(): StageAppearance {
  * ---------------------------------------------------------------------------
  * WHY THE ENVELOPE IS REWRITTEN TOO
  * ---------------------------------------------------------------------------
- * Presentation is one webview now (§62): the stage renderer is mounted inside
+ * Presentation is one webview: the stage renderer is mounted inside
  * this window and hydrates from `stageEnvelope`, not from the cross-window
  * directive bus. A settings directive on its own reached nothing, which is why
  * `+`/`-` and Cmd+Shift+M once appeared to do nothing at all. The envelope is
@@ -3531,7 +3484,7 @@ function liveStageAppearance(): StageAppearance {
  * refresh in place: phase, alignment and the compiled document all survive it.
  *
  * Returns the appearance the stage is now running, which is not always the one
- * asked for — a rig-resolved take works its geometry out for itself (§17.2).
+ * asked for — a rig-resolved take works its geometry out for itself.
  */
 export function applyStageAppearance(patch: Partial<TeleprompterSettings>): StageAppearance {
   const base = takeTeleprompter ?? currentTeleprompterSettings();
@@ -3553,10 +3506,10 @@ export function applyStageAppearance(patch: Partial<TeleprompterSettings>): Stag
    * Clamped HERE, not at the controls.
    *
    * The sliders already draw the right ranges, but they are not the only
-   * caller: `+`/`-` and the voice commands hand in a delta, and a step past the
-   * end used to land on the glass unclamped — the readout said one size and the
-   * stage prompted at another, which on the one screen with no second opinion
-   * is the worst way for a control to be wrong.
+   * caller: `+`/`-` hand in a delta, and an unclamped step past the end lands
+   * on the glass — the readout says one size and the stage prompts at another,
+   * which on the one screen with no second opinion is the worst way for a
+   * control to be wrong.
    */
   const merged = { ...base, ...patch };
   takeTeleprompter = { ...merged, ...clampStageAppearance(merged, takeFontCeilingPx) };
@@ -3580,8 +3533,8 @@ export function applyStageAppearance(patch: Partial<TeleprompterSettings>): Stag
  *
  * So each document COMMITTED while a take is running is diffed against the one
  * committed before it, and the stage fields that changed are applied to the
- * take through `applyStageAppearance` — the same path the sheet and the voice
- * commands use, so the corridor is re-derived and the clamp still holds. Only
+ * take through `applyStageAppearance` — the same path the sheet and its keys
+ * use, so the corridor is re-derived and the clamp still holds. Only
  * the fields that CHANGED, on purpose: the take may carry nudges of its own
  * that the saved document does not know about, and replacing the whole section
  * would snap those back. A change to the optical rigs recomposes too, with no
@@ -3678,14 +3631,6 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
   'sizeBias',
 ];
 
-/**
- * Rebuild the live `StageSettings` from this take's own overrides.
- *
- * Factored out of `applyStageAppearance` when the presentation mode became the
- * second thing a take can hold against the saved settings. Both callers have to
- * compose the SAME way — that is the whole reason a mid-take change and the next
- * take's opening frame agree — and two copies of this is how they stop agreeing.
- */
 function samePanelMirror(a: PanelMirror, b: PanelMirror): boolean {
   return a.horizontal === b.horizontal && a.vertical === b.vertical;
 }
@@ -3708,6 +3653,14 @@ function takeMirrorAxes(): PanelMirror {
   return panelMirrorFor(getSettingsSnapshot().optical, stageDisplay?.fingerprint);
 }
 
+/**
+ * Rebuild the live `StageSettings` from this take's own overrides.
+ *
+ * Every mid-take change — appearance, presentation mode, the reader's nudges
+ * and theme — composes through here. They have to compose the SAME way, which
+ * is the whole reason a mid-take change and the next take's opening frame
+ * agree; two copies of this is how they stop agreeing.
+ */
 function recomposeStageSettings(): StageAppearance {
   const saved = getSettingsSnapshot();
   const rebuilt = stageSettingsFromSettings(
@@ -3905,8 +3858,7 @@ export function adjustStageFontSize(deltaPx: number): number {
   }
   const current = get(state).stageAppearance.fontSizePx;
   // Clamped by `clampStageAppearance`, which is the same ceiling the sliders
-  // draw against. It used to stop at 160px — below what this product's own
-  // hardware asks for, and a different limit from the one Settings offered.
+  // draw against, so the keys and Settings offer one limit.
   return applyStageAppearance({ fontSizePx: current + deltaPx }).fontSizePx;
 }
 
@@ -4137,16 +4089,11 @@ function jumpSection(delta: number): boolean {
  * Stop / teardown
  * ------------------------------------------------------------------------- */
 
-/**
- * Running realtime cost estimate (§35). ONE source for the Live status-bar
- * popover and the F.17 summary: they used to compute it differently and
- * disagreed by an order of magnitude for the same take.
- *
-/** Stop the session and produce the F.17 summary. */
+/** Stop the session and produce the take summary. */
 export function stopSession(): SessionSummary {
   const s = get(state);
   // A stop with nothing running must not manufacture an end-of-session
-  // summary — Live opens the F.17 dialog on `!active && summary !== null`.
+  // summary — `SessionSummary` opens on `!active && summary !== null`.
   if (!s.active) {
     stopInternals();
     return s.summary ?? emptySummary(s);
@@ -4155,11 +4102,10 @@ export function stopSession(): SessionSummary {
    * Where the take ended, resolved ONCE and handed to every reader of it.
    *
    * The summary, the retake section, the ending's name and the session row
-   * used to each re-read it from the snapshot, which was harmless while the
-   * snapshot was the only source. It is not any more (#276): a transport that
-   * ran the document off its end outranks it, and four readers each deciding
-   * that for themselves is how three of them would end up agreeing with the
-   * glass and one with where the roll began.
+   * all need it, and the snapshot is not the only source (#276): a transport
+   * that ran the document off its end outranks it, and four readers each
+   * deciding that for themselves is how three of them would end up agreeing
+   * with the glass and one with where the roll began.
    */
   const rolledTo = activeTake?.autoScrollEndToken ?? null;
   const endTokenIndex = rolledTo ?? roundToken(s.snapshot?.confirmedToken) ?? takeEndToken();
@@ -4192,7 +4138,7 @@ export function stopSession(): SessionSummary {
     voiceFollowingAvailable: s.voiceFollowingAvailable || everConnected,
     microphoneRefused: s.microphoneRefused,
   };
-  // §36.1: close the record BEFORE the teardown. `stopInternals` clears the
+  // Close the record BEFORE the teardown. `stopInternals` clears the
   // pass `takeEndToken` reads, so the ending has to be taken from it first.
   if (s.sessionId) {
     /*
@@ -4235,7 +4181,7 @@ export function stopSession(): SessionSummary {
   /*
    * A PRACTICE REPORTS NOTHING.
    *
-   * Live opens the F.17 card on `!active && summary !== null`, so withholding
+   * `SessionSummary` opens on `!active && summary !== null`, so withholding
    * the summary from the store is the whole of "no report" — there is no second
    * place to suppress and no dialog to teach about rehearsals.
    *
@@ -4261,7 +4207,7 @@ export function stopSession(): SessionSummary {
 }
 
 export function clearSession(): void {
-  // §36.1: clearing a session that is still running would drop its record on
+  // Clearing a session that is still running would drop its record on
   // the floor — the row would stay open until the next launch closed it as if
   // the app had crashed. Every caller today stops first; this makes that
   // ordering a property of the store rather than a convention.
@@ -4332,8 +4278,9 @@ function locateEnding(s: SessionState, token: number | null): string {
   const section = outlineSectionAt(s.outline, token);
   if (section) return section.title;
   /*
-   * A script with no headings still ended SOMEWHERE, and it used to be told in
-   * the engine's units: "Token 417". A token is an internal measured span — it
+   * A script with no headings still ended SOMEWHERE, and naming it in the
+   * engine's units ("Token 417") tells the presenter nothing. A token is an
+   * internal measured span — it
    * is not a word count, it does not appear anywhere else the presenter can
    * see, and it cannot be converted into one by anybody reading the summary.
    * The sentence the take ended on is the same fact in the document's own
@@ -4392,7 +4339,7 @@ function stopInternals(): void {
   stopVoicePill();
   compiledScript = null;
   stageSettings = null;
-  // §36.3: the pass ends with the take. `stopSession` has already read what it
+  // The pass ends with the take. `stopSession` has already read what it
   // needed from it, and every other path belongs to a session that is gone.
   activeTake = null;
   // A take ended mid-roll took a pause that nothing will give back now.
@@ -4400,14 +4347,14 @@ function stopInternals(): void {
 }
 
 /**
- * The speech-recognition pill (§15.1). Three states, not two: `offline` means
+ * The speech-recognition pill. Three states, not two: `offline` means
  * nothing is retrying — a failure the recogniser gave up on, or a pause that
  * closed it — so labelling it "Voice starting" in a warning tone tells the
  * operator to wait for a recovery that is never coming.
  *
- * The state names come from the hosted transport this replaced; the labels do
- * not. The recogniser runs on this machine, and "Disconnected" sent presenters
- * to check their wifi.
+ * The state names predate on-device recognition; the labels do not. The
+ * recogniser runs on this machine, and "Disconnected" sent presenters to check
+ * their wifi.
  */
 export function connectionPill(connection: SessionState['connection']): {
   tone: 'success' | 'warning' | 'danger';
@@ -4424,9 +4371,9 @@ export function connectionPill(connection: SessionState['connection']): {
 }
 
 /*
- * No wake phrase. This used to promise "still listening for “Speaking Glass,
- * resume”", and nothing in the app has ever answered that phrase — a presenter
- * who said it would have stood there waiting. What is true is that the
+ * No wake phrase. Nothing in the app answers "Speaking Glass, resume", so a
+ * label promising it would leave a presenter who said it standing there
+ * waiting. What is true is that the
  * microphone is still open, which is what makes Resume immediate.
  */
 const PAUSED_LISTENING_LABEL = 'Paused — still listening';
@@ -4434,13 +4381,13 @@ const PAUSED_LISTENING_LABEL = 'Paused — still listening';
 const PAUSED_MANUAL_LABEL = 'Paused — the script stays where it is';
 
 /**
- * F.11 status line for the top bar and tracking visualization.
+ * The Live screen's status line.
  *
  * Every connection/microphone clause here is gated on the take actually HAVING
- * a realtime transport. Only a voice take constructs the pipeline, so in a
- * manual or fixed-speed take `connection` and `micState` never move off their
- * optimistic `initial` values — and this line was reporting a microphone that
- * was never opened and a wake word that nothing is listening for.
+ * a voice pipeline. Only a voice take constructs one, so in a manual or
+ * fixed-speed take `connection` and `micState` never move off their optimistic
+ * `initial` values — and ungated, this line would report a microphone that was
+ * never opened.
  */
 export const liveStatusLabel = derived(state, (s): string => {
   if (!s.active) return s.summary ? 'Take complete' : 'Ready to start';

@@ -1,15 +1,15 @@
 <!--
   Calm empty-state invitation. No illustrations,
-  no feature carousel (spec §12.3).
+  no feature carousel.
 
   ---------------------------------------------------------------------------
-  THREE VARIANTS, BECAUSE ONE BOX DOES NOT FIT THREE JOBS
+  THREE VARIANTS, BECAUSE ONE TREATMENT DOES NOT FIT THREE JOBS
   ---------------------------------------------------------------------------
-  §10.7 and §19.10: the enclosing card is right for a first-use invitation and
-  wrong for everything else. A bordered, padded, display-titled block sitting in
-  the middle of a list is a web landing-page section — and it appears in the two
-  places it hurts most, a search that found nothing and a load that failed, where
-  the surrounding list structure is exactly the context the user needs kept.
+  A display-titled invitation is right for first use and wrong for everything
+  else. A padded, display-titled block sitting in the middle of a list is a web
+  landing-page section — and it would appear in the two places it hurts most,
+  a search that found nothing and a load that failed, where the surrounding
+  list structure is exactly the context the user needs kept.
 
     editorial  the centred invitation in the display voice. First run, and
                nothing else.
@@ -20,11 +20,11 @@
 
   Only `editorial` sets its title in the display voice — the website's heading,
   the UI face at a medium weight set tight: a first-run invitation is one of
-  the desk's few branded display moments. It is no longer boxed: the website
+  the desk's few branded display moments. It is not boxed either: the website
   draws on the page itself, not in tinted cards, and an empty Library has
   nothing for a frame to set it apart from. `plain` and `compact` are
   interface messages — a search miss, an empty Trash, a failed load — and their
-  titles are headings like any other (§3.3: no display voice in dense panels).
+  titles are headings like any other (no display voice in dense panels).
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -33,12 +33,12 @@
     title: string;
     body?: string;
     /**
-     * `plain` is the default, and that is the change.
+     * `plain` is the default.
      *
-     * Making the boxed variant opt-in rather than opt-out means a new empty
+     * Making the editorial variant opt-in rather than opt-out means a new empty
      * state is correct by construction: a developer who does not think about it
-     * gets the unboxed message that suits a list, and the card has to be asked
-     * for by the one screen that has earned it.
+     * gets the plain message that suits a list, and the invitation has to be
+     * asked for by the one screen that has earned it.
      */
     variant?: 'plain' | 'editorial' | 'compact';
     /**
@@ -146,7 +146,7 @@
     text-align: left;
   }
   .compact .title {
-    /* No display face here: §3.3 keeps it out of dense panels. */
+    /* No display face here: it stays out of dense panels. */
     font-size: var(--text-sm);
     font-weight: 650;
     letter-spacing: normal;

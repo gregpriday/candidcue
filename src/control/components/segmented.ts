@@ -1,6 +1,6 @@
 /**
  * Keyboard and focus logic for the radiogroup pattern used by
- * SegmentedControl (spec §20). Kept as pure functions so the roving-tabindex
+ * SegmentedControl. Kept as pure functions so the roving-tabindex
  * and arrow-key behaviour is unit-testable without a DOM.
  *
  * Contract (WAI-ARIA radiogroup):

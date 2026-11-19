@@ -4,23 +4,17 @@
  *   mic → PcmCapture (24 kHz PCM16) → Rust on-device STT session
  *       → stt://event → transcript record + UI (alignment happens in Rust)
  *
- * This replaced a pipeline roughly four times its size, and almost everything
- * that went was machinery for deciding when a sentence had ended: a local
- * voice-activity detector, a noise-floor calibration, a speech gate, a commit
- * driver, and a manual buffer commit. The recogniser does its own endpointing
- * (sherpa's trailing-silence rules, in `cc_stt::local`), so a take now streams
- * unconditionally and the recogniser says where the utterances are.
+ * The recogniser does its own endpointing (sherpa's trailing-silence rules, in
+ * `cc_stt::local`), so a take streams unconditionally and the recogniser says
+ * where the utterances are. Do not put a local voice-activity gate, noise-floor
+ * calibration or commit driver back in front of it: each was a way to
+ * transcribe nothing over a healthy session — a calibration that measured the
+ * presenter's own voice once set the gate above every word they said, and the
+ * take reported "words heard: 0".
  *
- * That is not a simplification for its own sake. Every one of those mechanisms
- * was a way to hold a completely healthy connection open and transcribe
- * nothing — a calibration that measured the presenter's own voice set the gate
- * above every word they subsequently said, and the session reported "words
- * heard: 0" over a socket in perfect health. None of them can fail that way now
- * because none of them exist.
- *
- * The local level meter survives, but only as a meter: it drives the "is it
- * hearing me" readout and the §28.6 dead-input detector. Nothing it decides can
- * stop audio reaching the recogniser.
+ * The local level meter is only a meter: it drives the "is it hearing me"
+ * readout and the dead-input detector. Nothing it decides can stop audio
+ * reaching the recogniser.
  */
 import type { AudioDeviceInfo, AudioLevelSnapshot, CompiledScript } from '../../shared/contracts';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
@@ -119,19 +113,19 @@ export interface PipelineTimers {
 }
 
 /**
- * §29.2 steps 1–2, as the *caller's* half of the start sequence.
+ * The caller's half of the start sequence: the script is saved and compiled.
  *
  * Each is a PRECONDITION CHECK rather than a second performance of the step:
  * flushing an already-flushed save is a no-op, and asking whether the compile
  * is current is cheap and idempotent. Either rejecting aborts the start before
- * the microphone is opened or a session is billed, and it lives here rather
- * than in the screen that happens to precede a take so a retake or a resume
- * gets the same ordering.
+ * the microphone or a recogniser session is opened, and it lives here rather
+ * than in the screen that starts a take so a retake or a resume gets the same
+ * ordering.
  */
 export interface StartSequenceGate {
-  /** §29.2 step 1 — the script's pending save must be on disk. */
+  /** The script's pending save must be on disk. */
   flushScriptSave(): Promise<void>;
-  /** §29.2 step 2 — a current compile with no blocking diagnostics. */
+  /** A current compile with no blocking diagnostics. */
   ensureCompiled(): Promise<void>;
 }
 
@@ -165,7 +159,7 @@ export interface VoicePipelineDeps {
    */
   deviceLabel?: string;
   /**
-   * §28.3 capture processing — the user's Settings → Audio toggles, applied to
+   * Capture processing — the user's Settings → Audio toggles, applied to
    * the one `getUserMedia` call the app makes.
    */
   audioProcessing?: {
@@ -174,7 +168,7 @@ export interface VoicePipelineDeps {
     autoGainControl?: boolean;
   };
   /**
-   * §28.4 "Local voice-detection sensitivity", 0–1 with 0.5 = the A.6 defaults.
+   * Voice-detection sensitivity, 0–1, where 0.5 gives the default thresholds.
    *
    * Meter-only now. It moves the threshold at which the UI says the microphone
    * can hear you and at which the dead-input detector gives up; it does not
@@ -182,16 +176,17 @@ export interface VoicePipelineDeps {
    * endpointing and gating on top of that only loses words.
    */
   vadSensitivity?: number;
-  /** Auto-disconnect after this long soft-paused (A.6). */
+  /** Auto-disconnect after this long soft-paused. */
   softPauseAutoDisconnectMs?: number;
-  /** §29.2 steps 1–2; optional only so a unit test can stand up a bare pipeline. */
+  /** The save and compile checks; optional only so a unit test can stand up a bare pipeline. */
   startSequence?: StartSequenceGate;
-  /** §29.2 step 9 — transcript state above this layer goes too. */
+  /** Transcript state above this layer goes too. */
   onResetTranscriptState?(): void;
   /**
    * Raw recogniser text, for the stage's transcript bar and the "did it hear
    * me" word count. NOT alignment input: the alignment engine is fed by Rust
-   * directly from the same socket, so nothing on this path can starve it.
+   * directly from the same recogniser session, so nothing on this path can
+   * starve it.
    */
   onTranscriptText(text: string, final: boolean): void;
   /** Final transcript lines for the Live transcript tail. */
@@ -199,15 +194,15 @@ export interface VoicePipelineDeps {
   onConnectionState(state: ConnectionState): void;
   /**
    * Following must visibly stop while transcription is untrustworthy — a
-   * reconnect in progress, or dead input.
+   * session that is not connected, or dead input.
    */
   onFollowingHold?(held: boolean, reason: string | null): void;
-  /** §28.6: the input device is gone; the user must pick another. */
+  /** The input device is gone; the user must pick another. */
   onInputDeviceLost?(code: string): void;
-  /** §28.6: audio is flowing again — the counterpart to `onInputDeviceLost`. */
+  /** Audio is flowing again — the counterpart to `onInputDeviceLost`. */
   onInputRestored?(): void;
   /**
-   * §28.2: the pinned device was busy, or is not connected, so the system
+   * The pinned device was busy, or is not connected, so the system
    * default was opened.
    *
    * Reported rather than absorbed. A take that quietly runs on the built-in
@@ -221,22 +216,22 @@ export interface VoicePipelineDeps {
    * opened. The owner remembers the new id, so the next take opens it at once.
    */
   onPinnedMicrophoneFound?(deviceId: string, label: string): void;
-  /** A session-level provider failure ended or interrupted the session. */
+  /** A recogniser session failure ended or interrupted the session. */
   onSessionFailure?(code: string, fatal: boolean): void;
   /**
-   * M3: a soft pause outlasted its limit and the recogniser was closed (A.6).
+   * A soft pause outlasted its limit and the recogniser was closed.
    * Fired as it closes, so `msRemaining` is always 0.
    */
   onPauseWarning?(msRemaining: number): void;
   /**
-   * Audio was captured but could not be forwarded — a reconnect in flight, or
-   * a wedged socket. Surfaced rather than swallowed: silently dropped frames
+   * Audio was captured but could not be forwarded — no session open yet, or a
+   * push to Rust that stalled or was refused. Surfaced rather than swallowed: silently dropped frames
    * are the difference between "the presenter said nothing" and "we threw away
    * what they said", and those look identical downstream.
    */
   onAudioDropped?(frames: number): void;
   /**
-   * §5.3 single-capture fan-out. The one place in the app that opens the
+   * Single-capture fan-out. The one place in the app that opens the
    * microphone hands the resulting stream to any additional consumer, so no
    * second `getUserMedia` is ever issued.
    */
@@ -262,9 +257,10 @@ export interface VoicePipelineDeps {
    *
    * Exists so a consumer waiting on audio can time out against the ATTEMPT
    * rather than against the start of the take. Everything before this line —
-   * the §29.2 gate, the permission query, the socket subscription — is time in
-   * which no capture has been tried, and "no audio" measured from before the
-   * request was made says something false about the microphone.
+   * the save and compile checks, the permission query, the event subscription
+   * — is time in which no capture has been tried, and "no audio" measured
+   * from before the request was made says something false about the
+   * microphone.
    */
   onCaptureAttempt?(): void;
   timers?: PipelineTimers;
@@ -275,10 +271,9 @@ export class VoiceSessionPipeline {
   /**
    * Finalized utterances this session, by item id.
    *
-   * All that survives of what used to be a full transcript ledger. Alignment
-   * has its own, in Rust; what is still needed here is idempotence for the
-   * visible tail, which is NOT idempotent. A provider that re-sends a final
-   * would otherwise show the line twice.
+   * Alignment has its own ledger, in Rust; what is needed here is idempotence
+   * for the visible tail, which is NOT idempotent. A recogniser that repeats a
+   * final frame would otherwise show the line twice.
    */
   private readonly finalized = new Map<string, FinalizedTranscriptItem>();
   /** Monotonic commit ordering. */
@@ -292,9 +287,9 @@ export class VoiceSessionPipeline {
   /**
    * Generation of the RUST session; `null` when none is open.
    *
-   * Deliberately not the session generation. Rust mints its own per socket and
-   * the two diverge the moment anything else opens a stream first — the
-   * Preflight microphone test does exactly that. This one filters late frames
+   * Deliberately not the session generation. Rust mints its own per recogniser
+   * session and the two diverge the moment anything else opens a stream first
+   * — the Settings transcription test does exactly that. This one filters late frames
    * at the IPC edge; `deps.sessionGeneration` is what the ledger and the
    * aligner are keyed on.
    */
@@ -346,7 +341,7 @@ export class VoiceSessionPipeline {
   private lastConnectionState: ConnectionState | null = null;
   private following = true;
 
-  /** §28.6 sustained no-signal detection on the captured stream. */
+  /** Sustained no-signal detection on the captured stream. */
   private readonly silentInput = new SilentInputDetector();
   /** Wall time of the last PCM frame that carried anything, or 0. */
   private lastPcmSignalAtMs = 0;
@@ -390,7 +385,7 @@ export class VoiceSessionPipeline {
   /** True once this session has reached `connected` at least once. */
   private hasConnected = false;
   private deviceManager: MicrophoneDeviceManager | null = null;
-  /** §28.2: a device chosen mid-session outranks `deps.deviceId`. */
+  /** A device chosen mid-session outranks `deps.deviceId`. */
   private deviceOverride: string | undefined;
   /**
    * Where `deps.deviceId` turned out to be, once its id opened nothing: the id
@@ -424,7 +419,7 @@ export class VoiceSessionPipeline {
   }
 
   /**
-   * §29.2 start sequence. Billable streaming begins here.
+   * The start sequence. Streaming to the recogniser begins here.
    *
    * One start per lifecycle: a resume that arrives while this one is still
    * opening joins it rather than running a second acquire that would tear the
@@ -443,15 +438,15 @@ export class VoiceSessionPipeline {
 
   private async openSession(epoch: number): Promise<void> {
     try {
-      // Steps 1–2 first: nothing billable begins on a session whose script or
-      // compile was not ready.
+      // The save and compile checks first: nothing opens for a take whose
+      // script or compile was not ready.
       if (this.deps.startSequence) {
         await this.deps.startSequence.flushScriptSave();
         this.assertCurrent(epoch);
         await this.deps.startSequence.ensureCompiled();
         this.assertCurrent(epoch);
       }
-      // Step 4, passive: only an explicit `denied` stops the sequence. Plenty
+      // Permission, passively: only an explicit `denied` stops the sequence. Plenty
       // of WebViews do not answer the query at all, and `getUserMedia`
       // resolves permission implicitly there.
       const permitted = await this.checkMicrophonePermission();
@@ -549,8 +544,8 @@ export class VoiceSessionPipeline {
       const unlisten = this.unlistenStt;
       this.unlistenStt = null;
       try {
-        // A session opened and then abandoned bills for audio nobody is
-        // reading, so it is closed on every failure after it exists —
+        // A session opened and then abandoned holds the recogniser for audio
+        // nobody is reading, so it is closed on every failure after it exists —
         // including the one where capture is what failed.
         await Promise.all([this.closeSession(), this.teardownAudio()]);
       } finally {
@@ -564,7 +559,7 @@ export class VoiceSessionPipeline {
   }
 
   /**
-   * §28.2 mid-session input change — the recovery for a microphone unplugged
+   * Mid-session input change — the recovery for a microphone unplugged
    * mid-take.
    *
    * The chosen id becomes this pipeline's device for everything after, not just
@@ -603,9 +598,10 @@ export class VoiceSessionPipeline {
   /**
    * Stop sending audio without closing the session.
    *
-   * The socket stays open so resuming is instant, but the frames stop, which is
-   * both the CPU saving and — because the recogniser endpoints on silence — the thing
-   * that finalizes whatever sentence was in progress.
+   * The recogniser session stays open so resuming is instant, but the frames
+   * stop, which is the CPU saving. Withholding frames does not finalize a
+   * sentence in progress: the recogniser endpoints only on audio it is given,
+   * and only a stop flushes it.
    */
   softPause(): void {
     if (this.paused) return;
@@ -629,7 +625,7 @@ export class VoiceSessionPipeline {
    *
    * A soft pause only stopped the frames, so resuming is a flag. A hard pause
    * (or the auto-disconnect firing while soft-paused) released the microphone
-   * and the socket, so resuming has to rebuild both — and must not resolve
+   * and the recogniser session, so resuming has to rebuild both — and must not resolve
    * until it has, because the caller reports the session live the moment this
    * returns.
    */
@@ -656,7 +652,8 @@ export class VoiceSessionPipeline {
   }
 
   /**
-   * Release the microphone and the socket entirely, and stay resumable.
+   * Release the microphone and the recogniser session entirely, and stay
+   * resumable.
    *
    * `paused` is set here as well as in `softPause`, which is the difference
    * between "resume works" and a screen that says the microphone is live over
@@ -696,10 +693,6 @@ export class VoiceSessionPipeline {
     }
   }
 
-  /**
-   * The session options for this take — the same builder the Preflight
-   * microphone test uses, which is what stops the two drifting.
-   */
   /** Why `forwardFrame` declined to send, in words. */
   private frameSkipReason(): string {
     if (this.transportGeneration === null) return 'no session open';
@@ -733,9 +726,9 @@ export class VoiceSessionPipeline {
     if (!isTauriRuntime()) return; // plain-browser dev: nothing to subscribe to
     /*
      * NOT swallowed. Inside Tauri, a failed subscription means the session
-     * would open the microphone, stream audio, bill for it, and receive
-     * nothing — the precise failure this rewrite exists to eliminate, arrived
-     * at by a different route. Failing the start is the only honest outcome.
+     * would open the microphone, stream audio and receive nothing — a take
+     * that hears the presenter and never moves. Failing the start is the only
+     * honest outcome.
      */
     const { listen } = await import('@tauri-apps/api/event');
     this.assertCurrent(epoch);
@@ -843,9 +836,9 @@ export class VoiceSessionPipeline {
        * at +68 ms on every single take, so the words arrived and the cursor
        * never moved: "words heard 28, script followed 0 of 26".
        *
-       * After a session HAS connected, `connecting` means a reconnect, and
-       * holding is then exactly right — following on a dead transport is the
-       * stage drifting on a stale estimate while the presenter talks.
+       * After a session HAS connected, any state but `connected` holds, and
+       * that is exactly right — following on a dead session is the stage
+       * drifting on a stale estimate while the presenter talks.
        */
       const opening = frame.state === 'connecting' && !this.hasConnected;
       if (frame.state === 'connected') this.hasConnected = true;
@@ -854,8 +847,8 @@ export class VoiceSessionPipeline {
     }
 
     if (frame.kind === 'failed') {
-      // `recoverable: false` is a key problem, not a network problem: the
-      // supervisor has already given up, so the UI must say so instead of
+      // `recoverable: false` means retrying is pointless — a broken
+      // installation or a recogniser error — so the UI must say so instead of
       // showing a reconnect that will never happen.
       this.setConnectionState(frame.recoverable ? 'reconnecting' : 'offline');
       this.deps.onSessionFailure?.(frame.code, !frame.recoverable);
@@ -879,8 +872,8 @@ export class VoiceSessionPipeline {
     /*
      * Side effects follow FIRST FINALIZATION, not arrival.
      *
-     * The transcript tail is not idempotent, so a provider that re-sends a
-     * final would show the line twice.
+     * The transcript tail is not idempotent, so a recogniser that repeats a
+     * final frame would show the line twice.
      */
     if (this.finalized.has(frame.itemId)) {
       trace('final-duplicate', `item ${frame.itemId}`);
@@ -911,7 +904,7 @@ export class VoiceSessionPipeline {
   }
 
   /**
-   * §28.1/§29.2 step 4 precondition. Passive only: `queryMicrophonePermission`
+   * The permission precondition, checked passively: `queryMicrophonePermission`
    * uses the Permissions API and never calls `getUserMedia`, so this cannot
    * raise the OS prompt.
    */
@@ -940,8 +933,8 @@ export class VoiceSessionPipeline {
     deviceId: string | undefined,
   ): Promise<MicAccessResult> {
     /*
-     * The take is the most contended `getUserMedia` in the app: it opens the
-     * device immediately after the Preflight meter let go of it, and macOS does
+     * The take is the most contended `getUserMedia` in the app: it can open
+     * the device moments after another capture let go of it, and macOS does
      * not free an input the instant `track.stop()` returns (see
      * `audio/permissions.ts`). The retry is what turns "sometimes voice
      * tracking is unavailable" into a start that waits a few hundred
@@ -1102,7 +1095,7 @@ export class VoiceSessionPipeline {
     }
     if (fellBack !== null) {
       // The user picked a device and did not get it. That is theirs to know:
-      // §28.2 makes which input is in use a visible fact, not an internal one.
+      // which input is in use is a visible fact, not an internal one.
       trace('microphone', `pinned device ${FALLBACK_TRACE[fellBack]} — using the system default`);
       this.deps.onInputFellBackToDefault?.(fellBack);
     }
@@ -1119,7 +1112,7 @@ export class VoiceSessionPipeline {
         : { vadConfig: vadConfigForSensitivity(this.deps.vadSensitivity) }),
     });
     this.silentInput.reset();
-    // §28.6. A dead input holds following; audio coming back releases it.
+    // A dead input holds following; audio coming back releases it.
     // Reported only on the TRANSITION, because `onLevel` fires several times a
     // second and "the microphone is back" is not news forty times over.
     let inputWasDead = false;
@@ -1192,7 +1185,7 @@ export class VoiceSessionPipeline {
     this.activeStream = stream;
     this.monitor = monitor;
 
-    // §5.3: fan the SAME capture out to any extra consumer, so every reader
+    // Fan the SAME capture out to any extra consumer, so every reader
     // shares one track and one clock.
     this.deps.onCaptureStream?.(stream);
     return stream;
@@ -1235,7 +1228,7 @@ export class VoiceSessionPipeline {
      *
      * There are two taps on one microphone: this one, which encodes the frames
      * the recogniser actually transcribes, and a separate AnalyserNode graph
-     * (`MicrophoneMonitor`) that drives the level meter and the §28.6
+     * (`MicrophoneMonitor`) that drives the level meter and the
      * dead-input detector. They can disagree, and on at least one real device —
      * a RODE NT-USB Mini on macOS — they do: the analyser reports pure silence
      * while this tap carries perfectly transcribable speech. Settings shows
@@ -1324,7 +1317,7 @@ export class VoiceSessionPipeline {
   }
 
   /**
-   * §28.6: watch `devicechange` so an unplugged or replaced input is noticed
+   * Watch `devicechange` so an unplugged or replaced input is noticed
    * even when the track itself does not end — macOS default-device switches in
    * particular.
    */

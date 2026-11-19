@@ -1,9 +1,9 @@
 /**
- * Local voice-activity detection and level analysis core (spec §28.4).
+ * Local voice-activity detection and level analysis core.
  *
  * Pure: consumes per-frame RMS/peak statistics with monotonic timestamps and
  * produces `AudioLevelSnapshot`s plus speech-boundary events. All tunables
- * come from `VadConfig` (Appendix A.6 defaults) — no magic numbers inline.
+ * come from `VadConfig` (defaults in `defaults.ts`) — no magic numbers inline.
  */
 import type { AudioLevelSnapshot } from '../../../shared/contracts';
 import { DEFAULT_VAD_CONFIG, type VadConfig } from './defaults';
@@ -66,20 +66,21 @@ interface VadState {
   aboveSinceMs: number | null;
   belowSinceMs: number | null;
   speechStartMs: number | null;
-  /** Reset after a forced max-utterance commit so bounds stay bounded. */
+  /** Reset after a forced max-utterance close so bounds stay bounded. */
   utteranceAnchorMs: number | null;
   lastSnapshot: AudioLevelSnapshot | null;
 }
 
 /**
- * Adaptive local VAD (spec §28.4):
+ * Adaptive local VAD, for the level meter only (the recogniser endpoints on
+ * its own):
  * - noise floor from an initial calibration window, then a slow EMA during
  *   silence (adaptive floor);
  * - speech opens after `speechOpenMs` above threshold;
  * - speech survives gaps shorter than `endOfTurnSilenceMs`;
- * - `speech_ended` fires after `endOfTurnSilenceMs` of silence (commit cue);
+ * - `speech_ended` fires after `endOfTurnSilenceMs` of silence;
  * - `max_utterance` fires when continuous speech reaches `maxUtteranceMs`
- *   (forced-commit cue) and re-anchors so reconciliation stays bounded.
+ *   and re-anchors so the utterance stays bounded.
  */
 export class LocalVad {
   private readonly config: VadConfig;
@@ -206,7 +207,7 @@ export class LocalVad {
             speechStartMs: s.utteranceAnchorMs,
             durationMs: atMs - s.utteranceAnchorMs,
           });
-          s.utteranceAnchorMs = atMs; // keep partial/final reconciliation bounded
+          s.utteranceAnchorMs = atMs; // keep the utterance bounded
         }
       }
     }

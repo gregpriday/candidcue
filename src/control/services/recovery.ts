@@ -5,11 +5,10 @@
  * writing, and none of it needs the application to have started — which is the
  * point, because the failures it exists for are the ones that stop it starting.
  *
- * `getBootStatus` is asked BEFORE the shell routes anywhere. Until this
- * existed, `DATABASE_CORRUPT` and a failed migration aborted Tauri's setup hook
- * before a webview existed, so the boot-failure screen the frontend already
- * had could not be reached by the two codes it was written for — its own
- * comment said so.
+ * `getBootStatus` is asked BEFORE the shell routes anywhere. Rust carries
+ * `DATABASE_CORRUPT` or a failed migration into the running app rather than
+ * aborting its setup hook (`database::BootStatus`), so those two codes reach
+ * this screen instead of a vanished application.
  */
 import { ipcInvoke, isTauriRuntime } from './ipc';
 
@@ -224,11 +223,8 @@ export function recommendRepair(
  * What startup reconciliation found on this launch, if anything.
  *
  * Read once and cleared by Rust. Reconciliation runs inside Tauri's setup hook,
- * before the control webview has executed a line of JavaScript, so the
- * `diagnostic://warning` it used to emit landed on a page with no listeners —
- * the Rust comment called the emit "best effort" and pointed at a diagnostics
- * file as the fallback, which is a file nobody opens. That emit is gone; this
- * is the delivery.
+ * before the control webview has executed a line of JavaScript, so an event
+ * emitted then lands on a page with no listeners; this read is the delivery.
  *
  * A repair that rewrote somebody's script index is worth telling them about,
  * so the findings wait to be collected rather than being shouted into an empty

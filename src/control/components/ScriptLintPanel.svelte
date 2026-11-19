@@ -445,7 +445,7 @@
     padding: 2px 0 var(--space-3) calc(14px + var(--space-2));
   }
 
-  /* The half the author can act on carries the warm accent — `--accent-strong`
+  /* The half the author can act on carries the accent — `--accent-strong`
      because small accent text takes the strong step on the light desk. */
   .action,
   .why-text {

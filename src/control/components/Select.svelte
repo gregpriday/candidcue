@@ -15,16 +15,16 @@
     options: SelectOption[];
     label?: string;
     /**
-     * A concise sentence under the label. Settings rows only (§25.2: one
-     * sentence in an ordinary row; operational detail belongs in help).
+     * A concise sentence under the label. Settings rows only (one sentence in
+     * an ordinary row; operational detail belongs in help).
      */
     description?: string;
     /**
      * `row` puts the label and its description on the left and the control on
-     * the right, in a fixed grid — §14.3's form-row anatomy.
+     * the right, in a fixed grid — the form-row anatomy.
      *
      * Stacked is still the default because that is what a narrow panel and a
-     * dialog want. What §14.3 is actually about is a SETTINGS SECTION, where a
+     * dialog want. The row layout is for a SETTINGS SECTION, where a
      * column of stacked label-over-control pairs makes every row a different
      * width and nothing lines up down the page; `row` is how a section's
      * controls end up on one vertical axis.
@@ -113,12 +113,12 @@
   }
 
   /*
-   * The form-row grid (§14.3): label and description left, control right.
+   * The form-row grid: label and description left, control right.
    *
    * The control column is a FIXED width rather than a share, which is the part
    * that makes a section line up — a percentage would give a row with a long
-   * label a narrower select than the row above it, and §26.3 asks for settings
-   * labels and controls to align across sections.
+   * label a narrower select than the row above it, and settings labels and
+   * controls align across sections.
    *
    * `--settings-control-w` so a section can widen the column once for a control
    * that genuinely needs it, instead of every row inventing its own.

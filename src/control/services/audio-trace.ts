@@ -1,5 +1,5 @@
 /**
- * Step-by-step trace of a take's audio path (spec §30.1 triage).
+ * Step-by-step trace of a take's audio path.
  *
  * Why this exists. A session that connects and transcribes nothing has been the
  * one failure nothing could see from outside the machine it happens on. Capture
@@ -11,12 +11,13 @@
  *
  * So each step reports itself, with elapsed milliseconds, to a Rust command
  * that prints through `tracing` and appends to `logs/client-trace.log`. The
- * trace names the step, the state and the timing, and nothing else: no
- * transcript text, and above all no API key. Lines are composed from fixed step
- * names and small scalars rather than from anything the provider or the user
- * supplied, so there is no path by which a secret reaches one.
+ * trace names the step, the state and the timing, plus an error message when
+ * a step fails: no transcript text. Lines are composed from fixed step names,
+ * small scalars and error messages, and no caller passes recognised words. An error message
+ * is free text, though, so keep recogniser output out of the errors this
+ * reports.
  *
- * On by default in a dev build; see {@link initConnectTrace}.
+ * On by default in a dev build; see {@link initAudioTrace}.
  */
 import { ipcInvoke } from './ipc';
 
@@ -65,7 +66,7 @@ export function traceBegin(): void {
  *
  * `detail` must be composed by the caller from fixed strings and scalars. It is
  * truncated defensively, but the real guarantee is the call sites: nothing here
- * is ever handed a credential, an SDP body, or a transcript.
+ * is ever handed a transcript.
  */
 export function trace(step: string, detail = ''): void {
   if (!enabled) return;

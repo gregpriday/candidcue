@@ -1,7 +1,11 @@
 <!--
-  Live control screen (spec §15) in the dark studio theme: top status bar,
-  outline / stage preview / diagnostics regions, always-visible bottom
-  transport, §15.3 pause semantics, F.17 end-of-session summary.
+  The take route. While a take is active it renders the production stage in
+  this window (`StageApp`, through its `embedded` prop), with the take-controls
+  drawer and the appearance panel over it; a take ends by leaving for the
+  editor, where App's `SessionSummary` shows the report. The `{:else}` arm is
+  the older operator console in the dark studio theme (status bar, outline /
+  stage preview / diagnostics regions, bottom transport), on screen only when
+  this route is up with no take active.
 -->
 <script lang="ts">
   import { tick } from 'svelte';
@@ -119,7 +123,7 @@ import { onShortcut } from '../lib/shortcuts';
   const modeLabel = $derived(sessionModeLabel($session.mode));
 
   /**
-   * Is there a realtime transport and an open microphone to report on at all?
+   * Is there a voice pipeline and an open microphone to report on at all?
    *
    * `connection` and `micState` are optimistic defaults ('connected' / 'live')
    * that only a running voice pipeline ever corrects. In a manual or
@@ -132,31 +136,31 @@ import { onShortcut } from '../lib/shortcuts';
    */
   const hasVoiceTransport = $derived($session.active && $session.mode === 'voice');
 
-  /* ------------------------------------------------- §28.2 input recovery */
+  /* ------------------------------------------------- input recovery */
 
   /**
-   * A microphone that dies mid-take is recoverable: the WebRTC sender's track
-   * can be replaced without renegotiating the session, so the take keeps its
-   * position, its transcript and its connection.
+   * A microphone that dies mid-take is recoverable: with the recogniser still
+   * running, the voice pipeline reopens PCM capture on the chosen device and
+   * the take keeps its position; after a failed start, choosing a device
+   * resumes the pipeline instead. A busy device can fall back to the system
+   * default.
    *
-   * The picker only appears when the INPUT is what failed (`inputDeviceLost`,
-   * not the broader `micState === 'disconnected'`, which a dead transport also
-   * produces) and there is a transport to switch on. Offering a microphone
-   * swap as the cure for a rejected API key, or in a manual take with no
-   * pipeline at all, would be the same promise-the-UI-cannot-keep defect this
-   * replaced.
+   * The picker only appears when the INPUT is what failed or a fallback input
+   * was chosen for it (`inputDeviceLost` or `usingFallbackInput`, not the broader
+   * `micState === 'disconnected'`, which a refused speech model also
+   * produces) and there is a pipeline to switch on. Offering a microphone
+   * swap as the cure for a missing speech model, or in a manual take with no
+   * pipeline at all, would promise something the UI cannot deliver.
    */
   let micInputs = $state<AudioDeviceInfo[]>([]);
   let micChoice = $state('');
   let micSwitching = $state(false);
   /**
-   * Unchanged, and it was never the part that was wrong.
-   *
-   * This condition is exactly right: offer a swap when there is a voice
-   * transport to swap on and the INPUT is what failed. What was wrong was where
-   * it rendered — inside the "no take is running" arm, which made the whole
-   * expression `active && !active`. It is the take-controls drawer that reads it
-   * now. See the §115 block further down.
+   * Offer a swap when there is a voice pipeline to swap on and the INPUT is
+   * what failed, or a fallback input was chosen for it. Read by the
+   * take-controls drawer, never only by the console arm: that arm renders only
+   * with no take active, which made the condition
+   * unsatisfiable. See the take-controls block further down.
    */
   const micRecoveryOffered = $derived(
     hasVoiceTransport &&
@@ -186,7 +190,7 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /**
-   * The take-controls drawer (§115). Declared here, beside the microphone state
+   * The take-controls drawer. Declared here, beside the microphone state
    * it exists to make reachable; its reasoning and lifecycle are at the bottom
    * of this script, and `stageChromeOpen` reads `takeControlsOpen` above.
    */
@@ -341,17 +345,16 @@ import { onShortcut } from '../lib/shortcuts';
     currentSectionIndex >= 0 ? (flatOutline[currentSectionIndex]?.node.title ?? null) : null,
   );
 
-  /** Degraded-state actions (Part XI) offered next to the notice itself. */
+  /** Degraded-state actions offered next to the notice itself. */
   function handleNoticeAction(action: NonNullable<FollowNotice['action']>): void {
     if (action.id === 'rebuild_layout') {
       smoothFollow.requestLayoutRebuild();
       return;
     }
     /*
-     * The Settings WINDOW, not a route. This used to navigate, and since
-     * Settings moved out of the control window (§14.1) that quietly landed the
-     * operator in the Library — mid-take, having asked for the follower
-     * settings.
+     * The Settings WINDOW, not a route. Settings is its own window, so
+     * navigating this one instead landed the operator in the Library —
+     * mid-take, having asked for the follower settings.
      */
     void openSettingsWindow('following');
   }
@@ -402,15 +405,10 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * End the session, having asked first if the setting says to.
    *
-   * ONE VOCABULARY. There used to be three ways to finish a take on this
-   * screen wearing three different words — "Stop the session?" in this dialog,
-   * "Stop session" on the transport, "End session" on the stage's dock — and
-   * two different confirmation policies, because the dock's exit ran straight
-   * to teardown while this one asked. Three names for one action reads as three
-   * actions, and the one the presenter reaches for at the end of a take is
-   * whichever they happen to see.
-   *
-   * It is "end" everywhere now, and every path lands in `endTake` below.
+   * ONE VOCABULARY. It is "end" everywhere — this dialog, the transport and
+   * the stage's dock — and every path lands in `endTake` below. Three names
+   * for one action read as three actions, and the one the presenter reaches
+   * for at the end of a take is whichever they happen to see.
    */
   async function requestEndSession(): Promise<void> {
     if ($settings.general.confirmEndSession) {
@@ -431,9 +429,9 @@ import { onShortcut } from '../lib/shortcuts';
          * Every dialog-shaped way out of a running take asks it — this one,
          * App's navigation guard and File › Close Window — and it lives in
          * `app-lifecycle.ts` precisely so they cannot drift apart again, which
-         * they had. Over a practice it is the dock's words (§practice): a
-         * dialog reached from the drawer or ⌘. that still offered to end a take
-         * would be the fourth name for one action that §115 removed three of.
+         * they had. Over a practice it is the dock's words: a dialog reached
+         * from the drawer or ⌘. that still offered to end a take would give
+         * one action a second name.
          *
          * Its body stops short of promising the summary even though this path
          * does show one, because the other two do not — see the constant.
@@ -468,31 +466,17 @@ import { onShortcut } from '../lib/shortcuts';
    * whether or not it does.
    *
    * ---------------------------------------------------------------------------
-   * IT TAKES A DESTINATION AGAIN — WITHOUT THE PART THAT WAS THE BUG
+   * IT TAKES A DESTINATION — AND NEVER CLEARS A TAKE'S SUMMARY UNDER THE COVER
    * ---------------------------------------------------------------------------
-   * This is worth reading before anybody "restores" the previous shape.
-   *
-   * It originally ran a `destination` callback between the un-present and the
-   * cover coming down, and every caller passed the same two statements:
-   * `clearSession()` then navigate away. `clearSession()` resets the store, and
-   * the store's `summary` is what the F.17 dialog opens on — so the summary the
-   * take had just produced was destroyed UNDER THE COVER, one step before the
-   * screen it would have appeared on was replaced. The dialog's condition was
-   * true for a handful of frames, every one of them behind an opaque black
-   * plate. Nobody had ever seen an end-of-session summary.
-   *
-   * The fix at the time was to drop the destination entirely and let the take
-   * end where it started, on Live, with the summary simply visible there. That
-   * fixed the summary and left the presenter looking at the thing behind it: an
-   * operator console built for a two-window rig, its centre pane mirroring a
-   * prompter that had been in this very window, its transport offering to Start
-   * and End a session that was over.
-   *
-   * So the destination is back and the `clearSession()` is not. Navigating
-   * under the cover was never the defect — clearing under it was. The summary
-   * now lives in an app-level host (`SessionSummary.svelte`) which outlives this
-   * route, so the report survives the navigation it used to be destroyed by,
-   * and the only thing that clears the session is somebody dismissing it.
+   * Navigating under the cover is fine; clearing under it is the defect. The
+   * store's `summary` is what the end-of-session report opens on, and a
+   * `clearSession()` here once destroyed every summary one step before the
+   * screen it would have appeared on was replaced, so nobody ever saw one. The
+   * summary lives in an app-level host (`SessionSummary.svelte`) which
+   * outlives this route, and on this path the only thing that clears a take's
+   * session is somebody dismissing it. A practice has no summary, so its
+   * session is cleared here. (App's navigation guard, a different way out of a
+   * live take, stops and clears under its own cover.)
    *
    * The cover still cannot be rendered under — App's `.present-cover` sits at
    * z-index 9999, deliberately above the dialog host — which is why the
@@ -556,10 +540,10 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * IT ENDS ON THE EDITOR, not here. A finished take has exactly three things
    * anybody wants — the report, the script they just read, and another go — and
-   * this route's inactive state is none of them: it falls back to an operator
-   * console laid out for a rig where the stage has its own window, offering to
-   * Start and End a session that has just ended. The summary itself is hosted
-   * by App now, so it survives the navigation and opens over the editor. See
+   * this route's inactive state is none of them: it falls back to the operator
+   * console, whose transport offers to Start and End a session that has just
+   * ended. The summary itself is hosted by App, so it survives the navigation
+   * and opens over the editor. See
    * `leavePresentation` for why the route swap happens under the cover.
    */
   async function endTake(): Promise<void> {
@@ -605,10 +589,10 @@ import { onShortcut } from '../lib/shortcuts';
        * own "End this take?" confirmation over a take that has already ended.
        */
       /*
-       * A PRACTICE CLEARS ITS OWN SESSION, BECAUSE NOTHING ELSE WILL (§practice).
+       * A PRACTICE CLEARS ITS OWN SESSION, BECAUSE NOTHING ELSE WILL.
        *
        * `leavePresentation` deliberately does NOT clear — see the long note on
-       * it — because the store's `summary` is what the F.17 report opens on, and
+       * it — because the store's `summary` is what the end-of-session report opens on, and
        * clearing under the cover was the bug that meant nobody had ever seen
        * one. `SessionSummary` clears when it is dismissed, and that is what puts
        * the store back to rest after every take.
@@ -834,7 +818,7 @@ import { onShortcut } from '../lib/shortcuts';
 
   function adjustFontSize(delta: number): void {
     /*
-     * §17.2. A rig-resolved take sizes its type from a measured distance, so
+     * A rig-resolved take sizes its type from a measured distance, so
      * this shortcut has nothing to move — and reporting the unchanged number
      * ("Text 96 px", again) reads as a key that did not register rather than a
      * size that is not this key's to set.
@@ -893,10 +877,9 @@ import { onShortcut } from '../lib/shortcuts';
         $session.stageEnvelope &&
         (action === 'escape' ||
           action === 'play-pause' ||
-          // The transport keys are answered by the mounted stage too, so that
-          // the hold chip's advice works on a separate-stage rig where that
-          // window holds the keyboard. Handling them in both places would turn
-          // one press into an on-and-off again.
+          // The transport keys are answered by the mounted stage too, which is
+          // what the hold chip's advice relies on. Handling them in both places
+          // would turn one press into an on-and-off again.
           action === 'toggle-auto-scroll' ||
           action === 'auto-scroll-faster' ||
           action === 'auto-scroll-slower')
@@ -965,36 +948,23 @@ import { onShortcut } from '../lib/shortcuts';
     }),
   );
 
-  /* ------------------------------------------------ the appearance panel (§14.2)
+  /* ------------------------------------------------ the appearance panel
    *
    * Presentation fills this window with the production stage, which is exactly
-   * where the prompter's appearance can be judged and — before this existed —
-   * the one place it could not be changed. Four of these five controls answer a
-   * question about a physical arrangement (can I read this from there? is the
-   * band over the lens?), so setting them anywhere else is guesswork that costs
-   * a take to check.
+   * where the prompter's appearance can be judged. Four of these five controls
+   * answer a question about a physical arrangement (can I read this from
+   * there? is the band over the lens?), so setting them anywhere else is
+   * guesswork that costs a take to check.
    *
-   * ---------------------------------------------------------------------------
-   * THERE IS NO PRESENTATION CORNER ANY MORE
-   * ---------------------------------------------------------------------------
-   * This used to be a floating chip in the top-right of the window holding an
-   * overflow menu with two items — "Adjust settings…" and "End session" — plus
-   * its own idle timer, its own glass treatment, and its own focus-return
-   * dance. All of it is now the stage's own session dock, bottom left, and what
-   * is left here is the half that genuinely belongs to control: the panel's
-   * contents and the transaction they run in. The stage raises it; this owns it.
-   *
-   * The duplicate "End session" went with the menu. There were three ways to end
-   * a take on one screen (the menu item, the stage's exit affordance, Escape)
-   * and two of them ran different code — one through `requestEndSession`'s
-   * confirm dialog, one straight to teardown. Now there is one control, one
-   * anchored confirmation, and one teardown path (`endTake`).
+   * The stage's session dock raises the panel; this owns the half that belongs
+   * to control: the panel's contents and the transaction they run in. Every
+   * way of ending a take lands in one teardown path (`endTake`).
    */
 
   const mac = detectPlatform() === 'macos';
 
   /**
-   * A transport key, spelled for this platform (§12.4).
+   * A transport key, spelled for this platform.
    *
    * Through `formatAccelerator` — the same function the native menu and the
    * Shortcuts dialog use — so a key advertised on a tooltip cannot be one the
@@ -1332,14 +1302,9 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /*
-   * FOCUS RETURN IS THE PANEL'S JOB NOW, AND IT ALWAYS SHOULD HAVE BEEN.
+   * FOCUS RETURN IS THE JOB OF THE PANEL, not of this component.
    *
-   * There used to be a `focusSessionMenu` here that hunted the first button in
-   * the chrome corner after the panel closed. It existed because that corner
-   * REPLACED its trigger with the panel rather than layering over it, so the
-   * opener the panel restores focus to was gone by the time it unmounted.
-   *
-   * The dock does not do that: the settings button stays mounted and stays put
+   * The dock's settings button stays mounted and stays put
    * while the panel is up, so `StageAppearanceSheet`'s own opener-restore lands
    * on the control somebody actually pressed. One mechanism, in the place that
    * owns the contract.
@@ -1359,19 +1324,14 @@ import { onShortcut } from '../lib/shortcuts';
     closeAppearanceSheet();
   });
 
-  /* ------------------------------------------------- §115 the take controls
+  /* ------------------------------------------------- the take controls
    *
-   * THE SCREEN'S CONTROLS FOR A TAKE ONLY EXISTED WHEN THERE WAS NO TAKE.
-   *
-   * Everything below `{#if $session.active}` — the status bar, the tracking
-   * panel and its recovery actions, the microphone picker — sat in the `{:else}`
-   * arm, because single-window presentation gives the whole window to the
-   * stage. So the surface built to be watched DURING a read rendered only
-   * before and after one. The microphone picker was the sharpest case: its
-   * condition required an active voice take AND it rendered only when no take
-   * was active, so it was not merely hidden, it was unsatisfiable — and
-   * `onInputDeviceLost` had been written to stay silent precisely BECAUSE this
-   * picker was supposed to be the remedy.
+   * The console — the status bar, the tracking panel and its recovery
+   * actions, the microphone picker — sits in the `{:else}` arm, because
+   * single-window presentation gives the whole window to the stage, so none
+   * of it is on screen during a read. This layer is what a running take uses
+   * instead. `onInputDeviceLost` stays silent precisely BECAUSE the picker in
+   * here is the remedy.
    *
    * ---------------------------------------------------------------------------
    * A SIBLING LAYER, NOT A RESTRUCTURED `{#if}`
@@ -1394,7 +1354,7 @@ import { onShortcut } from '../lib/shortcuts';
    * over the script by itself is a worse failure than the one it reports. The
    * tab carries the attention instead, and the drawer puts the remedy first.
    *
-   * What is in here is what the issue named and what has nowhere else to go:
+   * What is in here is what has nowhere else to go during a take:
    * the status readout, microphone recovery, and the following panel with its
    * degraded-state actions. The transport is deliberately NOT duplicated — every
    * one of its actions already has both a keyboard shortcut that fires during a
@@ -1709,26 +1669,16 @@ import { onShortcut } from '../lib/shortcuts';
 {/snippet}
 
 <!--
-  §115. The three blocks below are rendered in TWO places — the `.live` screen
-  that shows before and after a take, and the take-controls drawer that shows
-  during one — so they are snippets rather than copies. The duplication they
-  replace is the kind that rots: a pill added to one status bar and not the
-  other reads as a pill that works sometimes.
+  The three blocks below are rendered in TWO places — the `.live` console that
+  shows with no take active, and the take-controls drawer that shows during
+  one — so they are snippets rather than copies. Copies rot: a pill added to
+  one status bar and not the other reads as a pill that works sometimes.
 -->
 <!--
-  The console's continuous health, as STATUS LIGHTS (§12.3, §9.4).
-
-  ---------------------------------------------------------------------------
-  WHY THESE STOPPED BEING PILLS
-  ---------------------------------------------------------------------------
-  This was a row of four `StatusPill`s of equal visual weight: the mode, the
-  connection, the stage, the microphone. §9.4's test is whether the capsule
-  SHAPE helps scanning, and for four adjacent always-present states it does the
-  opposite — every one of them shouts equally, so a genuine fault reads exactly
-  like "Mic live". §12.3 asks for a small coloured light plus text for
-  continuous states, with pills reserved for the exceptional and the actionable.
-
-  So: a dot and a word for each.
+  The console's continuous health, as STATUS LIGHTS: a dot and a word for
+  each, not pills. A capsule's SHAPE helps scanning only for the exceptional
+  and the actionable; for adjacent always-present states every capsule shouts
+  equally, so a genuine fault reads exactly like "Mic live".
 
   Colour is never the whole signal. Each light is accompanied by its own words
   ("Mic live", "Mic lost"), so the state survives a monochrome display and a
@@ -1736,8 +1686,8 @@ import { onShortcut } from '../lib/shortcuts';
 -->
 {#snippet partStatus(stacked = false)}
   <!--
-    §parts. Which piece of the script this take is recording, and whether the
-    presenter has read to the end of it.
+    The part. Which piece of the script this take is recording, and whether its
+    end has been reached (by reading or by auto-scroll).
 
     RENDERED IN TWO PLACES, and it had to be. Everything under
     `{#if $session.active}` is the embedded stage — during a single-window take
@@ -1796,7 +1746,7 @@ import { onShortcut } from '../lib/shortcuts';
     </span>
   {/if}
   <!--
-    Only a voice take has a realtime connection and an open microphone to
+    Only a voice take has a recogniser session and an open microphone to
     report. Anything else says so plainly instead of showing the
     `initial` optimism of "Connected · Mic live".
   -->
@@ -1850,10 +1800,9 @@ import { onShortcut } from '../lib/shortcuts';
 {/snippet}
 
 <!--
-  §28.2. Losing a microphone mid-take used to be a dead end: the toast
-  said "choose an input" and there was nowhere to choose one. The
-  transport can replace its sender track without renegotiating, so the
-  recovery is a picker right where the failure is reported.
+  Mid-take input recovery. Capture can be reopened on another device while
+  the recogniser session stays up, so the recovery is a picker right where
+  the failure is reported.
 -->
 {#snippet micRecovery(stacked = false)}
   {#if micRecoveryOffered}
@@ -1955,7 +1904,7 @@ import { onShortcut } from '../lib/shortcuts';
 
 {#snippet stageFaultNotice()}
   <!--
-    THE TAKE MOVED PANELS AFTER IT OPENED (CCUX-010).
+    THE TAKE MOVED PANELS AFTER IT OPENED.
 
     Three sentences in the order the guide asks a fault to answer them: what
     happened, what Speaking Glass did to keep the take safe, and what the user can do
@@ -1990,7 +1939,7 @@ import { onShortcut } from '../lib/shortcuts';
         voicePill: $session.voicePill,
         ack: $session.stageAck,
         // The switch, not the symptom: an automatic hold stops following too,
-        // and the stage words that one as the fault it is (§48).
+        // and the stage words that one as the fault it is.
         followPaused: $session.followPausedByUser,
         autoScroll: $autoScrollLive,
         blanked: $session.stageBlanked,
@@ -2001,13 +1950,13 @@ import { onShortcut } from '../lib/shortcuts';
         scriptTitle: $session.scriptTitle,
         onpresentationtoggle: () => void togglePresentationMode(),
         /*
-         * §practice. Kept on the session rather than derived from the window,
+         * Whether this is a practice. Kept on the session rather than derived from the window,
          * because a practice that pops out to the display with ⌃⌘F is still a
          * practice — the window is how it opens, not what it is.
          */
         practice: $session.practice,
         /*
-         * §parts, for the stage's "what is running" label (#241): the part
+         * The part, for the stage's "what is running" label (#241): it
          * was readable only in the console and the drawer, neither of which is
          * on screen while reading. A label, and nothing the follow loop reads.
          */
@@ -2052,14 +2001,14 @@ import { onShortcut } from '../lib/shortcuts';
   {/if}
 {:else}
 <div class="live">
-  <!-- Top status bar (§15.1) -->
+  <!-- Top status bar -->
   <header class="statusbar">
     <div class="status-left">
       <span class="live-dot" class:paused={$session.paused !== 'none' || !$session.prompting}></span>
       <span class="script-title">{$session.scriptTitle}</span>
       {@render partStatus()}
       <span class="elapsed">{formatClock($session.elapsedSeconds)}</span>
-      <!-- F.11 session status; the follow state itself lives in the Tracking panel. -->
+      <!-- Session status; the follow state itself lives in the Tracking panel. -->
       <span class="session-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
     </div>
     <div class="status-right">
@@ -2069,7 +2018,7 @@ import { onShortcut } from '../lib/shortcuts';
     </div>
   </header>
 
-  <!-- Main three-region area (§15.1) -->
+  <!-- Main three-region area -->
   <div class="main">
     <aside class="outline" aria-label="Sections" style="width: {$workspace.liveOutlineWidth}px">
       <p class="region-label">Sections</p>
@@ -2139,8 +2088,8 @@ import { onShortcut } from '../lib/shortcuts';
             This said "the scaled stage view appears here", which is a claim
             this panel does not honour: what it renders is a handful of
             normalised sentences in workspace type, with none of the stage's
-            optics, geometry, mirroring or line breaking. §12.5 asks for it to
-            be EXPLICIT whether a preview is optically exact or only
+            optics, geometry, mirroring or line breaking. A preview has to be
+            EXPLICIT about whether it is optically exact or only
             representative, and the honest answer here is that it is neither —
             it is a position readout.
           -->
@@ -2153,13 +2102,9 @@ import { onShortcut } from '../lib/shortcuts';
     </section>
 
     <!--
-      A real divider on both rails (§12.2).
-
-      These were `grid-template-columns: 200px minmax(0,1fr) 304px` with a media
-      query that HID the outline below 1100px — a laid-out console rather than an
-      operated one. An operator working a rig wants the diagnostics wide while
-      hunting a fault and narrow while reading; the widths are theirs now, and
-      they are remembered.
+      A real divider on both rails. An operator working a rig wants the
+      diagnostics wide while hunting a fault and narrow while reading; the
+      widths are theirs, and they are remembered.
     -->
     <PaneDivider
       orientation="vertical"
@@ -2193,8 +2138,8 @@ import { onShortcut } from '../lib/shortcuts';
 
       <!--
         The follow CONTROLS stay visible — they are things an operator reaches
-        for mid-take, not readings. The numbers behind them do not: §12.6's
-        "raw alignment and performance details behind disclosure".
+        for, not readings. The numbers behind them do not: raw alignment and
+        performance details sit behind a disclosure.
       -->
       <p class="region-label">Following</p>
       <FollowControls follow={$smoothFollow} />
@@ -2207,13 +2152,12 @@ import { onShortcut } from '../lib/shortcuts';
       </Disclosure>
 
       <!--
-        THE RAW TRANSCRIPT IS BEHIND A DISCLOSURE (§12.6).
+        THE RAW TRANSCRIPT IS BEHIND A DISCLOSURE.
 
-        §12.6: default to a concise status summary, and put raw alignment,
-        transcript and performance detail behind disclosure. This is the raw
-        recogniser output — the most engineering-looking thing on the console —
-        and it was open by default, competing with the fault states above it for
-        the operator's attention while a take runs.
+        Default to a concise status summary, and put raw alignment, transcript
+        and performance detail behind disclosure. This is the raw recogniser
+        output — the most engineering-looking thing on the console — and open
+        by default it competes with the fault states above it.
 
         It stays one click away rather than moving to a Diagnostic mode,
         because it is the first thing anybody looks at when following goes
@@ -2273,14 +2217,13 @@ import { onShortcut } from '../lib/shortcuts';
     </aside>
   </div>
 
-  <!-- Bottom transport (§15.1) — always visible -->
+  <!-- Bottom transport -->
   <footer class="transport" bind:clientHeight={transportHeightPx}>
     <div class="transport-left">
       <!--
-        Every transport control names its key (§12.4: "Show keyboard shortcuts
-        in tooltips and the Session menu"). During a take the operator's hands
-        are on the keyboard and the transport is across the desk, so the tooltip
-        is where somebody learns the key they will actually use.
+        Transport controls with a key name it in their tooltip. During a take the
+        keys are the interface, so the tooltip is where somebody learns the key
+        they will actually use.
 
         `transportKey` spells them for this platform through the same
         `formatAccelerator` the menu and the Shortcuts dialog use, so a key
@@ -2331,9 +2274,8 @@ import { onShortcut } from '../lib/shortcuts';
         </Button>
       {/if}
       <!--
-        End keeps its own place at the end of the left group, never moving with
-        the primary control beside it (§12.4: "Place End Take separately and
-        consistently; do not let it move with secondary actions").
+        End stays last in the left group, after the primary control and apart
+        from the secondary actions.
       -->
       <Button
         variant="danger"
@@ -2380,7 +2322,7 @@ import { onShortcut } from '../lib/shortcuts';
 {/if}
 
 <!--
-  §115 take controls — a SIBLING of the block above, never inside it.
+  Take controls — a SIBLING of the block above, never inside it.
 
   Placed here so `StageApp`'s template path never changes: Svelte 5 does not
   reparent, and moving that component would remount it, throwing away the motion
@@ -2569,17 +2511,6 @@ import { onShortcut } from '../lib/shortcuts';
     color: #6d6961;
   }
 
-  /*
-   * THE PRESENTATION CORNER'S STYLES ARE GONE WITH THE CORNER.
-   *
-   * They dressed an OverflowMenu and its dropdown in glass so they could float
-   * over a running prompter, plus an idle-fade and a `@supports` fallback. All
-   * of that now lives in the stage's own dock, where the geometry tokens it
-   * shares with the hold chip and the transcript are. The appearance panel is
-   * handed across as a snippet and positions itself against the button that
-   * raised it.
-   */
-
   .live {
     flex: 1 1 auto;
     min-width: 0;
@@ -2602,7 +2533,7 @@ import { onShortcut } from '../lib/shortcuts';
     border-bottom: 1px solid var(--border);
   }
   /*
-   * A status light: a 7px dot and a word (§12.3).
+   * A status light: a 7px dot and a word.
    *
    * Deliberately quieter than the pill it replaces. Four of these sit together
    * and none of them is news — they are the console's resting vital signs, and
@@ -2699,7 +2630,7 @@ import { onShortcut } from '../lib/shortcuts';
     white-space: nowrap;
   }
 
-  /* --- §28.2 mid-session input recovery --- */
+  /* --- mid-session input recovery --- */
   .mic-recovery {
     display: flex;
     align-items: center;
@@ -2763,7 +2694,7 @@ import { onShortcut } from '../lib/shortcuts';
     color: var(--text-muted);
     line-height: 1.45;
   }
-  /* --- CCUX-010 the take moved panels --- */
+  /* --- the take moved panels --- */
   .stage-window-fault {
     position: relative;
     margin-bottom: var(--space-3);
@@ -2787,7 +2718,7 @@ import { onShortcut } from '../lib/shortcuts';
     background: var(--accent);
   }
 
-  /* ------------------------------------------------- §115 the take controls
+  /* ------------------------------------------------- the take controls
    *
    * Layered at 40: above the stage it floats over, and deliberately BELOW the
    * dialog host (100) and the toast region (120), so the end-of-session summary
@@ -3127,21 +3058,16 @@ import { onShortcut } from '../lib/shortcuts';
 
   /* --- main regions --- */
   /*
-   * OPERATED PANES, not a fixed grid (§12.2).
+   * OPERATED PANES, not a fixed grid. The widths are the operator's, and no
+   * rail vanishes silently when the window narrows — that looks like a bug
+   * the first time it happens, with no way to ask for it back.
    *
-   * This was `grid-template-columns: 200px minmax(0,1fr) 304px` with a media
-   * query that HID the outline below 1100px. Two things were wrong with that:
-   * the widths were the designer's rather than the operator's, and the
-   * disappearance was silent — a rail that vanishes when the window narrows
-   * looks like a bug the first time it happens, and there was no way to ask for
-   * it back.
-   *
-   * Both rails are now dragged and remembered. They are not toggled from View:
+   * Both rails are dragged and remembered. They are not toggled from View:
    * a take replaces this console with the stage, so a menu item for them would
    * describe a pane nobody can see (#236). The stage preview keeps
    * `flex: 1 1 auto` with `min-width: 0`, so it takes what is left and shrinks
-   * last — §12.2's rule that the least critical pane collapses before the
-   * preview stops being useful.
+   * last: the least critical pane collapses before the preview stops being
+   * useful.
    */
   .main {
     flex: 1 1 auto;
@@ -3174,9 +3100,8 @@ import { onShortcut } from '../lib/shortcuts';
      *
      * The first version was `flex: 0 0 auto` on both rails, which made the
      * PREVIEW the only shrinkable item — so a narrow window crushed the stage
-     * preview to nothing while the rails kept their full width. The comment
-     * beside it claimed the opposite. §12.2's rule is to collapse the least
-     * critical pane before shrinking the preview below usefulness, so the rails
+     * preview to nothing while the rails kept their full width. The least
+     * critical pane collapses before the preview shrinks below usefulness, so the rails
      * give way first and stop at a width where their content is still readable.
      */
     flex: 0 1 auto;
@@ -3185,10 +3110,9 @@ import { onShortcut } from '../lib/shortcuts';
      *
      * Both were declared, in that order, so the second won and this rail
      * collapsed to nothing rather than stopping where its section titles are
-     * still readable. The floor is the point: §12.2 asks the least critical
-     * pane to give way FIRST, not to vanish — a rail that shrinks to zero
-     * without being toggled reads as the bug the media query that used to hide
-     * it read as, which is the thing this layout replaced.
+     * still readable. The floor is the point: the least critical pane gives
+     * way FIRST but does not vanish — a rail that shrinks to zero without being
+     * toggled reads as a bug.
      */
     min-width: 140px;
     min-height: 0;
@@ -3247,7 +3171,7 @@ import { onShortcut } from '../lib/shortcuts';
   /* --- stage preview --- */
   .preview {
     /*
-     * Takes what is left and shrinks LAST (§12.2).
+     * Takes what is left and shrinks LAST.
      *
      * True because of three declarations together, not because of this one:
      * the rails are `flex: 0 1 auto`, so they are shrinkable while this is

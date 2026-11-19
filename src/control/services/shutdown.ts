@@ -64,8 +64,8 @@ export function installShutdownHandshake(steps: () => readonly ShutdownStep[]): 
   })().catch(() => {
     /*
      * Failing to install the listener is not worth escalating to the user: it
-     * means shutdown falls back to Rust's timeout, which is the behaviour the
-     * app had before this existed. Rust logs the missing acknowledgement.
+     * means shutdown falls back to Rust's timeout, and Rust logs the missing
+     * acknowledgement.
      */
   });
 

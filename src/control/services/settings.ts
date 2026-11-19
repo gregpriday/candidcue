@@ -1,14 +1,16 @@
 /**
- * Application settings + maintenance service (spec §46.8).
+ * Application settings + maintenance service.
  *
  * Rust owns the persisted settings document as `Revisioned<AppSettings>`
- * ({ revision, value }) with the §47.9 schema (general / stageBehavior /
- * audio / following / optical). The control UI consumes the
- * flatter view in `settings-types.ts`, so this service is an explicit
- * adapter:
+ * ({ revision, value }) with the schema in src-tauri/src/settings/mod.rs
+ * (general / stageBehavior / audio / following / optical). The control UI
+ * consumes the flatter view in `settings-types.ts`, so this service is an
+ * explicit adapter:
  *
- *  - fields with a Rust home are mapped bidirectionally (wake phrase, prompt
- *    mode, models, mirror, fixed speed, …);
+ *  - fields with a Rust home are mapped bidirectionally (prompt mode,
+ *    presentation mode, display pin, fixed speed, …). The recogniser and
+ *    language are read here but written only through
+ *    the speech-language command, which Rust guards against a running take;
  *  - UI-only presentation fields (per-display appearance, audio processing
  *    toggles, …) persist in a local overlay (localStorage) — they are
  *    frontend state, not the Rust document.
@@ -118,15 +120,15 @@ interface RustSettings {
     displayPinMigrated?: boolean;
   };
   /**
-   * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a slider
-   * for; the model and locale are what the Rust session's config frame is
-   * built from. See settings-audio.ts.
+   * `vadSensitivity` is the only field here the UI owns a slider for; the
+   * model and locale are what Rust starts the recogniser and the alignment
+   * engine with. See settings-audio.ts.
    */
   audio: Partial<RustAudioSettings> & { transcriptionModel: string; language: string };
-  /** Companion §47 — absent in documents written before the section existed. */
+  /** Absent in documents written before the section existed. */
   following?: Partial<RustFollowingSettings>;
   /**
-   * §52 calibrated rigs. Absent in documents written before the section
+   * Calibrated rigs. Absent in documents written before the section
    * existed, which is exactly the state the one-time overlay migration below
    * looks for — see `opticalAwaitingAdoption`.
    */
@@ -176,11 +178,10 @@ interface RustRestoreResult {
  * `settings://changed` says nothing about them and a second window would go on
  * showing the value it read at launch.
  *
- * The presentation mode is NOT one of them any more, and this comment used to
- * say it was: `toRustPatch` maps it and `adoptStageModeFromOverlay` writes an
- * old overlay value through to the document precisely so it stops being local.
- * What remains in the overlay for that field is a fallback for an upgrading
- * reader, not the source of truth.
+ * The presentation mode is NOT one of them: `toRustPatch` maps it and
+ * `adoptStageModeFromOverlay` writes an old overlay value through to the
+ * document precisely so it stops being local. What remains in the overlay for
+ * that field is a fallback for an upgrading reader, not the source of truth.
  * `localStorage` raises a `storage` event in the OTHER documents of the origin
  * when this key moves, and that is the only signal there is. See
  * `installOverlaySync` in `services/settings-sync.ts`.
@@ -238,7 +239,7 @@ function loadOverlay(): Overlay {
  * meant every per-machine preference silently reverted at the next launch, over
  * and over, with the settings screen reporting success each time.
  *
- * What is left in the overlay after the §52 move is presentation and
+ * What is left in the overlay is presentation and
  * per-machine capture state, not measured data: the calibrated rigs, the
  * following profile and the speech selection are all Rust-owned now. So a
  * failure here is worth SAYING and not worth refusing a settings change over —
@@ -603,7 +604,7 @@ function readerFrameFromRust(stored: unknown): ReaderFrame | null {
 /**
  * Adapt a revisioned document Rust pushed, rather than one this window read.
  *
- * The `settings://changed` broadcast (§14.1) carries exactly what `get_settings`
+ * The `settings://changed` broadcast carries exactly what `get_settings`
  * returns, so the same adapter applies — exported so `stores/settings.ts` can
  * adopt a payload without a second round trip to fetch what it was just handed.
  *
@@ -667,7 +668,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       transcriptionModel: rust.audio.transcriptionModel,
       language: rust.audio.language,
     },
-    // §28.4. Rust-owned like `following`: it is room tuning that must outlive
+    // Rust-owned like `following`: it is room tuning that must outlive
     // a cleared browser store, so a stale overlay must not be able to
     // contradict the persisted document.
     audio: {
@@ -678,7 +679,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       ...defaults.teleprompter,
       fixedSpeedWpm: rust.stageBehavior.fixedSpeedWpm,
     },
-    // Following settings are Rust-owned end to end (§47) — no overlay merge,
+    // Following settings are Rust-owned end to end — no overlay merge,
     // so a stale local overlay can never resurrect an old assist mode.
     following: followingFromRust(rust.following),
   };
@@ -849,7 +850,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // the session declares one language and the settings screen shows another.
     speech: mapped.speech,
     // The device id and the three processing toggles are per-machine capture
-    // state and overlay; `vadSensitivity` is Rust-owned and wins (§28.4).
+    // state and overlay; `vadSensitivity` is Rust-owned and wins.
     audio: {
       ...mergeSection(mapped.audio, overlay.audio),
       vadSensitivity: mapped.audio.vadSensitivity,
@@ -907,9 +908,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     put('general', 'checkForUpdates', patch.general.checkForUpdates);
   }
   if (patch.audio) {
-    // §28.4 — the missing half of the mapping. The slider persisted in the
-    // localStorage overlay only, so the sensitivity a presenter tuned for their
-    // room could not survive a cleared store.
+    // The Rust half of the mapping. Without it the slider persists in the
+    // localStorage overlay only, and the sensitivity a presenter tuned for
+    // their room cannot survive a cleared store.
     for (const [key, value] of Object.entries(audioToRustPatch(patch.audio))) {
       put('audio', key, value);
     }
@@ -919,10 +920,10 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     put('audio', 'language', patch.speech.language);
   }
   if (patch.stage) {
-    // The half this file keeps losing. `saveTranscript` and `vadSensitivity`
-    // both shipped mapped in one direction only, which reads as a control that
-    // works and silently forgets — so both stage fields are written here, next
-    // to where they are read.
+    // The half this file keeps losing. A field mapped in one direction only
+    // reads as a control that works and silently forgets (`vadSensitivity`
+    // once shipped that way) — so both stage fields are written here, next to
+    // where they are read.
     put('stageBehavior', 'presentationMode', patch.stage.presentationMode);
     /*
      * `null` is a meaningful value rather than an omission: Rust's `merge_json`
@@ -961,15 +962,14 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
   }
   if (patch.optical) {
     /*
-     * §52 calibrated rigs — the section this file lost hardest.
+     * Calibrated rigs — the section this file lost hardest.
      *
-     * It had no Rust mapping at all, so every measured viewing distance and
-     * lens placement lived only in the localStorage overlay: cleared by the
-     * OS under storage pressure, wiped by a "clear website data" action nobody
-     * associates with an app, and written through a `try` that swallowed every
-     * failure. A calibrated rig is user-created data produced by measuring a
-     * physical room, and it is the single most expensive thing in this
-     * document to lose.
+     * A calibrated rig is user-created data produced by measuring a physical
+     * room, and it is the single most expensive thing in this document to
+     * lose. Without this mapping every measured viewing distance and lens
+     * placement lives only in the localStorage overlay: cleared by the OS
+     * under storage pressure, wiped by a "clear website data" action nobody
+     * associates with an app.
      *
      * Both maps are sent WHOLE, and Rust REPLACES them rather than merging
      * (see `REPLACED_MAPS` in settings/mod.rs). `merge_json` recurses into
@@ -1001,9 +1001,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following` (§47) and `speech` (§18.2), which are
+ * except `following`, `speech` and `optical`, which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
- * otherwise-overlaid sections (`audio.vadSensitivity` §28.4, the stage mode,
+ * otherwise-overlaid sections (`audio.vadSensitivity`, the stage mode,
  * reader frame and display pin #272, `general.launchBehavior`/`defaultSessionMode`
  * and `teleprompter.fixedSpeedWpm` #271).
  */
@@ -1011,21 +1011,20 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    // Rust-owned in both directions. `optical` joined them when calibrated
-    // rigs moved out of the overlay (§52): a cached copy of a measurement
+    // Rust-owned in both directions. For `optical`, a cached copy of a measurement
     // would outlive the document and could contradict it, which is how a rig
     // somebody deleted comes back.
     if (key === 'following' || key === 'speech' || key === 'optical') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
-    // Rust-owned fields never enter the overlay (§28.4, §47) — a cached copy
+    // Rust-owned fields never enter the overlay — a cached copy
     // would outlive the document and could contradict it.
     const merged: Record<string, unknown> = {
       ...((overlay as Record<string, Record<string, unknown> | undefined>)[key] ?? {}),
       ...(section as Record<string, unknown>),
     };
     /*
-     * Rust-owned fields never enter the overlay (§28.4, §47) — a cached copy
+     * Rust-owned fields never enter the overlay — a cached copy
      * would outlive the document and could contradict it.
      *
      * Stripped from the MERGED result, not from the incoming patch. Stripping
@@ -1093,7 +1092,7 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
 }
 
 /* ---------------------------------------------------------------------------
- * Service surface (unchanged for callers)
+ * Service surface
  * ------------------------------------------------------------------------- */
 
 export async function getSettings(): Promise<AppSettings> {
@@ -1152,14 +1151,12 @@ export async function updateSettings(
 }
 
 /**
- * Export every script plus a consistent database snapshot (spec §47.7).
+ * Export every script plus a consistent database snapshot.
  *
- * C5: this used to take a `destination` the caller had no way to obtain — the
- * dialog plugin is deliberately not granted to JavaScript — and passed
- * `undefined`, which JSON drops, which made Rust's non-optional `String`
- * parameter fail to deserialize. Rust now runs the folder picker itself, the
- * same as `import_script`/`export_script`, and returns `null` when the
- * operator cancels.
+ * No destination is passed: the dialog plugin is deliberately not granted to
+ * JavaScript, so the caller has no way to obtain one. Rust runs the folder
+ * picker itself, the same as `import_script`/`export_script`, and returns
+ * `null` when the operator cancels.
  */
 export async function exportAllData(): Promise<DataExportResult> {
   if (!isTauriRuntime()) return { cancelled: true };
@@ -1231,20 +1228,17 @@ export async function restoreAllData(): Promise<RestoreResult> {
 export async function clearCache(kind: 'logs'): Promise<ClearResult> {
   if (!isTauriRuntime()) return mockSettings.clearCache(kind);
   /*
-   * §46.8. Logs are the only thing Settings clears now: "Clear analysis cache"
-   * emptied `cache/vocabulary`, a directory nothing has ever written (#218).
-   *
-   * C6: `logs` used to map onto `all`, which emptied the compiled, vocabulary,
-   * thumbnail and download caches and never touched the log directory — so
-   * "Clear logs" destroyed four caches, left the logs, and reported success.
-   * `logs` got its own arm, and since #219 it is the only kind Rust accepts.
+   * Logs are the only thing Settings clears, and since #219 `logs` is the only
+   * kind Rust accepts. It must stay its own arm: when it mapped onto `all`,
+   * "Clear logs" emptied the compiled, vocabulary, thumbnail and download
+   * caches, never touched the log directory, and reported success.
    */
   const result = await ipcInvoke<{ kind: string; removedFiles: number; removedBytes: number }>(
     'clear_cache',
     { kind },
   );
-  // `clearedBytes` used to be handed `removedFiles` — a count wearing the name
-  // of a size. Rust reports both now.
+  // `clearedBytes` is `removedBytes`, never `removedFiles` — a count wearing
+  // the name of a size. Rust reports both.
   return { kind, clearedFiles: result.removedFiles, clearedBytes: result.removedBytes };
 }
 

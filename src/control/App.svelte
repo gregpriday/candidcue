@@ -1,5 +1,5 @@
 <!--
-  Control window shell (spec §10, §45.1): store-based route machine, library
+  Control window shell: store-based route machine, library
   sidebar while browsing/editing, Editor → Live in one press (there is no
   screen between them — see lib/start-take.ts), workspace theme at rest and
   studio theme during Live.
@@ -187,11 +187,11 @@ import { rememberReaderFrame } from './lib/reader-frame';
   });
   let stopUpdateSchedule: (() => void) | null = null;
   /**
-   * Files are over the window right now (§20.2).
+   * Files are over the window right now.
    *
    * Null when nothing is being dragged. Carries the count Rust would accept, so
    * the overlay can say "not this kind of file" rather than inviting a drop that
-   * will be refused — §10.5's rule that an unsupported file gets a concise
+   * will be refused — the rule that an unsupported file gets a concise
    * rejection instead of silence, applied a moment EARLIER than the drop.
    */
   let dragHover = $state<DragHoverPayload | null>(null);
@@ -223,7 +223,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * The dark studio theme belongs to a RUNNING take, not to the Live route.
    *
    * Deriving it from the route alone meant the app stayed dark after the take
-   * ended: Escape stops the session without navigating, the F.17 summary opens
+   * ended: Escape stops the session without navigating, the take summary opens
    * on the still-current live route, and the workspace theme only returned once
    * the operator dismissed the summary and something navigated away. It read as
    * the app being slow to come back, when in fact it had not been asked to.
@@ -236,16 +236,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
   /*
    * The two screens this window still has.
    *
-   * Settings and Calibration moved to the Preferences window (§14.1), so the
-   * old note about calibration keeping the sidebar has moved with them —
-   * that window has no sidebar at all, and its own Done control is the way out.
-   * Only a take hides the rail here, and it does so because a presenter is
-   * reading.
+   * Settings and Calibration live in the Preferences window, which has no
+   * sidebar at all; its own Done control is the way out. The rail shows only
+   * for Library and Editor (and the workspace setting can hide it there), so a
+   * take and Welcome have none.
    */
   const showSidebar = $derived($route.name === 'library' || $route.name === 'editor');
 
   /**
-   * What the main region is, for the landmark's accessible name (§23.2).
+   * What the main region is, for the landmark's accessible name.
    *
    * Named rather than left anonymous because this window has several regions —
    * a navigation rail, a toolbar, an inspector, a status bar — and "main" on its
@@ -429,7 +428,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   });
 
   onMount(() => {
-    // §30.1 triage. Off unless the operator switched it on for this window;
+    // Audio-path triage. Off unless the operator switched it on for this window;
     // see audio-trace.ts for why the audio path needs it at all.
     initAudioTrace();
 
@@ -548,13 +547,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
       if (action === 'command-help') showKeyboardShortcuts();
     });
 
-    /* Leaving an active live session requires an explicit stop (spec §45.1). */
+    /* Leaving an active live session requires an explicit stop. */
     const unregisterLiveGuard = registerNavigationGuard(async (to, from) => {
       if (from.name === 'live' && to.name !== 'live' && $session.active) {
         /*
-         * "End", not "stop", and the same body as Live's own dialog. §115's
-         * complaint was one action wearing several names; this guard is the
-         * fourth way out of a take and would have kept the old word alive.
+         * "End", not "stop", and the same body as Live's own dialog: one action
+         * wears one name, and this guard is the fourth way out of a take.
          */
         const accepted = await requestConfirm(sessionEndConfirmation($session.practice));
         if (!accepted) return false;
@@ -564,11 +562,11 @@ import { rememberReaderFrame } from './lib/reader-frame';
          *
          * Live's own exits un-present, but this guard is the path for every
          * OTHER way out of a take: a shortcut, a sidebar click, anything that
-         * navigates while a session is live. It used to stop the session and
-         * leave the window borderless with no titlebar; then it un-presented
-         * bare, which fixed the window and left the reverse transition artifact
-         * — `clearSession()` unmounts the stage, so the shrinking window shows
-         * the light editor arriving in pieces.
+         * navigates while a session is live. Stopping the session without
+         * un-presenting left the window borderless with no titlebar, so this
+         * must restore the window too. Un-presenting bare leaves a reverse
+         * transition artifact — `clearSession()` unmounts the stage, so the
+         * shrinking window shows the light editor arriving in pieces.
          *
          * The cover goes up FIRST, before `clearSession()` tears the stage
          * down, so nothing between here and the destination is ever on screen
@@ -597,7 +595,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     });
 
     /*
-     * Flush any pending editor autosave when navigating away (spec §13.5) — and
+     * Flush any pending editor autosave when navigating away — and
      * then check that the flush actually landed.
      *
      * `saveNow()` reports a conflict or a failed write through store state and
@@ -717,8 +715,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * the failure into the running process now, and this is where the
          * shell decides to render recovery instead of the app.
          *
-         * A REJECTION here fails closed, and that is a change from the first
-         * version of this code. `getBootStatus` already answers
+         * A REJECTION here fails closed. `getBootStatus` already answers
          * `{ databaseReady: true }` without touching IPC when there is no Tauri
          * runtime — a browser dev session — so a rejection means the command
          * exists and something went wrong asking it. Treating that as "assume
@@ -875,7 +872,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     })();
 
     /*
-     * Close and quit, coordinated (§47.6).
+     * Close and quit, coordinated.
      *
      * Rust intercepts both, asks here, and waits ~4s. Before this, closing the
      * window or pressing ⌘Q went straight to process exit: a debounced save
@@ -981,7 +978,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   }
 
   /* ------------------------------------------------------------------------
-   * NATIVE MENU AND WINDOW IDENTITY (desktop refinement §5, §6)
+   * NATIVE MENU AND WINDOW IDENTITY
    *
    * The shell is where this belongs and nowhere else. It is the one component
    * mounted for the whole life of the window, it already holds the navigation
@@ -1021,7 +1018,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   const commandContext = $derived<CommandContext>({
     route: $route,
     sessionActive: $session.active,
-    /* §17.2: a calibrated rig sizes its own type, so Larger/Smaller Stage Text
+    /* A calibrated rig sizes its own type, so Larger/Smaller Stage Text
        is greyed rather than refused after it is chosen. */
     stageRigResolved: $session.stageRigResolved === true,
     sessionPaused: $session.paused !== 'none',
@@ -1157,7 +1154,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     stageAppearance: () => dispatchRouteCommand('view.stage-appearance'),
     insert: (what) => dispatchInsert(what),
     /*
-     * ⌘, opens a WINDOW now (§14.1), it does not navigate.
+     * ⌘, opens a WINDOW, it does not navigate.
      *
      * That is the whole point: changing a preference no longer costs you the
      * script you had open, and closing Settings puts you back where you were
@@ -1247,7 +1244,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   async function confirmMoveToTrash(scriptId: string): Promise<void> {
     const title = titleForScript(scriptId);
     const accepted = await requestConfirm({
-      // Named, per §18.4: "Are you sure?" tells somebody with forty scripts
+      // Named: "Are you sure?" tells somebody with forty scripts
       // nothing about which one is about to move.
       title: 'Move to Trash?',
       body: `“${title}” will move to Trash and can be restored for 30 days.`,
@@ -1321,7 +1318,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     }
 
     if (payload.rejected.length > 0) {
-      // Named, and capped. §10.5 asks for a concise rejection; a toast listing
+      // Named, and capped. A rejection should be concise; a toast listing
       // forty file names is not concise, and the first two are enough to make
       // the KIND of file obvious, which is the actual information.
       const names = payload.rejected.slice(0, 2).join(', ');
@@ -1372,7 +1369,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   /**
    * File › Close Window: ask Rust to close this window, so the shutdown
-   * handshake runs (§6.3). Closing the document window quits the app.
+   * handshake runs. Closing the document window quits the app.
    *
    * Through Rust. This used to call `getCurrentWindow().close()`, which the
    * capability does not permit, inside a `catch` that read the refusal as
@@ -1466,8 +1463,8 @@ import { rememberReaderFrame } from './lib/reader-frame';
 <div class="shell" data-theme={theme}>
   {#if recoveryStatus !== null}
     <!--
-      Rendered INSTEAD of the application, not on top of it. The rule the
-      readiness review asked for is that the normal application cannot open
+      Rendered INSTEAD of the application, not on top of it. The rule is that
+      the normal application cannot open
       until recovery has produced a writable, valid database — so there is no
       route past this, and the recovery actions all end by saying "quit and
       reopen", which is what re-runs `database::init`.
@@ -1515,7 +1512,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       />
     {/if}
     <!--
-      A NAMED landmark (§23.2).
+      A NAMED landmark.
 
       Screen-reader users navigate by landmark, and an unnamed `<main>` in a
       window that also has a navigation rail and (per route) a toolbar, an
@@ -1533,7 +1530,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
         <Live sessionId={$route.sessionId} scriptId={$route.scriptId} />
       {:else}
         <!--
-          Settings and Calibration are NOT rendered here any more (§14.1).
+          Settings and Calibration are NOT rendered here.
           Both live in the Preferences window; `openSettingsWindow` opens it and
           `Settings.svelte` navigates to Calibrate inside it. Nothing in this
           window sets those routes, so falling through to the Library is the
@@ -1574,7 +1571,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   />
   <ConfirmHost />
   <!--
-    "Before this take", for every way of starting one (CCUX-013, #301). Hosted
+    "Before this take", for every way of starting one (#301). Hosted
     here, not on the editor, because File › Present, the Library and the
     summary's Present again launch from screens that are not the editor, and
     used to skip the check entirely. Only ever mounted; almost never open —
@@ -1625,7 +1622,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
 {/if}
 
 <!--
-  The drop target (§20.2), shown ONLY while files are genuinely over the window.
+  The drop target, shown ONLY while files are genuinely over the window.
 
   Outside `.shell` and `position: fixed` for the same reason the cover is: the
   drop applies to the window rather than to a route, and a drop landing during a
@@ -1676,22 +1673,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
 <style>
   /*
-   * The seam under the native titlebar.
+   * The seam under a native titlebar.
    *
-   * Tauri gives every macOS window `NSWindowStyleMaskFullSizeContentView` (see
-   * `windows/present.rs`), so the titlebar is transparent and what shows through
-   * it is this app's own `--bg-app`. macOS insets the PAGE CONTENT below the
-   * titlebar while the canvas keeps painting the full window height — so the
-   * strip above `.shell` is porcelain, `.shell` starts at the titlebar's bottom
-   * edge, and the window reads as one undivided surface with the traffic lights
-   * floating in it and nothing to say where the chrome ends.
-   *
-   * A border on `.shell` therefore lands exactly on that boundary without
-   * anybody having to know the titlebar's height — which is just as well,
-   * because it is not a number the page can read and it is not the same number
-   * on every macOS release (32px on this one, 28px on older ones). If a future
-   * webview stops applying the inset, the line degrades to a hairline along the
-   * top of the window rather than to a misplaced rule.
+   * A border on `.shell` marks where the window's own titlebar ends without
+   * anybody having to know the titlebar's height, which is not a number the
+   * page can read. A Mac's titlebar is an overlay the page runs under, so the
+   * seam is switched off there (below).
    */
   .shell {
     display: flex;

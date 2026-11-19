@@ -15,8 +15,9 @@ import { perfMark } from './lib/perf/probe';
 // benchmark build.
 perfMark('entry');
 
-// Bind the real audio/realtime services behind the voice facade before any
-// screen asks for microphones (falls back to the mock in plain-node tests).
+// Bind the real audio and transcription services behind the voice facade
+// before any screen asks for microphones (falls back to the mock in plain-node
+// tests).
 bindRealVoiceFacadeIfAvailable();
 
 // Before the first paint, so no rule that depends on it lands one frame late.

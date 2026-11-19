@@ -1,14 +1,13 @@
 /**
- * Plain-language copy for the smooth-following UI (companion §48, §49, §58–§62;
- * primary Appendix F.11–F.13 voice).
+ * Plain-language copy for the smooth-following UI.
  *
  * Everything here is a pure function so the wording is unit-testable and the
  * store stays free of presentation strings. Two rules govern every phrase:
  *
- *  1. §3 experience contract — never imply certainty the tracker does not have.
+ *  1. Never imply certainty the tracker does not have.
  *     Confidence is reported as a coarse band, never a percentage, and pace is
  *     always approximate.
- *  2. Appendix F.13 — where a concrete failure is known, name it. Avoid
+ *  2. Where a concrete failure is known, name it. Avoid
  *     "something went wrong" language.
  */
 import type { AlignmentDecision, StageMotionState } from '../../shared/contracts';
@@ -16,11 +15,11 @@ import { osCopy } from './os-copy';
 import type { Platform } from './platform';
 
 /* ---------------------------------------------------------------------------
- * Tracking state (§48 "tracking state in plain language")
+ * Tracking state, in plain language
  * ------------------------------------------------------------------------- */
 
 /**
- * One short status line per state. Wording reuses the primary F.11 vocabulary
+ * One short status line per state. Wording reuses one vocabulary
  * ("Holding your place", "Looking for your place", "Voice starting — position
  * held") so Live never speaks two dialects.
  */
@@ -59,7 +58,7 @@ export function followStateTone(state: StageMotionState): FollowStateTone {
     case 'searching':
       return 'accent';
     // Deliberately NOT 'warning'. Holding is the engine working correctly —
-    // refusing to guess — and the research brief is explicit that this moment
+    // refusing to guess — and this moment
     // must read as calm. A warning colour here trains presenters to panic at
     // the exact point the system is being careful on their behalf.
     case 'holding':
@@ -70,14 +69,14 @@ export function followStateTone(state: StageMotionState): FollowStateTone {
 }
 
 /* ---------------------------------------------------------------------------
- * Behavior (§52) — why the tracker thinks you moved
+ * Behavior — why the tracker thinks you moved
  * ------------------------------------------------------------------------- */
 
 /**
  * Diagnostics vocabulary for the engine's decision codes.
  *
- * **These are for the developer diagnostics panel only.** The integration
- * contract is explicit that decision codes must not become user-facing copy —
+ * **These are for the developer diagnostics panel only.** Decision codes must
+ * not become user-facing copy —
  * `FOLLOW_STATE_LABELS` is what the presenter reads. The distinction matters
  * because these names describe the engine's internal reasoning, which changes
  * as the engine is tuned; the four states are a promise about behaviour, which
@@ -99,7 +98,7 @@ export const FOLLOW_DECISION_LABELS: Record<AlignmentDecision, string> = {
 };
 
 /* ---------------------------------------------------------------------------
- * The one status line (CCUX-001, CCUX-018)
+ * The one status line
  * ------------------------------------------------------------------------- */
 
 /**
@@ -109,7 +108,7 @@ export const FOLLOW_DECISION_LABELS: Record<AlignmentDecision, string> = {
  * cannot reach past it into the decision codes. A component handed the full
  * `SmoothFollowState` will eventually render a field from it, which is exactly
  * how `FOLLOW_DECISION_LABELS` came to be on screen during takes despite the
- * contract above saying it must not be.
+ * rule above saying it must not be.
  */
 export interface FollowStatusInput {
   state: StageMotionState;
@@ -143,13 +142,13 @@ export interface FollowStatusInput {
   voiceInput: boolean;
   micState: 'live' | 'muted' | 'disconnected';
   /**
-   * The INPUT failed — unplugged, silent or refused — as opposed to the
-   * realtime transport dying, which also leaves `micState` disconnected.
+   * The INPUT failed — unplugged or silent — as opposed to the recogniser
+   * failing, which also leaves `micState` disconnected. A permission refusal
+   * is reported separately and leaves this false.
    *
    * Only this one is fixable by choosing another device, so only this one may
    * say so. Offering a microphone picker as the cure for a recogniser failure
-   * is an instruction the user cannot follow, which is the defect §28.6 exists
-   * to prevent.
+   * is an instruction the user cannot follow.
    */
   inputDeviceLost: boolean;
   /**
@@ -184,7 +183,7 @@ export interface FollowStatus {
  * The presenter-facing status, resolved from behaviour rather than reasoning.
  *
  * ---------------------------------------------------------------------------
- * SIGNAL AND MATCHING ARE DIFFERENT FAULTS (CCUX-018)
+ * SIGNAL AND MATCHING ARE DIFFERENT FAULTS
  * ---------------------------------------------------------------------------
  * "Holding your place" was the answer to two completely different questions,
  * and they have opposite remedies. If Speaking Glass cannot HEAR you, the fix is the
@@ -210,7 +209,7 @@ export interface FollowStatus {
  *     the "no frames yet" branch, because a dead microphone produces no frames
  *     — so a resolver that answered "Ready to follow" first would sit there
  *     saying "ready" for the whole take, which is precisely the failure
- *     CCUX-018 exists to remove.
+ *     this ordering exists to remove.
  *
  * `platform` names whose words a refused microphone is described in
  * (`lib/os-copy.ts`) — this window's unless a caller says otherwise.
@@ -346,7 +345,7 @@ export function followStatus(input: FollowStatusInput, platform?: Platform): Fol
 }
 
 /* ---------------------------------------------------------------------------
- * Confidence (§48 "without implying false precision")
+ * Confidence, without implying false precision
  * ------------------------------------------------------------------------- */
 
 export type ConfidenceBand = 'unknown' | 'low' | 'unsure' | 'steady' | 'strong';
@@ -389,19 +388,19 @@ export function formatPace(wordsPerMinute: number | null): string {
 }
 
 /* ---------------------------------------------------------------------------
- * Degraded operation (Part XI) — one honest state per condition
+ * Degraded operation — one honest state per condition
  * ------------------------------------------------------------------------- */
 
 export type FollowNoticeId =
-  /** §59 Transcription interrupted. */
+  /** Transcription interrupted. */
   | 'transcription_interrupted'
-  /** §60 Missing or weak transcript confidence. */
+  /** Missing or weak transcript confidence. */
   | 'low_transcript_confidence'
-  /** §61 The stage keeps missing its frame budget. */
+  /** The stage keeps missing its frame budget. */
   | 'frame_performance'
-  /** §62 Line measurement failed or is inconsistent. */
+  /** Line measurement failed or is inconsistent. */
   | 'invalid_line_map'
-  /** §63 A runtime budget was exceeded. */
+  /** A runtime budget was exceeded. */
   | 'budget_exceeded';
 
 export type FollowNoticeTone = 'info' | 'warning' | 'danger';
@@ -414,12 +413,6 @@ export interface FollowNoticeCopy {
 
 /**
  * The static half of the degraded-state matrix.
- *
- * There used to be a sixth notice family here, for a second model that ranked
- * the local aligner's candidates — six variants of "assist is unavailable,
- * following continues on local matching". There is no second model now, so
- * following is *always* local matching and there is nothing to report the
- * absence of.
  */
 export const FOLLOW_NOTICE_COPY: Record<
   Exclude<FollowNoticeId, 'budget_exceeded'>,
@@ -454,7 +447,7 @@ export const FOLLOW_NOTICE_COPY: Record<
   },
 };
 
-/** §63 budgets that can be surfaced quietly in control. */
+/** Runtime budgets that can be surfaced quietly in control. */
 export type RuntimeBudgetId =
   | 'alignment_update'
   | 'stage_frame'
@@ -483,7 +476,7 @@ export function budgetNoticeCopy(
 }
 
 /* ---------------------------------------------------------------------------
- * "Why did it move?" (§65)
+ * "Why did it move?"
  * ------------------------------------------------------------------------- */
 
 /**

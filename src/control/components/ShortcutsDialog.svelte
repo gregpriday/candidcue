@@ -1,5 +1,5 @@
 <!--
-  Keyboard-shortcut reference (spec §19). Cmd on macOS, Ctrl elsewhere.
+  Keyboard-shortcut reference. Cmd on macOS, Ctrl elsewhere.
 
   Grouped by the screen that answers each key, and grouped from
   `SHORTCUT_OWNERSHIP` rather than from a scope typed into each row here. This
@@ -73,7 +73,7 @@
      */
     actions: ShortcutAction[];
     /**
-     * The menu commands this row is the SAME key as (§6.1).
+     * The menu commands this row is the SAME key as.
      *
      * Some keys are documented twice on this page on purpose: the native menu
      * half lists "Previous Sentence — ⌥←" because that is what the Session menu
@@ -101,8 +101,8 @@
     /*
      * Named exactly as the Help menu names it. The registry half of this page
      * prints "Keyboard Shortcuts" for the same ⌘/, and calling it "Command
-     * help" here was the vocabulary split §6.1 is about — two names, one key,
-     * and a reader with no way to know they are the same thing.
+     * help" here would be a vocabulary split — two names, one key, and a
+     * reader with no way to know they are the same thing.
      */
     {
       label: 'Keyboard Shortcuts',
@@ -131,7 +131,6 @@
      * plain key in the group rather than this one alone.
      */
     { label: 'Start / Pause / Resume', keys: one('Space'), actions: ['play-pause'] },
-    // The "(during Live)" these rows used to carry is the group caption now.
     { label: 'Blank stage', keys: one('B'), actions: ['blank-stage'] },
     // Worded the way the Session menu words the same keys — "Previous
     // Sentence", "Previous Section" — so the two halves of the page agree.
@@ -147,17 +146,16 @@
       actions: ['prev-chapter', 'next-chapter'],
       mirrors: ['session.previous-chapter', 'session.next-chapter'],
     },
-    // §115: one verb. This key raises "End the session?" — the help calling the
-    // same action "Stop session" is the vocabulary split that issue names.
+    // One verb. This key ends the take (asking first when confirmation is
+    // on) — the help calling the same action "Stop session" would be a
+    // vocabulary split.
     {
       label: 'End Take',
       keys: one('Mod+.'),
       actions: ['stop-session'],
       mirrors: ['session.end-take'],
     },
-    // Twice, and from either window — the stage answers it when the presenter
-    // is in front of it, this window when the operator is at the desk. A
-    // sequence rather than a chord, so it reads "Esc, then Esc".
+    // Twice. A sequence rather than a chord, so it reads "Esc, then Esc".
     { label: 'End the take and close the stage', keys: [['Esc', 'Esc']], actions: ['escape'] },
     { label: 'Hard pause', keys: one('Mod+Shift+Space'), actions: ['hard-pause'] },
     { label: 'Auto-scroll on / off', keys: one('A'), actions: ['toggle-auto-scroll'] },
@@ -200,8 +198,8 @@
   /**
    * The keys the STAGE answers itself, listed but not owned by the table.
    *
-   * The editor's bold and italic below, one surface over. The stage listens on
-   * its own window (`StageApp.svelte`, `onKeyDown` and `onWheel`) and moves the
+   * The editor's bold and italic below, one surface over. The stage listens for
+   * these itself (`StageApp.svelte`, `onKeyDown` and `onWheel`) and moves the
    * script by hand for these, so they never pass through `resolveShortcut` and
    * have no `ShortcutAction` to be grouped by. Leaving them off the page made
    * the help silent about the most ordinary thing a reader does with a
@@ -310,18 +308,16 @@
   };
 
   /**
-   * The menu commands, READ FROM THE REGISTRY (§6.1).
+   * The menu commands, READ FROM THE REGISTRY.
    *
    * ---------------------------------------------------------------------------
    * WHY THIS SECTION EXISTS SEPARATELY FROM THE TABLE ABOVE
    * ---------------------------------------------------------------------------
-   * This page used to be built entirely from `rows` — a hand-written list keyed
-   * to `ShortcutAction`. That was right while every key in the app went through
-   * the window listener. It stopped being the whole story when the native menu
-   * arrived: File › Duplicate, View › Show Outline, Insert › Cue and two dozen
-   * others carry accelerators that `resolveShortcut` has never heard of, because
-   * the OS dispatches them. None of them could appear here, so the page called
-   * "every key the app answers" was missing most of them.
+   * `rows` is a hand-written list keyed to `ShortcutAction`, and covers only
+   * keys that go through the window listener. File › Duplicate, View › Show
+   * Outline, Insert › Cue and two dozen others carry menu accelerators that
+   * `resolveShortcut` has never heard of, so a page built from `rows` alone
+   * would miss most of the keys the app answers.
    *
    * So the menu's half is DERIVED — from `COMMANDS`, and through the same
    * `formatAccelerator` that spells a chord for this platform. A command cannot
@@ -336,8 +332,7 @@
    * The transport table is still hand-written, and still necessary: Space, B,
    * A and the bracket keys have no menu item and no command id — they are plain
    * keys owned by the screen that is up, which is exactly what
-   * `SHORTCUT_OWNERSHIP` describes. Folding those into the registry is the
-   * remaining half of §6.1.
+   * `SHORTCUT_OWNERSHIP` describes.
    */
   const MENU_CAPTIONS: Record<CommandCategory, string> = {
     file: 'File',

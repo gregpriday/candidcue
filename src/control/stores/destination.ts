@@ -1,5 +1,5 @@
 /**
- * Where the next take will open, kept current (CCUX-004, CCUX-005, #302).
+ * Where the next take will open, kept current (#302).
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS A STORE AND NOT A CALL AT LAUNCH

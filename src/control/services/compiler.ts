@@ -1,6 +1,6 @@
 /**
  * Compiler worker service — the single place the control window talks to the
- * compile Web Worker (spec §45.3). Speaks the shared protocol in
+ * compile Web Worker. Speaks the shared protocol in
  * src/shared/markdown/worker-protocol.ts; if the protocol evolves, THIS FILE
  * is the only integration point that changes.
  *
@@ -34,7 +34,7 @@ export interface CompileOutput {
   sentences: SentenceUnit[];
   navigationTargets: NavigationTarget[];
   /**
-   * §parts. Empty when the script has no division — and empty, rather than
+   * The script's parts. Empty when the script has no division — and empty, rather than
    * absent, so no consumer has to spell the "an older compile did not carry
    * this" case a second time. `CompiledScript.parts` is the optional one,
    * because that type is persisted; this is a live result.
@@ -162,7 +162,7 @@ function ensureWorker(): WorkerLike {
 }
 
 /**
- * Per-session compile switches the caller may override (spec A.4). Everything
+ * Per-session compile switches the caller may override. Everything
  * else about a compile is derived from the source itself.
  */
 export interface CompileOverrides {

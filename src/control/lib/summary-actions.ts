@@ -1,5 +1,5 @@
 /**
- * What the take summary offers next, as rows (CCUX-006, CCUX-008, §parts).
+ * What the take summary offers next, as rows.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS NOT MARKUP
@@ -30,7 +30,7 @@ import {
 
 export interface SummaryActionsInput {
   /**
-   * The start of the section the take ended in (CCUX-008), or null when it
+   * The start of the section the take ended in, or null when it
    * ended above the first heading.
    */
   retrySectionTokenIndex: number | null;
@@ -145,7 +145,7 @@ export function summaryActions(input: SummaryActionsInput): SummaryAction[] {
 }
 
 /**
- * What the summary's Part row says about how far the take got (§parts, #276).
+ * What the summary's Part row says about how far the take got (#276).
  *
  * Null means say nothing, and that is the answer for a manual or fixed-speed
  * take that the transport did not carry to the end: `partComplete` is raised

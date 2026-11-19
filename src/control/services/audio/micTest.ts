@@ -1,5 +1,5 @@
 /**
- * Microphone test recorder (spec §28.5 local signal test, §28.7 retention).
+ * Microphone test recorder.
  *
  * Records a short clip strictly to memory for immediate playback, and is
  * always explicitly discarded — no microphone audio is written to disk.
@@ -82,8 +82,8 @@ export class MicTestRecorder {
   }
 
   /**
-   * Drop the clip and every buffered chunk (spec §28.7: discard after test;
-   * nothing persists past the recorder's lifetime).
+   * Drop the clip and every buffered chunk (discarded after the test; nothing
+   * persists past the recorder's lifetime).
    */
   discard(): void {
     if (this.playbackUrl) {

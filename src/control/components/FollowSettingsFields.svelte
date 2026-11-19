@@ -1,8 +1,7 @@
 <!--
-  §47 follow settings, shared by Settings → Following and the Preflight
-  "Voice tracking" section so the same choice is never described two ways.
+  The follow settings in Settings → Following.
 
-  These are understandable controls, not a control-system dashboard (§47).
+  These are understandable controls, not a control-system dashboard.
   Every value resolves into a versioned SmoothFollowProfile through
   lib/follow-profiles.ts.
 -->
@@ -22,7 +21,7 @@
 
   interface Props {
     following: FollowingSettings;
-    /** Preflight shows the session-relevant subset. */
+    /** Follow feel only: hides the motion profile and developer diagnostics. No caller sets it today. */
     compact?: boolean;
     onchange: (patch: Partial<FollowingSettings>) => void;
   }
@@ -57,19 +56,6 @@
   </SettingRow>
 
   {#if !compact}
-    <!--
-      "Script fidelity" used to sit here, and it configured nothing.
-
-      It set `following.fidelityMode`, which reached the settings document, Rust's
-      validator, and stopped. `resolveFollowProfile` builds a take's motion from
-      `family` and `feel` alone and has never read it. Its three descriptions all
-      promised tips on numbers, names and omissions — a coaching feature that was
-      removed, so the control was offering to tune the behaviour of something
-      that no longer runs.
-
-      The field went after it (#218 here, #219 in Rust). A document written by an
-      older build still carries it and loads as before.
-    -->
     <div class="field">
       {#if hasMotionChoice}
         <Select

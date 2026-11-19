@@ -1,6 +1,6 @@
 <!--
   Floating toast notices, docked in the bottom trailing corner. Announced via
-  live regions (spec §20) — streaming transcript text never routes through here.
+  live regions — streaming transcript text never routes through here.
 
   PLACEMENT. The stack sits in the bottom-right corner, above the status band,
   the way a desktop tool with a status bar places its notices. It used to float
@@ -118,7 +118,7 @@
   }
 
   /* Failures are announced assertively and stay until dismissed; everything
-     else is polite and self-clearing (spec §20). Folded notices stay in their
+     else is polite and self-clearing. Folded notices stay in their
      live region, only out of sight, so a failure that arrives folded is still
      announced the moment it arrives, and opening the fold announces nothing
      old as new. */

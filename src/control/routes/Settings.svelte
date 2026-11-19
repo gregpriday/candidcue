@@ -1,15 +1,13 @@
 <!--
-  Settings (spec §18). The Speech section no longer asks for anything: the
-  recogniser is bundled with the app, so there is no key to store and no
-  provider to choose. What is left is a readout of whether the model is
-  installed and warm.
+  Settings. Speech recognition is on-device: the Speech section installs and
+  chooses the model (SpeechLanguagePicker) and says whether it is installed and
+  warm. There is no key to store and no provider to choose.
 
-  This screen is now the ONLY place a take is configured. There used to be a
-  Preflight page that asked the same questions again, one screen before every
-  session — the display, the microphone, the tracking mode, the type — and
-  answering them twice meant one of the two answers silently
-  stopped mattering. Present opens the stage from what is set here
-  (lib/start-take.ts).
+  This screen is where a take is configured — the display, the microphone,
+  the type. Present takes what is set here (lib/start-take.ts) and asks none
+  of it again: asking twice means one of the two answers silently stops
+  mattering. Present's menu only picks a variant of the take (its shape, the
+  camera-above-screen take, a practice).
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
@@ -161,7 +159,7 @@
   interface Props {
     section: SettingsSection;
     /**
-     * Dismiss this surface (§14.1).
+     * Dismiss this surface.
      *
      * Supplied by the Preferences window, where Settings is a WINDOW and the
      * gesture is "I am finished" rather than "take me back". Absent means the
@@ -187,7 +185,7 @@
   /**
    * The sections, each with the words somebody might search for.
    *
-   * `keywords` is the SECTION-level half of §14.2: it narrows the section list
+   * `keywords` is the SECTION-level half of the settings search: it narrows the section list
    * to the sections that hold a match. The ROW-level half is `applyRowFilter`
    * below, which narrows the rows inside the section on screen and marks the
    * ones that matched.
@@ -229,7 +227,7 @@
     {
       id: 'stage',
       /*
-       * NOT "Stage display" (CCUX-003).
+       * NOT "Stage display".
        *
        * That name read as "the display the separate stage window will appear
        * on", and the panel chosen here is more than that: it is where a
@@ -267,7 +265,7 @@
     },
   ];
 
-  /** The settings search box (§14.2). */
+  /** The settings search box. */
   let sectionQuery = $state('');
 
   /*
@@ -335,7 +333,7 @@
   let rowMatches = $state<number | null>(null);
 
   /**
-   * The row-level half of the settings search (§14.2).
+   * The row-level half of the settings search.
    *
    * ---------------------------------------------------------------------------
    * WHY THIS READS THE DOM RATHER THAN FILTERING A MODEL
@@ -345,8 +343,7 @@
    * not built that way and should not be rebuilt that way to get a search box:
    * the rows are hand-written because they explain each other, several are
    * conditional on hardware or on a downloaded model, and a few are whole
-   * sub-forms. Reducing them to index entries would cost the thing §14 is
-   * actually about.
+   * sub-forms. Reducing them to index entries would lose exactly that.
    *
    * So the search reads what is rendered. That is exactly the text the user is
    * looking at — labels, descriptions, option names and units — which makes it
@@ -533,7 +530,7 @@
   });
 
   /*
-   * Reopen where they were (§14.4).
+   * Reopen where they were.
    *
    * The section is recorded as the user moves through Settings, and the window
    * reads it back on mount — see `openSettingsWindow` in `lib/open-settings.ts`,
@@ -564,7 +561,7 @@
   let diagnosticsError = $state<string | null>(null);
   let diagnosticsLoading = $state(false);
   /**
-   * §44.12: the toast tells the user what to do in English; the stable code is
+   * The toast tells the user what to do in English; the stable code is
    * kept here, where a support request is actually assembled from. This is the
    * only surface in the app that shows a raw error code, and it is deliberate.
    */
@@ -574,17 +571,14 @@
    *
    * What is left here is the SECTION PILL — "can a take follow me right now?" —
    * and nothing else. Choosing a language, downloading it, cancelling and
-   * removing all moved into `SpeechLanguagePicker` when §153 turned this from
-   * one model into a list of them.
+   * removing all live in `SpeechLanguagePicker`.
    *
    * The status is REPORTED BY the picker rather than fetched here, and that
-   * matters. This screen used to keep its own snapshot, its own listener and
-   * its own event counter — and both halves were wrong once more than one model
-   * could be installed: `getSpeechModelStatus()` with no argument asks about
-   * the CATALOGUE DEFAULT rather than the selected language, and the listener
-   * accepted a progress event for any model at all. Downloading an inactive
-   * language would move a pill that was describing the active one. One owner,
-   * one answer.
+   * matters. `getSpeechModelStatus()` with no argument asks about the
+   * CATALOGUE DEFAULT rather than the selected language, and a listener of this
+   * screen's own would accept a progress event for any model at all, so
+   * downloading an inactive language would move a pill describing the active
+   * one. One owner, one answer.
    */
 
   let modelStatus = $state<SpeechModelStatus | null>(null);
@@ -635,7 +629,7 @@
     void refreshEngineStatus();
   });
 
-  /** Diagnostics are only fetched for the screen that shows them (§47.10). */
+  /** Diagnostics are only fetched for the screen that shows them. */
   $effect(() => {
     if (section === 'privacy') void loadDiagnostics();
   });
@@ -716,7 +710,7 @@
    */
   const effectiveDisplay = $derived(chooseStageDisplay(displays, chosenFingerprint));
   /**
-   * A pinned display that is not currently connected (§52 fingerprints),
+   * A pinned display that is not currently connected (by fingerprint),
    * matched the way Present matches it — so a panel whose twin was unplugged
    * is not called missing while the take fills it.
    */
@@ -856,8 +850,9 @@
          * "show this window on that panel, filling it" — and a preview exists to
          * answer "what will this rig look like on that display?". Sizing it to
          * whatever shape a reader-mode take would use would answer a different
-         * question about a different window. Reader mode never opens a stage
-         * window at all; it presents this one in place.
+         * question about a different window. A take never opens a stage window
+         * at all; Present reshapes the control window, moving it to the take's
+         * panel when that is another one.
          */
         fullscreen: true,
       });
@@ -966,10 +961,9 @@
   /*
    * Teleprompter needs the display list too.
    *
-   * This used to load only for Stage display, and the preview button is
-   * disabled while the list is empty — so opening Settings and going straight
-   * to Teleprompter presented a permanently dead button on a machine with the
-   * prompter plugged in, curable only by visiting an unrelated section first.
+   * The preview button is disabled while the list is empty, so loading it only
+   * for the display section left a permanently dead button for anybody who
+   * went straight to Teleprompter with the prompter plugged in.
    */
   $effect(() => {
     if (section === 'stage' || section === 'teleprompter') void loadDisplays();
@@ -978,11 +972,9 @@
   /**
    * Refresh when a monitor is plugged, unplugged or rearranged.
    *
-   * Rust has always polled the topology and emitted
-   * `app://device-or-display-change`; nothing listened, so the watcher was
-   * burning a timer to tell nobody and this list went stale the moment
-   * somebody unplugged a monitor mid-setup — the exact situation a display
-   * picker exists for.
+   * Rust polls the topology and emits `app://device-or-display-change`.
+   * Without this the list goes stale the moment somebody unplugs a monitor
+   * mid-setup — the exact situation a display picker exists for.
    */
   $effect(() => {
     if (section !== 'stage' && section !== 'teleprompter') return;
@@ -1041,8 +1033,8 @@
   /**
    * Choose the stage display.
    *
-   * There is no per-display appearance memory behind this any more, and that is
-   * deliberate. §52 profiles were restored only when a display was PINNED by
+   * There is no per-display appearance memory behind this, and that is
+   * deliberate. When there was one, it restored only for a display PINNED by
    * hand — so the default "Automatic" workflow wrote a row for every take and
    * read none of them, and switching from a pinned display to Automatic carried
    * the pinned display's type across and then saved it over the other panel's
@@ -1132,11 +1124,10 @@
   }
 
   /**
-   * Open a real stage window on the chosen display and close it again (§14.2 A).
+   * Open a real stage window on the chosen display and close it again.
    *
-   * This is the one check that survived Preflight, because it is the only one
-   * that answers a question the operator actually has — which physical panel is
-   * this? — and because they ask for it rather than being made to wait for it.
+   * It answers a question the operator actually has — which physical panel is
+   * this? — and only when they ask for it, rather than making them wait for it.
    */
   async function runDisplayTest(): Promise<void> {
     const fingerprint = effectiveDisplay?.fingerprint;
@@ -1155,7 +1146,7 @@
         void stageService.closeStage(testSessionId).catch(() => {});
       }, 4000);
     } catch (err) {
-      // F.15 "Stage did not open" — stated inline, next to the action.
+      // "Stage did not open" — stated inline, next to the action.
       displaysError = `Speaking Glass could not create the prompt window on this display. ${describeError(err)}`;
     } finally {
       stageTesting = false;
@@ -1308,8 +1299,7 @@
    * one-line caption instead. With no stored rig, the sentence above the
    * readout already says how the display is sized, so the resolver's
    * "uncalibrated" guess is a second copy of it; and the Fit row already says
-   * an uncalibrated rig makes no claim, so its advice was a third. The panel
-   * used to stack all three under one readout.
+   * an uncalibrated rig makes no claim, so its advice was a third.
    */
   const rigWarnings = $derived(
     (resolvedRig?.warnings ?? []).filter(
@@ -1472,8 +1462,8 @@
    * synthesises one when nothing is stored — deliberately, so a reader never
    * falls through to the uncalibrated layout — so in reader mode these four
    * fields are overridden whether or not a prompter rig was ever measured.
-   * A presenter in reader mode with no calibration would otherwise have been
-   * left with exactly the defect this change exists to remove.
+   * Gating on `appliedRig` alone would leave a reader-mode presenter with no
+   * calibration moving sliders that change nothing.
    */
   /** The anchor on "This rig", for links that should land on the sizing itself. */
   const RIG_SECTION_ID = 'settings-this-rig';
@@ -1539,10 +1529,8 @@
    * The presets as one segmented choice, with the rig's own distance as a
    * segment of its own when it is not a preset.
    *
-   * They were loose chips whose selected state was the INVERSE of every
-   * segmented control on the screen, and a measured 0.90 m selected nothing at
-   * all — the only sign of it was a sentence underneath. Now the distance in
-   * force is always the selected segment.
+   * The distance in force is always the selected segment, a measured 0.90 m
+   * included, rather than something only a sentence underneath reports.
    */
   const distanceOptions = $derived.by(() => {
     const presets = DISTANCE_PRESETS_M.map((metres) => ({
@@ -1576,11 +1564,10 @@
   /**
    * The largest fraction of the safe width the resolver will give a column.
    *
-   * Imported rather than repeated. It was a copy of a module-private constant,
-   * with a note admitting it would go stale if the resolver's value moved — and
-   * then it did move, from 0.92 to 0.82, and the slider went on labelling
-   * "Automatic" as 92%. It is exported from `shared/optics.ts` now, beside the
-   * fit check that consumes it.
+   * Imported from `shared/optics.ts`, beside the fit check that consumes it,
+   * rather than repeated: a copy here went stale when the resolver's value
+   * moved from 0.92 to 0.82, and the slider went on labelling "Automatic" as
+   * 92%.
    */
   const AUTOMATIC_MAX_COLUMN_FRACTION = MAX_COLUMN_FRACTION;
 
@@ -1752,15 +1739,13 @@
    */
   const micDeviceId = $derived(micPinnedDevice?.deviceId);
   /**
-   * §28.1. One control, not two.
+   * One control, not two.
    *
    * "Follow the system default" is a choice ABOUT the input device, so it is a
-   * row in the input picker rather than a toggle in a different section further
-   * down the page. It used to be the latter, and the picker was DISABLED AND
-   * BLANK whenever it was on — which is the default — so the screen's answer to
-   * "which microphone is this using?" was an empty, dead dropdown, and the
-   * control that explained it was somewhere else with no visible connection to
-   * it.
+   * row in the input picker rather than a toggle further down the page. As a
+   * separate toggle it left the picker DISABLED AND BLANK whenever it was on —
+   * which is the default — so the screen's answer to "which microphone is this
+   * using?" was an empty, dead dropdown.
    */
   const micOptions = $derived(
     microphoneOptions(
@@ -1976,8 +1961,8 @@
   let captureBaton: Promise<unknown> = Promise.resolve();
 
   /**
-   * §14.2 C. A BILLABLE realtime session, so its whole lifecycle — Stop, the
-   * idle timeout and the duration cap — lives in `services/mic-test-session.ts`
+   * It holds the microphone and the on-device recogniser, so its whole
+   * lifecycle — Stop, the idle timeout and the duration cap — lives in `services/mic-test-session.ts`
    * where each closing path is provable. This screen only renders what it says.
    */
   const micTestSession = new MicTestSession({
@@ -2009,7 +1994,7 @@
   });
 
   /*
-   * §28.1: never prompt on mount, but DO notice a permission that is already
+   * Never prompt on mount, but DO notice a permission that is already
    * granted — otherwise a returning user is asked to re-click "Allow". The
    * subscription also catches a grant made in System Settings while this screen
    * is open. Platforms that cannot report the state ('unsupported') fall
@@ -2061,9 +2046,9 @@
   });
 
   /**
-   * §28.1. Adopt a grant this machine has already made.
+   * Adopt a grant this machine has already made.
    *
-   * THE ONLY WEBVIEW THIS APP SHIPS IN CANNOT ANSWER THE QUESTION ABOVE.
+   * THE MACOS WEBVIEW CANNOT ANSWER THE QUESTION ABOVE.
    * `navigator.permissions.query({ name: 'microphone' })` is not implemented in
    * WKWebView, so the watcher reports 'unsupported' every single launch, the
    * 'granted' branch never runs, and the screen asks a returning user to click
@@ -2100,7 +2085,7 @@
   });
 
   /*
-   * §28.2. Keep the picker honest about what is plugged in.
+   * Keep the picker honest about what is plugged in.
    *
    * Someone opening this screen to choose a better microphone very often plugs
    * it in while they are looking at it, and a list enumerated once cannot show
@@ -2129,7 +2114,7 @@
     // The test owns the device while it runs — one capture, not two, on the
     // one path where both controls are a click apart.
     if (section !== 'audio' || micPermission !== 'granted' || micTestRunning) return undefined;
-    // §28.4/§28.3: the meter reads the same sensitivity AND the same capture
+    // The meter reads the same sensitivity AND the same capture
     // processing a take will use, so what is shown is a reading of the
     // configuration that is about to run rather than of a default one.
     const deviceId = micDeviceId;
@@ -2195,7 +2180,7 @@
   }
 
   /**
-   * Open the billable transcription test, once the meter has let go.
+   * Open the transcription test, once the meter has let go.
    *
    * `micTestRunning` closes the meter through the effect above; `tick()` runs
    * that teardown, and the baton is what waits for the capture the teardown
@@ -2298,7 +2283,7 @@
   }
 
   /**
-   * §28.1. Re-bind the remembered microphone to the id it has TODAY.
+   * Re-bind the remembered microphone to the id it has TODAY.
    *
    * Device ids are salted per origin and per session and can change when
    * hardware is replugged, so the id written last week may name nothing now
@@ -2368,7 +2353,7 @@
         micAccess = 'granted';
         await adoptGrantedMicrophone();
         // Remember it. WKWebView cannot report permission state, so this flag
-        // is the only way a returning user is not asked again (§28.1).
+        // is the only way a returning user is not asked again.
         if (!$settings.audio.microphoneGranted) {
           void patchSettings('audio', { microphoneGranted: true }).catch(() => {});
         }
@@ -2451,10 +2436,9 @@
   }
 
   /**
-   * C6: this used to invoke the Rust `all` cache kind, which emptied the
-   * compiled/vocabulary/thumbnail/download caches and never touched a log
-   * file — then reported "Logs cleared." It now calls the real `logs` arm,
-   * the only kind Rust accepts since #219.
+   * Calls Rust's own `logs` arm, the only kind it accepts since #219. Through
+   * the `all` kind this emptied the compiled/vocabulary/thumbnail/download
+   * caches, never touched a log file, and still reported "Logs cleared."
    */
   async function clearLogs(): Promise<void> {
     const accepted = await requestConfirm({
@@ -2471,9 +2455,9 @@
   }
 
   /**
-   * C5/C6: every one of these buttons was `void …then(showToast)` with no
-   * `.catch`, so a rejected command produced no export, no toast and no error.
-   * A failure is now reported, and a cancelled picker says nothing at all.
+   * A rejected command is reported, and a cancelled picker says nothing at all.
+   * Without a rejection handler here a failure produced no export, no toast and
+   * no error.
    */
   async function runMaintenance<T>(
     run: () => Promise<T>,
@@ -2554,11 +2538,9 @@
 
 <div class="page">
   <!--
-    In a WINDOW there is nowhere to go back to (§14.1: "Remove Back to Library
-    from Settings if it becomes a separate window"), and nothing to finish
+    In a WINDOW there is nowhere to go back to, and nothing to finish
     either. Every control here applies the moment it changes, so a Done button
-    promised a commit step that does not exist — filled in clay, it was also a
-    second primary action beside each pane's own. The window closes the way
+    would promise a commit step that does not exist. The window closes the way
     every Mac settings window does: its close button and ⌘W
     (`PreferencesApp.svelte` answers `file.close-script`). `onclose` stays a
     prop so the route still works if it is ever hosted in the control window
@@ -2571,12 +2553,12 @@
   >
     {#snippet actions()}
       <!--
-        Settings search (§14.2), in the toolbar where it is stable across every
+        Settings search, in the toolbar where it is stable across every
         section. It filters BOTH: the section list narrows to the sections whose
         keywords match, and the rows of the section on screen narrow to the ones
         whose rendered text matches, with the matches washed. The structure is
         kept — sections stay in their order and the count says how much was
-        hidden — which is what §14.2 asks for.
+        hidden.
       -->
       <div class="settings-search">
         <span class="search-icon"><Icon name="search" size={14} /></span>
@@ -2587,7 +2569,7 @@
           aria-label="Search settings"
           bind:value={sectionQuery}
           onkeydown={(event) => {
-            // Escape clears before it closes anything — §23.1's layered rule.
+            // Escape clears before it closes anything — the layered Escape rule.
             if (event.key === 'Escape' && sectionQuery !== '') {
               event.preventDefault();
               event.stopPropagation();
@@ -2601,7 +2583,7 @@
 
   <div class="body">
     <!--
-      One tab stop, arrows inside — the main sidebar's contract (§23.1), so the
+      One tab stop, arrows inside — the main sidebar's contract, so the
       app's two source lists are learnt once. Arrowing moves focus without
       changing the pane; Enter or Space opens it, as a click does.
     -->
@@ -2627,15 +2609,15 @@
 
     <div class="content" bind:this={contentElement}>
       <!--
-        What the search did, said out loud (§14.2, §18.1).
+        What the search did, said out loud.
 
         A form that quietly loses eleven of its fourteen rows is a form that
         looks broken. Naming the count — and offering the way back — is what
         turns a filtered section into an obviously filtered section.
       -->
       {#if rowMatches !== null}
-        <!-- One message for an empty result, here — the section list no
-             longer carries a second one at another size and baseline. -->
+        <!-- One message for an empty result, here — the section list does
+             not carry a second one at another size and baseline. -->
         <p class="row-filter-note" role="status">
           <span>
             {#if rowMatches > 0}
@@ -2683,20 +2665,14 @@
             until somebody makes it, a take always opens listening.
           -->
           <!--
-            This was a Select with three entries, two of them permanently
-            disabled and labelled "not available in this release".
+            A readout, not a dropdown. A dropdown is a question, and one whose
+            two alternatives are permanently greyed out answers it with "there
+            was never anything to decide" — every time, for every reader.
 
-            The reasoning below is unchanged and still right: a mode that
-            silently behaves like another one is worse than a mode that is
-            missing. What was wrong was the shape. A dropdown is a question, and
-            opening this one to find both alternatives greyed out answers it with
-            "there was never anything to decide" — every time, for every reader.
-
-            So it says what the mode is. The sentence carries what the two
-            disabled rows used to, which is the part worth keeping: somebody who
-            came here looking for a fixed-speed mode learns that auto-scroll
-            exists and where to find it, instead of learning only that they
-            cannot have what they came for.
+            So it says what the mode is, and the sentence carries the part worth
+            keeping: somebody who came here looking for a fixed-speed mode
+            learns that auto-scroll exists and where to find it, instead of
+            learning only that they cannot have what they came for.
           -->
           <!--
             READ, not asserted. `defaultSessionMode` is still a real stored
@@ -2741,11 +2717,9 @@
           <!-- #218 removed "Revision retention": nothing prunes revisions, so
                every one is kept whatever the slider said. -->
           <!--
-            This shipped with no reader anywhere in the tree — the same defect
-            the retired "Full screen" switch was culled for. It governs the
-            reading window's remembered position now, so the label says that
-            rather than making a broader promise nothing keeps: nothing else in
-            this app restores a window across launches.
+            It governs the reading window's remembered position, so the label
+            says that rather than making a broader promise nothing keeps:
+            nothing else in this app restores a window across launches.
           -->
           <Toggle
             checked={$settings.general.restoreWindows}
@@ -2802,7 +2776,7 @@
           {/snippet}
 
           <!--
-            §153: changing the language afterwards should read as a deliberate,
+            Changing the language afterwards should read as a deliberate,
             infrequent act rather than a toggle. Choosing a row in the dropdown
             saves nothing and downloads nothing; the explicit "Use …" button is
             the commitment, and it is refused while a take is open.
@@ -2835,9 +2809,8 @@
         -->
         {#snippet captureTuning()}
           <!--
-            "Follow system default microphone" used to be a toggle here, three
-            controls away from the picker it disabled and blanked. One control
-            now: it is the first row of the input picker above.
+            No "Follow system default microphone" toggle here: it is the first
+            row of the input picker above, one control rather than two.
           -->
           <Disclosure label="Capture tuning: noise, echo, gain and voice detection" bind:open={captureTuningOpen}>
             <p class="mic-tuning-lead">
@@ -2862,7 +2835,7 @@
               onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
             />
             <!--
-              §28.4. It is a property of a room and a microphone, not of a take,
+              It is a property of a room and a microphone, not of a take,
               and the meter above observes at this value — so a change to it shows
               immediately instead of being discovered mid-take.
             -->
@@ -3267,10 +3240,7 @@
           <!--
             How a take presents.
 
-            This replaced a "Full screen" switch that had no effect on any take:
-            it was read by the preview and the display test and by nothing on the
-            path `Present` actually takes. These two do something, and they are
-            tiles rather than a toggle because they are not more-and-less of one
+            Two tiles rather than a toggle, because they are not more-and-less of one
             thing — a prompter and a reading window differ in the viewing
             distance, the mirror, the hood and where the reading line sits.
           -->
@@ -3312,8 +3282,8 @@
           <!-- One column. In a two-column grid Vertical mirror landed under
                Always on top, away from the Horizontal mirror it pairs with. -->
           <div class="toggle-list">
-            <!-- The stage window is created always-on-top and re-asserts it on
-                 every show (§52.7); there is no command to turn that off, so it
+            <!-- Present raises a prompter take above every other window
+                 (windows/present.rs); there is no command to turn that off, so it
                  is shown as the fixed behaviour it is rather than as a lie.
 
                  True of the teleprompter only: a reading window is an ordinary
@@ -3368,18 +3338,14 @@
           description={`How the text on ${effectiveDisplay?.name ?? 'the panel above'} is sized — from how far away you stand, not a pixel default.`}
         >
           <!--
-            One button used to sit here and it always started a NEW rig.
+            The primary action names the rig it will change, and measuring
+            another stays reachable beside it.
 
             `calibrate()` with no argument mints a name no stored rig is using,
             which is right for measuring a second arrangement and wrong for
-            everything else. Somebody with "Desk hood" applied who pressed the
-            most prominent button on the panel got "Desk hood 2" — a second rig
-            they did not ask for, leaving the one they meant to adjust untouched.
-            The row-level "Re-calibrate" already did the right thing, but it is
-            not where the eye goes.
-
-            So the primary action now names the rig it will change, and measuring
-            another stays reachable beside it. Both paths matter: one panel
+            everything else: as the only button here it gave somebody with "Desk
+            hood" applied a "Desk hood 2" they did not ask for, leaving the one
+            they meant to adjust untouched. Both paths matter: one panel
             legitimately holds several rigs, and the store keys on (panel, name),
             so the two must never be the same button.
           -->
@@ -3927,13 +3893,10 @@
             <p class="inline-alert" role="alert">{stagePreviewError}</p>
           {/if}
           <!--
-            The bundled face was unreachable.
-
-            `stageFontStack('high-legibility')` has resolved Atkinson Hyperlegible
-            Next since the woff2 files were bundled, `font-hash.test.ts` pins the
-            family name against the stack character for character — and this menu
-            never offered it. The one face in the app chosen for legibility
-            through glass, shipped, tested, and impossible to select.
+            The bundled face is offered, and first. `stageFontStack('high-legibility')`
+            resolves Atkinson Hyperlegible Next and `font-hash.test.ts` pins the
+            family name against the stack; leaving it out of this menu made the
+            one face chosen for legibility through glass impossible to select.
           -->
           <!-- "(bundled)" left the option name for the description: in the
                220px column it clipped the name mid-word ("…(bunc"). -->
@@ -3954,16 +3917,12 @@
             onchange={(value) => void patchSettings('teleprompter', { fontFamilyId: value })}
           />
           <!--
-            What used to be "Stage background".
-
-            That menu offered near black and high-contrast black and delivered
-            neither: `src/styles/stage.css` hard-codes `--stage-bg`, so both of
-            its options rendered identically, for as long as it existed. What a
-            presenter is actually reaching for when they go looking for a
-            background control on a prompter is how hot the type burns against
-            the glass — a bright rig washes out a soft face, a dark studio makes
-            a strong one bloom. That is the control that exists now, and the
-            stage reads it as `data-text-intensity` on `.stage-root`.
+            Text intensity, not a stage background: a prompter's field is black
+            only. What a presenter is actually reaching for when they go looking
+            for a background control on a prompter is how hot the type burns
+            against the glass — a bright rig washes out a soft face, a dark
+            studio makes a strong one bloom. The stage reads it as
+            `data-text-intensity` on `.stage-root`.
           -->
           <!-- It had no visible label at all, and stretched the width of the
                column with its three segments bunched at one end. -->
@@ -4022,9 +3981,8 @@
           </SettingRow>
           <!--
             Who owns the four geometry sliders, said ONCE, above them, with the
-            way to the owner beside it. It used to be the same two-line sentence
-            under each of the four, with the link after the last of them. Each
-            slider still names its owner in one short line. The note and the
+            way to the owner beside it. Each slider names its owner in one short
+            line, not the whole sentence again. The note and the
             four share one well, so they read as the one group they are rather
             than as four rows somebody forgot to switch on.
 
@@ -4058,12 +4016,11 @@
             {/if}
           </div>
           <!--
-            The ceiling was 160px, which is not a taste limit — it was short of
-            what the product's own hardware needs. A Prompter XL at its rated
-            4.6 m wants roughly 234px for a comfortable angular size, so this
-            control could not reach a legible size on a rig Speaking Glass ships
-            knowledge of, and the operator had no way to tell that the slider
-            had run out rather than the display.
+            The ceiling is not a taste limit; it has to cover the product's own
+            hardware. A Prompter XL at its rated 4.6 m wants roughly 234px for a
+            comfortable angular size, so a 160px ceiling left a rig Speaking
+            Glass ships knowledge of with no legible size, and no way to tell
+            that the slider had run out rather than the display.
           -->
           {@render appearanceSlider(
             'fontSizePx',
@@ -4110,14 +4067,10 @@
           )}
           </div>
           <!--
-            "Fixed-speed default" was a slider onto nothing, and then a sentence
-            saying so. It is a control again, because there is finally something
-            reading it.
-
-            What changed is narrow and worth stating precisely: this is not a
-            second way to prompt. Auto-scroll is the FALLBACK for the takes voice
-            following cannot carry — no speech key, no network, a room loud
-            enough that finals stop arriving — and the reason it earns a setting
+            Auto-scroll pace. Worth stating precisely: this is not a second way
+            to prompt. Auto-scroll is the FALLBACK for the takes voice following
+            cannot carry — no speech model installed, a microphone fault, a room
+            loud enough that the recogniser stops producing words — and the reason it earns a setting
             is that the pace has to be dialled in before it is needed, by
             somebody who is not yet standing at a camera with a script that has
             stopped moving.
@@ -4199,28 +4152,18 @@
             </p>
           </div>
           <!--
-            "Export all scripts" was the honest name for what this used to
-            do. It exports everything now — the database, the whole canonical
-            scripts tree, and the settings and calibrations that used to be
-            left out entirely — with a manifest and a checksum per file, so
-            it can be restored rather than only looked at.
+            Export writes everything — the database, the whole canonical
+            scripts tree, the settings and calibrations — with a manifest and a
+            checksum per file, so it can be restored rather than only looked at.
 
             Restore is the same weight as Export: it is half of the same job, not
-            a lesser action. Clear logs moved to Diagnostics, where logs are.
+            a lesser action. Clear logs is under Diagnostics, where logs are.
           -->
           <div class="row-actions" data-search-row>
             <Button onclick={() => void runExportAllData()}>Export all data</Button>
             <Button onclick={() => void runRestoreAllData()}>Restore from export…</Button>
           </div>
 
-          <!--
-            A "Save session transcripts" row used to sit here (§36.2): Off, 1
-            day, 7 days, 30 days or Forever, with a confirmation before a
-            shorter window deleted anything. Takes stopped writing transcripts
-            (#214), so it decided nothing and went with #215, along with the
-            Speech settings line that pointed people at it. Rust still holds the
-            field and sweeps what older builds kept until #217.
-          -->
           <!-- One block per topic, so a search for "updates" keeps Updates
                and not every privacy paragraph with it. -->
           <div class="privacy" data-search-row>
@@ -4275,7 +4218,7 @@
           </div>
         </Section>
 
-        <!-- §44.11 / §47.10 diagnostics: the facts a support request needs. -->
+        <!-- Diagnostics: the facts a support request needs. -->
         <Section
           title="Diagnostics"
           description="What Speaking Glass knows about this installation. Useful when something is not working and you need to report it."
@@ -4305,7 +4248,7 @@
           {/if}
 
           <!--
-            §44.12: user-facing failures are shown as English everywhere else in
+            User-facing failures are shown as English everywhere else in
             the app. The stable code is what a bug report needs, so it lives
             here — one place, clearly labelled as a technical detail.
           -->
@@ -4381,12 +4324,11 @@
   }
 
   /*
-   * A compact source list, matching the sidebar's (§14.4, §7.1).
+   * A compact source list, matching the sidebar's.
    *
-   * It was a 208px rail of 34px rows whose selected item was a raised white
-   * pill — the same SaaS-nav treatment the sidebar carried, and wrong for the
-   * same reason. The rows are source-list height now and the selected one is a
-   * tonal fill with no border and no elevation.
+   * Source-list height rows, and the selected one is a tonal fill with no
+   * border and no elevation — not a raised white pill, the SaaS-nav treatment
+   * that is wrong here for the same reason it was wrong in the sidebar.
    */
   /* Wide enough for "Prompter display and rigs" on one line. At 180px it and
      "Data, privacy & updates" wrapped, and their second lines read as items
@@ -4455,7 +4397,7 @@
   }
 
   /*
-   * The row filter's marks (§14.2).
+   * The row filter's marks.
    *
    * `:global`, because these attributes are set on the ROOT elements of shared
    * field components — `Select`, `Toggle`, `SettingReadout` — and Svelte's

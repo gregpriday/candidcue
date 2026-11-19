@@ -1,15 +1,14 @@
 /**
- * Where a take begins (CCUX-014, CCUX-015, CCUX-016, CCUX-008).
+ * Where a take begins.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS NOT JUST A NUMBER
  * ---------------------------------------------------------------------------
- * `startTake` recorded `startTokenIndex: 0` on every session, and the session
- * record has carried the field since it was written. A creator who fumbled a
- * line six minutes into a script had two options: read the first six minutes
- * again, or launch and then navigate while the stage was already live and the
- * camera was already rolling. For a course creator working section by section
- * that is the difference between a usable tool and an unusable one.
+ * Without a start point, a creator who fumbled a line six minutes into a
+ * script has two options: read the first six minutes again, or launch and then
+ * navigate while the stage is already live and the camera already rolling.
+ * For a course creator working section by section that is the difference
+ * between a usable tool and an unusable one.
  *
  * The number itself is easy. What is not easy — and what this module owns — is
  * that an arbitrary token is a BAD place to start:
@@ -45,7 +44,7 @@ export interface StartPoint {
   excerpt?: string;
 }
 
-/** The beginning, which is what every take used to get whether it wanted it or not. */
+/** The beginning: where a take opens unless it asks for somewhere else. */
 export function beginning(): StartPoint {
   return { tokenIndex: 0, kind: 'beginning', label: 'the beginning' };
 }

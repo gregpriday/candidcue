@@ -1,11 +1,11 @@
 /**
- * The microphone / transcription test lifecycle (spec §14.2 C).
+ * The microphone / transcription test lifecycle.
  *
- * This is a local transcription session — it costs nothing but holds the microphone. The screen used to open one
- * and then hold it until the component unmounted: there was no Stop control
- * and no timeout, so starting the test and then reading something else on the
- * page left a realtime connection streaming the owner's microphone — and their
- * money — until they happened to navigate away.
+ * This is a local transcription session — it holds the microphone and the
+ * recogniser. The screen used to open one and then hold it until the component
+ * unmounted: there was no Stop control and no timeout, so starting the test
+ * and then reading something else on the page left the owner's microphone
+ * streaming until they happened to navigate away.
  *
  * The lifecycle therefore lives here, out of the component, where every path
  * that closes the session can be proven to have run the disposer:
@@ -18,19 +18,18 @@
  *
  * Choosing the numbers. The test exists to answer one question — is the
  * microphone open and is the recogniser returning text — and one spoken sentence
- * answers it in about five seconds. Everything past that is money spent on
- * nothing.
+ * answers it in about five seconds. Everything past that holds the microphone
+ * for nothing.
  *
  *  - `MIC_TEST_IDLE_TIMEOUT_MS` (30 s) is measured from the last transcription
  *    event, not from the start, so a user who is finding their place, clearing
  *    their throat or re-reading the prompt is not cut off mid-thought. Thirty
  *    seconds is roughly six times the length of the thing being proved, and it
- *    bounds a walk-away at half a minute of realtime billing.
+ *    bounds a walk-away at half a minute of open microphone.
  *  - `MIC_TEST_MAX_DURATION_MS` (2 min) exists because the idle timer alone is
  *    not a bound: a fan, a TV or an open-plan office produces a steady stream
  *    of partials that resets it indefinitely. Two minutes comfortably covers
- *    the longest legitimate use (the §30.3 calibration preview asks for one
- *    paragraph, ~45 s) and makes the worst case finite.
+ *    reading a paragraph aloud and makes the worst case finite.
  */
 import type { TranscriptTestEvents, Unsubscribe } from './voice-facade';
 
@@ -49,7 +48,7 @@ export type MicTestStopReason =
   | 'restart'
   | 'dispose'
   | 'error'
-  /** The test proved what it exists to prove; there is nothing left to bill for. */
+  /** The test proved what it exists to prove; there is nothing left to listen for. */
   | 'answered';
 
 /** Everything the UI renders about the test. Replaced wholesale on change. */
@@ -111,7 +110,7 @@ export class MicTestSession {
     };
   }
 
-  /** True while a session is open or being opened — i.e. while it can bill. */
+  /** True while a session is open or being opened — i.e. while it holds the microphone. */
   get running(): boolean {
     return this.snapshot.state !== 'idle' && this.snapshot.state !== 'success';
   }
@@ -121,7 +120,7 @@ export class MicTestSession {
   }
 
   async start(deviceId: string | undefined): Promise<void> {
-    // A second press restarts rather than stacking a second billable session.
+    // A second press restarts rather than stacking a second session.
     this.stop('restart');
     const generation = (this.generation += 1);
     this.publish({ ...IDLE_SNAPSHOT, state: 'opening' });
@@ -139,20 +138,19 @@ export class MicTestSession {
           /*
            * A final transcript is the answer. Close the session.
            *
-           * This used to publish `success` and leave the transport open until
+           * This used to publish `success` and leave the session open until
            * the 30-second idle timer noticed — and `running` reads false for
-           * `success`, so the screen took away the Stop button AND the "billing
-           * your key" warning at the exact moment the session became invisible.
-           * Half a minute of realtime billing, with the UI insisting the test
-           * was over.
+           * `success`, so the screen took away the Stop button at the exact
+           * moment the session became invisible: half a minute of open
+           * microphone, with the UI insisting the test was over.
            */
           this.publish({ ...this.snapshot, final: text });
           this.stop('answered');
         },
         onError: (message) => {
           if (generation !== this.generation) return;
-          // A reported failure ends the session: leaving the transport open
-          // after it has said it cannot transcribe is billing for nothing.
+          // A reported failure ends the session: leaving it open after it has
+          // said it cannot transcribe holds the microphone for nothing.
           this.publish({ ...this.snapshot, error: message });
           this.stop('error');
         },
@@ -205,7 +203,7 @@ export class MicTestSession {
     });
   }
 
-  /** Unmount: never leave a capture (or a bill) running behind a dead screen. */
+  /** Unmount: never leave a capture running behind a dead screen. */
   dispose(): void {
     this.stop('dispose');
   }
@@ -264,7 +262,7 @@ export function micTestStopNotice(reason: MicTestStopReason | null): string | nu
 }
 
 /**
- * §28.1. Should Preflight open a microphone this machine has already granted,
+ * Should Settings › Audio open a microphone this machine has already granted,
  * without making the user click Allow again?
  *
  * Pure, because the condition it encodes is easy to get subtly wrong and was:
@@ -282,7 +280,7 @@ export function shouldAdoptRememberedMicrophone(input: {
   attempted: boolean;
   /** Devices have already been enumerated for a live grant. */
   adopted: boolean;
-  /** What Preflight currently believes about the permission. */
+  /** What Settings currently believes about the permission. */
   permission: 'unknown' | 'granted' | 'denied';
 }): boolean {
   if (!input.remembered) return false;
