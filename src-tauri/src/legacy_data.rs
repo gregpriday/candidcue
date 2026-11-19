@@ -579,10 +579,11 @@ mod tests {
     }
 
     /// One connection, not a pool: `Connection::close` returns only once
-    /// SQLite has closed the file (and, for the last connection, checkpointed
-    /// and deleted its WAL). sqlx 0.8's `Pool::close` does not promise that: a
-    /// connection still on its way back to the pool when it is called is left
-    /// idle and closed later, on its worker thread, when the pool is dropped.
+    /// `sqlite3_close` has (which, for the last connection, checkpoints the WAL
+    /// and tries to delete it; a failed delete is not reported). sqlx 0.8's
+    /// `Pool::close` does not promise that: a connection on its way back to the
+    /// pool when it is called can be left idle, and closed later, on its worker
+    /// thread, when the pool is dropped.
     fn connect(path: &Path, create: bool) -> sqlx::SqliteConnection {
         use sqlx::ConnectOptions;
         tauri::async_runtime::block_on(async {
@@ -712,10 +713,12 @@ mod tests {
         // Checked before reading it back: `title_in` opens the snapshot in WAL
         // mode, which makes a `-wal` of its own, and SQLite does not report a
         // failed delete of that file on close (a scanner on Windows can cause one).
-        assert!(
-            !new.join("speaking-glass.sqlite3-wal").exists(),
-            "a snapshot is one self-contained file, not a copy of the WAL"
-        );
+        for sidecar in ["speaking-glass.sqlite3-wal", "speaking-glass.sqlite3-shm"] {
+            assert!(
+                !new.join(sidecar).exists(),
+                "a snapshot is one self-contained file, not a copy of the WAL: {sidecar}"
+            );
+        }
         assert_eq!(title_in(&new.join("speaking-glass.sqlite3")), "Edited while open");
         assert_eq!(std::fs::read(old.join("candidcue.sqlite3-wal")).unwrap(), wal);
         assert_eq!(std::fs::read(old.join("candidcue.sqlite3")).unwrap(), database);
