@@ -2952,7 +2952,7 @@
      *
      * This path can RE-ANCHOR — `disposition: 'instant'` and `'reanchor'` write
      * the plant directly (§62; primary §32.4 for `instant`, §20.4 for
-   * `reanchor`) — so the zeroed velocities that enforce
+     * `reanchor`) — so the zeroed velocities that enforce
      * manual authority inside `limitsForState` do not bind here. Anything that
      * holds the document has to be repeated at this door or it is not a hold.
      *

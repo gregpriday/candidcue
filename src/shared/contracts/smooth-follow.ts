@@ -238,7 +238,7 @@ export interface SmoothFollowLineUnits {
    */
   reverseTravelMaxLines: number;
   /**
-   * Companion §30 latch escape hatch — how far the target may disagree with a
+   * Latch escape hatch — how far the target may disagree with a
    * latched forward position before the disagreement is treated as a
    * relocation.
    *
@@ -368,10 +368,11 @@ export interface SmoothFollowProfile {
     /**
      * Companion §30.3 boost decay, in reading-corridor half-heights.
      *
-     * The boost applies while the spoken line is still BELOW the corridor's
-     * entry edge and falls to nothing over this many corridor half-heights as
-     * the line reaches it, so it is spent bringing the spoken line back to the
-     * corridor and ordinary following covers the rest. Expressed in
+     * The boost is measured on the plant's gap to its target: full while the
+     * gap exceeds one corridor half-height by this many half-heights, falling
+     * to nothing as the gap closes to one half-height, so it is spent bringing
+     * the spoken line back toward the corridor and ordinary following covers
+     * the rest. Expressed in
      * corridors rather than pixels or milliseconds because the corridor is the
      * only scale that means the same thing on a 1080p stage and a 4K one, and
      * because a time-relative decay makes a long catch-up crawl at the end and

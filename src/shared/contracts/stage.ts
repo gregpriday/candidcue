@@ -307,12 +307,10 @@ export type StageDirective =
    *
    * The state lives in control — the dock's follow control flips it — and the
    * stage has to be told because the stage is where the consequence is visible
-   * (a take's embedded stage reads it from the bridge prop). Without it the
-   * glass would have to infer that following stopped from voice-driven
-   * snapshots no longer arriving — manual moves still send their anchors —
-   * which it cannot distinguish from a presenter who has gone quiet until the
-   * 15 s staleness window expires. A mode has to be announced, not inferred
-   * from an absence.
+   * (a take's embedded stage reads it from the bridge prop). Snapshot traffic
+   * cannot say it: Rust keeps publishing either way, and a quiet feed looks
+   * the same as a presenter who has gone quiet. A mode has to be announced,
+   * not inferred from an absence.
    */
   | { kind: 'follow'; paused: boolean }
   | { kind: 'diagnostics'; visible: boolean };
