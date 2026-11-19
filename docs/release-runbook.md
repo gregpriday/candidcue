@@ -329,16 +329,22 @@ No terminal command may be required for any of this. If one is, that is a
 release defect, not a documentation gap.
 
 **Windows and Linux** get the same drill, on a machine that has never run
-Speaking Glass, from the files the release workflow staged (its
-`speaking-glass-release-<os>` artifact), before the publish job runs: record it
-as `docs/real-rig-test-protocol.md` §G, one sheet per installer format
-(`-setup.exe`, `.deb`, AppImage), naming the OS, its web view (WebView2 or
-WebKitGTK), the display session (X11 or Wayland on Linux) and what fed the
-take. The Gatekeeper rows become SmartScreen's **More info › Run anyway** on
-Windows, which README tells users to expect. CI's smoke tests only see the
-installed process stay up for 25 seconds; they are not this drill. **A
-platform with no passing sheet is not advertised as tested**: README and the
-`CHANGELOG.md` section say what ran instead.
+Speaking Glass, recorded as `docs/real-rig-test-protocol.md` §F: one sheet per
+installer format (`-setup.exe`, `.deb`, AppImage), naming the OS, its web view
+(WebView2 or WebKitGTK), the display session (X11 or Wayland on Linux) and what
+fed the take. The Gatekeeper rows become SmartScreen's **More info › Run
+anyway** on Windows, which README tells users to expect.
+
+Nothing in the release workflows waits for this drill: their publish jobs need
+only the build, and a prerelease publishes without a reviewer. So run it
+**before tagging**, on a `workflow_dispatch` dry run of `release-windows.yml`
+and `release-linux.yml` on the commit you are about to tag (its
+`speaking-glass-release-<os>` artifact), and settle the wording then: the
+release notes are read from the tagged `CHANGELOG.md`, so a correction made
+after the tag misses that release. The release workflows' smoke tests only see
+the installed process stay up for 25 seconds; they are not this drill. **An
+installer format with no passing sheet is not advertised as tested**: README
+and the `CHANGELOG.md` section say what ran for it instead.
 
 ## 8. Long sessions, before a build goes wide
 

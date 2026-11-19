@@ -144,9 +144,37 @@ stops being true.
 | E5 | Present again | Starts immediately, with no stale state from the last take | |
 | E6 | Take details disclosure | All the original measurements are still there | |
 
-## F. What was not tested
+## F. Windows and Linux: the packaged journey
 
-List every section and case skipped, and why. **This section is not optional**
+Run for every release that publishes a Windows or Linux build, one sheet per
+installer format (`-setup.exe`, `.deb`, AppImage). Run it on the release
+workflow's own files: a `workflow_dispatch` dry run of `release-windows.yml` or
+`release-linux.yml` on the commit about to be tagged builds, inspects and
+smoke-tests everything and publishes nothing (its `speaking-glass-release-<os>`
+artifact). A tag rebuilds, so the tagged files are new bytes from that commit:
+record which file was tested. The release workflows' own smoke test only sees
+the installed process stay up for 25 seconds under no microphone and no
+voice; this is the part it cannot reach.
+
+Fill the Rig rows with the exact artifact, the OS and its web view (WebView2 on
+Windows, WebKitGTK on Linux), the display session and the input. **The
+Microphone row says what fed the take**: a real microphone, or a WAV through a
+fake capture device. A fake device bypasses the OS microphone settings, so a
+take on one records F4 as not tested.
+
+| # | Step | Pass criteria | Result |
+|---|---|---|---|
+| F1 | Install through the advertised path | The `-setup.exe` downloaded in a browser and run through SmartScreen's **More info › Run anyway**, with no administrator prompt (it installs per user); the `.deb` through the desktop's software installer or `apt`; the AppImage marked executable and opened. Record every terminal command used: README gives none for Linux | |
+| F2 | Open a script | Create one and open one; it renders in the editor | |
+| F3 | Install the model | From the Welcome screen or Settings › Speech; the download verifies, and Present no longer brings up the readiness sheet for a missing model (A9) | |
+| F4 | Microphone access | Windows: there is no first-use prompt; with "Let apps access your microphone" and "Let desktop apps access your microphone" on in Windows Settings › Privacy & security › Microphone, the level meter responds to speech into the input under test (turn one off once and confirm the app names it). Linux: the app grants WebKitGTK's request itself; the meter responds from a PulseAudio or PipeWire source | |
+| F5 | Voice-followed take | Read at least a paragraph; the reading line follows the voice | |
+| F6 | End the take | Returns to the editor with the summary over it | |
+| F7 | Quit and reopen | Quit with File › Exit; relaunch from the Start menu (Windows), the desktop's launcher (`.deb`) or the same AppImage from the file manager; the library, the script and the model are still there | |
+
+## G. What was not tested
+
+List every section and case skipped, and why, §F included. **This section is not optional**
 — it is the part that makes the sheet honest, and a release note that says
 "tested on real glass" without it is claiming more than was done.
 
@@ -154,39 +182,16 @@ List every section and case skipped, and why. **This section is not optional**
 |---|---|
 | | |
 
-## G. Windows and Linux: the packaged journey
-
-Run for every release that publishes a Windows or Linux build, on the artifact
-the release workflow built, before it is advertised. CI's smoke tests only see
-the installed process stay up for 25 seconds, with no microphone and no voice;
-this is the part they cannot reach. One sheet per installer format.
-
-Fill the Rig rows with the exact artifact, the OS and its web view (WebView2 on
-Windows, WebKitGTK on Linux), the display session and the input. **The Microphone
-row says what fed the take**: a real microphone, or a WAV through a fake
-capture device. A fake device bypasses the OS microphone permission, so a take
-on one records G4 as not tested.
-
-| # | Step | Pass criteria | Result |
-|---|---|---|---|
-| G1 | Install through the advertised path | The `-setup.exe` from the releases page through SmartScreen's **More info › Run anyway**, with no administrator prompt; the `.deb` through the desktop's installer or `apt`; the AppImage made executable and opened. No terminal step beyond what README tells a user | |
-| G2 | Open a script | Create one and open one; it renders in the editor | |
-| G3 | Install the model | From the Welcome screen or Settings › Speech; the download verifies and the readiness sheet stops naming it | |
-| G4 | Microphone access | The OS permission flow as a first-time user meets it (Windows: Settings › Privacy & security › Microphone; Linux: a PulseAudio or PipeWire source); the level meter moves | |
-| G5 | Voice-followed take | Read at least a paragraph; the reading line follows the voice | |
-| G6 | End the take | Returns to the editor with the summary over it | |
-| G7 | Quit and reopen | Quit from the menu (File › Exit on Windows and Linux); relaunch from the Start menu or the desktop's launcher; the library, the script and the model are still there | |
-
 ---
 
 ## Known gaps this protocol cannot close
 
-- **Windows and Linux beyond §G**: §G covers the packaged journey only.
+- **Windows and Linux beyond §F**: §F covers the packaged journey only.
   Sections A–E were written on a Mac, and a case there that names a Mac
   behaviour does not carry over to Windows or Linux without being re-run
   there. Record each installer format (`-setup.exe`, `.deb`, AppImage) as its
   own run; `docs/rig-runs/0.1.0-2026-11-19-windows-linux.md` is the first
-  attempt, and neither platform was exercised.
+  attempt, and neither platform was exercised in it.
 - **Intel Macs**: the release ships a universal binary; if no Intel Mac was
   used, say so here rather than implying coverage.
 - **Delivery analysis of any kind**: there is none to test. Live coaching and
