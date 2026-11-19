@@ -259,7 +259,69 @@ exists, a tag builds and stages, then stops at publishing with
 
 Replacing the account-wide R2 keys with a token scoped to that bucket (#306)
 is a separate change, not part of the rename: it takes effect only once
-`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` hold the new token's keys.
+`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` hold the new token's keys
+(next section).
+
+### An R2 token for the release bucket only (#306)
+
+`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` were derived from an
+account-level Cloudflare API token. They can reach every R2 bucket on the
+account, Daintree's update bucket included, and they stop working the day
+that token is rolled. Publishing needs one bucket. Nothing in the workflows
+changes: `R2_ENDPOINT` and `SPEAKING_GLASS_R2_BUCKET` keep their values, and
+only the two key secrets are replaced. The owner's checklist:
+
+- [ ] In Cloudflare, open R2 › Manage API tokens and create an **Account API
+  token** (it outlives any one member's access; a User API token works the
+  same until its user leaves). Permissions: **Object Read & Write**. Specify
+  bucket(s): **Apply to specific buckets only**, with the one bucket that
+  `SPEAKING_GLASS_R2_BUCKET` names, the bucket whose Settings › Custom
+  Domains lists `updates.speakingglass.com`. TTL: **Forever**, or a release
+  months from now fails at its upload. Leave client IP filtering empty:
+  GitHub-hosted runners have no fixed address. Keep the page open after
+  creating it, because the Secret Access Key is shown only once.
+- [ ] Before it goes into GitHub, check its reach from a shell, with the
+  settings publishing uses. Every call here reads; none writes:
+
+  ```bash
+  printf 'Access Key ID: '; read -rs AWS_ACCESS_KEY_ID; echo
+  printf 'Secret Access Key: '; read -rs AWS_SECRET_ACCESS_KEY; echo
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION=auto \
+    AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+  E='https://<account id>.r2.cloudflarestorage.com'  # the R2_ENDPOINT value
+  B='<release bucket>'                               # the SPEAKING_GLASS_R2_BUCKET value
+  aws s3api list-objects-v2 --bucket "$B" --prefix releases/ --max-keys 1 --endpoint-url "$E"
+  aws s3api list-objects-v2 --bucket '<another bucket>' --max-keys 1 --endpoint-url "$E"
+  aws s3api list-buckets --endpoint-url "$E"
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  ```
+
+  The first must succeed: it lists one key under `releases/`, or none
+  before the first release. The second must fail with `AccessDenied`, which
+  is the scope itself. Name a bucket that exists, such as Daintree's update
+  bucket: `NoSuchBucket` means the name is wrong and proves nothing. The
+  third must fail with `AccessDenied` too; a token that lists the account's
+  buckets has Admin permissions.
+- [ ] No read proves a write, so check the permission itself: the token's
+  row under Manage API tokens says Object Read & Write, not Object Read
+  only, and names that one bucket.
+- [ ] Replace the two secrets where the other two R2 secrets live, keeping
+  the four together (above): `gh secret set R2_ACCESS_KEY_ID` and
+  `gh secret set R2_SECRET_ACCESS_KEY` prompt for each value, so neither
+  reaches shell history. If they live on the environments, set both on
+  `release-stable` and on `release-prerelease` (`--env`). `gh secret list`
+  (with `--env` for each environment) then shows both updated today, beside
+  `R2_ENDPOINT` and `SPEAKING_GLASS_R2_BUCKET`.
+- [ ] The first real publish after the swap (§5) proves the write. A dry run
+  does not reach R2. In it, `Every publishing credential must be present`
+  lists all four present, and `Upload the release files` and both read-backs
+  pass. A token that cannot write fails at `Upload the release files`,
+  before the feed is touched: fix the token and re-run only the `publish`
+  job.
+
+After the swap no release depends on the account-level token the old keys
+came from, so rolling or deleting it no longer touches publishing.
 
 ### The dry run
 
@@ -354,8 +416,8 @@ order, and stops at the first failure:
 4. Refuses to change a file that is already published: every file already
    under `releases/<version>/` must be byte for byte the one staged.
 5. Uploads the installers, the updater payload and its `.sig`, and
-   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
-   bucket, with `Cache-Control: public, max-age=31536000, immutable`.
+   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the R2 bucket
+   `SPEAKING_GLASS_R2_BUCKET` names, with `Cache-Control: public, max-age=31536000, immutable`.
 6. Downloads every one of them back from `https://updates.speakingglass.com`,
    compares the bytes, and checks each is served with that `Cache-Control`
    (read as directives, so their order and case do not matter).
