@@ -109,6 +109,7 @@ const {
   AUTO_SCROLL_KEY,
   RECOGNISER_COPY,
   RECOGNISER_CODES: AUTHORED_RECOGNISER_CODES,
+  withoutTakeAdvice,
 } = await import('../../../src/control/services/errors');
 const { osCopy } = await import('../../../src/control/lib/os-copy');
 const { resolveShortcut } = await import('../../../src/control/lib/shortcuts');
@@ -472,6 +473,20 @@ describe('recogniser copy stays true on the surface with no take', () => {
       expect(inTake.trim(), `${code} offers no fallback in a take`).not.toBe('');
       expect(copyForErrorCode(code).startsWith(fault), `${code} opens with a condition`).toBe(true);
     }
+  });
+
+  it('leaves the take out where there is no take', () => {
+    // Settings' microphone test shows the fault and the repair, without the
+    // fallback a take alone has.
+    for (const code of RECOGNISER_CODES) {
+      const shown = withoutTakeAdvice(copyForErrorCode(code));
+      expect(shown.startsWith(RECOGNISER_COPY[code].fault), code).toBe(true);
+      expect(shown, `${code} still offers take-only advice with no take`).not.toMatch(TAKE_ONLY);
+    }
+    // Any other copy passes through untouched.
+    expect(withoutTakeAdvice(copyForErrorCode('NETWORK_OFFLINE'))).toBe(
+      copyForErrorCode('NETWORK_OFFLINE'),
+    );
   });
 
   it('points the take at auto-scroll, on the key that works it', () => {

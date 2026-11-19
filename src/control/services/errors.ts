@@ -193,6 +193,20 @@ export const RECOGNISER_COPY = {
   },
 } as const satisfies Record<string, RecogniserCopy>;
 
+/**
+ * Recogniser copy as a screen with no take shows it: the fault and the repair,
+ * without the take's fallback. Settings' microphone test reads it, where nothing
+ * is scrolling and the key does nothing. Any other copy is returned unchanged.
+ */
+export function withoutTakeAdvice(copy: string): string {
+  for (const parts of Object.values(RECOGNISER_COPY) as RecogniserCopy[]) {
+    if (copy === composeRecogniserCopy(parts)) {
+      return [parts.fault, parts.repair].filter((part) => part !== undefined).join(' ');
+    }
+  }
+  return copy;
+}
+
 /** The codes whose copy is built from parts, and so reaches surfaces with no take. */
 export const RECOGNISER_CODES = Object.keys(RECOGNISER_COPY) as Array<keyof typeof RECOGNISER_COPY>;
 

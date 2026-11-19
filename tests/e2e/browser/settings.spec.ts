@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { gotoSection, openPreferences } from './fixtures/preferences';
 import { VAD_SENSITIVITY_COPY } from '../../../src/control/services/settings-audio';
+import { SESSION_MODE_LABELS } from '../../../src/shared/take-vocabulary';
 
 /**
  * Settings round-trip journey, SHIM-BACKED.
@@ -607,19 +608,13 @@ test('a session mode stored by an older build is admitted, not papered over', as
   await page.goto('/control.html');
   await openSettingsSection(page, 'General');
 
-  await expect(page.getByText('Manual', { exact: true })).toBeVisible();
-  // The way back is named in the readout's own vocabulary, in the sentence and
-  // on the button alike: "Switch to voice follow" leading to a value that reads
-  // "Follow voice" is two names for one mode.
-  await expect(
-    page.getByText(
-      'Saved by an earlier version. Takes in this mode do not follow your voice; ' +
-        'switch back to Follow voice to prompt normally.',
-      { exact: true },
-    ),
-  ).toBeVisible();
-
-  await page.getByRole('button', { name: 'Switch to Follow voice', exact: true }).click();
+  await expect(page.getByText(SESSION_MODE_LABELS.manual, { exact: true })).toBeVisible();
+  // The way back is named in the readout's own vocabulary: "Switch to voice
+  // follow" leading to a value that reads "Follow voice" is two names for one
+  // mode. The labels come from the glossary, so renaming a mode is one edit.
+  const wayBack = page.getByRole('button', { name: SESSION_MODE_LABELS.voice });
+  await expect(wayBack).toHaveCount(1);
+  await wayBack.click();
   // The store changes before the save is awaited, so the readout alone would
   // pass on a way back that never reached the backend.
   await expect
@@ -634,8 +629,9 @@ test('a session mode stored by an older build is admitted, not papered over', as
       ),
     )
     .toBe(true);
-  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Saved by an earlier version/)).toHaveCount(0);
+  await expect(page.getByText(SESSION_MODE_LABELS.voice, { exact: true })).toBeVisible();
+  await expect(page.getByText(SESSION_MODE_LABELS.manual, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: SESSION_MODE_LABELS.voice })).toHaveCount(0);
 });
 
 test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
@@ -644,18 +640,12 @@ test('Session mode states its one value instead of offering two dead options', a
   await openSettingsSection(page, 'General');
 
   await expect(page.getByText('Session mode', { exact: true })).toBeVisible();
-  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  // The dropdown is gone, and with it the two permanently disabled rows.
-  await expect(page.getByLabel('Default session mode')).toHaveCount(0);
-  await expect(page.getByText(/not available in this release/)).toHaveCount(0);
-  // It says where the pace actually lives — Teleprompter, not "below" in General.
-  await expect(
-    page.getByText(
-      'Every take opens listening. Auto-scroll can still roll the script at a set pace ' +
-        '(Teleprompter › Auto-scroll pace).',
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(page.getByText(SESSION_MODE_LABELS.voice, { exact: true })).toBeVisible();
+  // The dropdown is gone, and with it the two permanently disabled rows: no
+  // control offers a choice of mode, and neither unoffered mode is named.
+  await expect(page.getByRole('combobox', { name: /session mode/i })).toHaveCount(0);
+  await expect(page.getByText(SESSION_MODE_LABELS.manual, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(SESSION_MODE_LABELS.fixed, { exact: true })).toHaveCount(0);
 });
 
 test('Following drops the dead Script fidelity control', async ({ page }) => {

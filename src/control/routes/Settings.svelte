@@ -54,6 +54,7 @@
   import {
     describeError,
     recentErrorDiagnostics,
+    withoutTakeAdvice,
     type ErrorDiagnosticEntry,
   } from '../services/errors';
   import { BackendUnavailableError, isTauriRuntime } from '../services/ipc';
@@ -1829,15 +1830,12 @@
   /**
    * The failure as this screen shows it.
    *
-   * The recogniser's messages are written for a take, and several end with
-   * what to press during one ("In a take, press A to start or stop
-   * auto-scroll…"). That is the wrong advice in Settings, where nothing is
-   * scrolling; the rest of the sentence is still the diagnosis.
+   * The recogniser's messages carry what to press during a take. That is the
+   * wrong advice in Settings, where nothing is scrolling; the fault and the
+   * repair are still the diagnosis, and `withoutTakeAdvice` keeps just those.
    */
   const micTestErrorText = $derived(
-    micTestError
-      ?.replace(/\s*In a take, press A to start or stop auto-scroll(?:, then [^.]*)?\./, '')
-      .trim() ?? null,
+    micTestError === null ? null : withoutTakeAdvice(micTestError),
   );
   /** The failure says to fix it in Speech, so offer the way there. */
   const micTestNeedsSpeech = $derived(
