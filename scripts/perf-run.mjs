@@ -26,7 +26,7 @@
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, loadavg, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -203,6 +203,7 @@ function clearProfile() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const round1 = (v) => Math.round(v * 10) / 10;
 
 /** One process: spawn, wait for it to exit by itself, read its records. */
 async function launch(binary) {
@@ -264,6 +265,10 @@ async function main() {
 
   for (let pair = 1; pair <= opts.pairs; pair++) {
     clearProfile();
+    // The machine's 1-minute load either side of the pair. Everything here is
+    // wall-clock, and this Mac is shared: a recording made while something
+    // else was building is slower for that reason alone, and says so.
+    const loadBefore = loadavg()[0];
     const firstUse = await launch(binary);
     await sleep(SETTLE_MS);
     const relaunch = await launch(binary);
@@ -275,13 +280,14 @@ async function main() {
       relaunch: relaunch.records,
       spawnedAt: { firstUse: firstUse.spawnedAt, relaunch: relaunch.spawnedAt },
     });
-    report.pairs.push(assembled);
+    report.pairs.push({ ...assembled, load: [round1(loadBefore), round1(loadavg()[0])] });
     const l = assembled.launches;
     process.stdout.write(
       `pair ${pair}/${opts.pairs}: ${assembled.valid ? 'ok' : `INVALID (${assembled.problems.join('; ')})`}` +
         ` launch ${l.cold?.spawnToReadyMs ?? '—'}/${l.warm?.spawnToReadyMs ?? '—'} ms` +
         ` open ${assembled.opens.map((o) => o.ms).join('/')} ms` +
-        ` present ${assembled.presents.map((p) => p.ms).join('/')} ms\n`,
+        ` present ${assembled.presents.map((p) => p.ms).join('/')} ms` +
+        ` load ${round1(loadBefore)}→${round1(loadavg()[0])}\n`,
     );
   }
   clearProfile();

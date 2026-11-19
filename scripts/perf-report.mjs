@@ -278,6 +278,9 @@ export const DEFAULT_THRESHOLDS = {
   // takes is the second-worst frame of the run, and two recordings of the
   // same build put that at 30 and 42 ms.
   frameMax: { relative: 0.5, absolute: 8 },
+  // The bundle's fetch, parse and evaluation (~40 or ~105 ms, bimodal): the
+  // launch family's 40 ms would let a 60 ms regression of it through.
+  bundle: { relative: 0.2, absolute: 20 },
   // A COUNT of frames over LONG_FRAME_MS per take, not milliseconds: most
   // takes have none, so a relative allowance alone would make one stray
   // frame a regression.
@@ -287,6 +290,8 @@ export const DEFAULT_THRESHOLDS = {
 function thresholdFor(name, thresholds) {
   const family = name.endsWith('.long')
     ? 'longFrames'
+    : name.endsWith('.bundle-evaluate')
+      ? 'bundle'
     : name.startsWith('frames.') && name.endsWith('.max')
       ? 'frameMax'
       : name.split('.')[0];
@@ -367,6 +372,7 @@ export function compareReports(base, candidate) {
   const regressions = rows.filter((r) => r.crossed.length > 0).map((r) => r.name);
   return {
     comparable: true,
+    load: { base: medianLoad(base), candidate: medianLoad(candidate) },
     passed: regressions.length === 0 && missing.length === 0 && invalidPairs.length === 0,
     reasons: [],
     rows,
@@ -374,6 +380,12 @@ export function compareReports(base, candidate) {
     regressions,
     invalidPairs,
   };
+}
+
+/** The median 1-minute load the runner saw at the start of each pair, if it recorded one. */
+function medianLoad(report) {
+  const loads = report.pairs.map((p) => p.load?.[0]).filter(finite);
+  return summarise(loads).p50;
 }
 
 /** The comparison as plain text, one row per series. */
@@ -400,6 +412,11 @@ export function formatComparison(result) {
   }
   for (const name of result.missing ?? []) lines.push(`${name.padEnd(34)} MISSING from the candidate`);
   for (const p of result.invalidPairs) lines.push(`pair ${p.pair} INVALID: ${p.problems.join('; ')}`);
+  if (result.load && (result.load.base !== null || result.load.candidate !== null)) {
+    lines.push(
+      `machine load (median 1-min average at each pair's start): base ${result.load.base ?? '—'}, candidate ${result.load.candidate ?? '—'}`,
+    );
+  }
   return `${lines.join('\n')}\n`;
 }
 

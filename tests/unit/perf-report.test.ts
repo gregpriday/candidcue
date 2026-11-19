@@ -317,6 +317,17 @@ describe('the bundle interval', () => {
     }
     expect(compareReports(report(pairs(5)), report(slower)).regressions).toContain('launch.warm.bundle-evaluate');
   });
+
+  it('holds the bundle to its own allowance, tighter than the launch family', () => {
+    // 18 ms → 50 ms: inside launch's 18 × 1.2 + 40 = 61.6, past bundle's 18 × 1.2 + 20 = 41.6.
+    const slower = pairs(5);
+    for (const p of slower) {
+      const warm = p.launches.warm;
+      if (warm === null) throw new Error('fixture');
+      p.launches.warm = { ...warm, bundleEvaluateMs: 50 };
+    }
+    expect(compareReports(report(pairs(5)), report(slower)).regressions).toContain('launch.warm.bundle-evaluate');
+  });
 });
 
 describe('verdicts the first tests did not pin down', () => {
@@ -399,5 +410,14 @@ describe('the comparison CLI', () => {
     expect(run(report(pairs(3)), report([...pairs(3), broken]))).toBe(1);
     expect(run(report(pairs(3)), report(pairs(3), { scenario: { id: 'other', fixtureSha256: 'abc' } }))).toBe(2);
     expect(run(report(pairs(3)), { pairs: null })).toBe(2);
+  });
+});
+
+describe('machine load', () => {
+  it('is shown beside the verdict when the recordings carry it', () => {
+    const loaded = pairs(3).map((p, i) => ({ ...p, load: [2 + i, 3] as [number, number] }));
+    const result = compareReports(report(pairs(3)), report(loaded));
+    expect(result.load).toEqual({ base: null, candidate: 3 });
+    expect(formatComparison(result)).toContain('candidate 3');
   });
 });

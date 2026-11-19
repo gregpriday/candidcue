@@ -56,6 +56,8 @@ export interface Pair {
     deltas: number[];
   }[];
   env: PerfRecord | null;
+  /** The runner's 1-minute load average before and after the pair. */
+  load?: [number, number];
 }
 
 export interface Threshold {
@@ -82,6 +84,8 @@ export interface ComparisonRow {
 
 export interface Comparison {
   comparable: boolean;
+  /** Median 1-minute load at each pair's start, where the recordings carry it. */
+  load?: { base: number | null; candidate: number | null };
   /** Comparable, nothing regressed, nothing missing, no invalid candidate pair. */
   passed: boolean;
   reasons: string[];
