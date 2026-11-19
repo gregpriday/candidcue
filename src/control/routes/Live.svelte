@@ -146,7 +146,7 @@ import { onShortcut } from '../lib/shortcuts';
    * default.
    *
    * The picker only appears when the INPUT is what failed or a fallback input
-   * is in use (`inputDeviceLost` or `usingFallbackInput`, not the broader
+   * was chosen for it (`inputDeviceLost` or `usingFallbackInput`, not the broader
    * `micState === 'disconnected'`, which a refused speech model also
    * produces) and there is a pipeline to switch on. Offering a microphone
    * swap as the cure for a missing speech model, or in a manual take with no
@@ -157,8 +157,9 @@ import { onShortcut } from '../lib/shortcuts';
   let micSwitching = $state(false);
   /**
    * Offer a swap when there is a voice pipeline to swap on and the INPUT is
-   * what failed, or capture is running on a fallback input. Read by the take-controls drawer, never only by the console
-   * arm: that arm renders only with no take active, which made the condition
+   * what failed, or a fallback input was chosen for it. Read by the
+   * take-controls drawer, never only by the console arm: that arm renders only
+   * with no take active, which made the condition
    * unsatisfiable. See the take-controls block further down.
    */
   const micRecoveryOffered = $derived(
@@ -465,16 +466,17 @@ import { onShortcut } from '../lib/shortcuts';
    * whether or not it does.
    *
    * ---------------------------------------------------------------------------
-   * IT TAKES A DESTINATION — AND NEVER CLEARS THE SESSION UNDER THE COVER
+   * IT TAKES A DESTINATION — AND NEVER CLEARS A TAKE'S SUMMARY UNDER THE COVER
    * ---------------------------------------------------------------------------
    * Navigating under the cover is fine; clearing under it is the defect. The
    * store's `summary` is what the end-of-session report opens on, and a
    * `clearSession()` here once destroyed every summary one step before the
    * screen it would have appeared on was replaced, so nobody ever saw one. The
    * summary lives in an app-level host (`SessionSummary.svelte`) which
-   * outlives this route, and the only thing that clears a take's session is
-   * somebody dismissing it. A practice has no summary, so its session is
-   * cleared here.
+   * outlives this route, and on this path the only thing that clears a take's
+   * session is somebody dismissing it. A practice has no summary, so its
+   * session is cleared here. (App's navigation guard, a different way out of a
+   * live take, stops and clears under its own cover.)
    *
    * The cover still cannot be rendered under — App's `.present-cover` sits at
    * z-index 9999, deliberately above the dialog host — which is why the

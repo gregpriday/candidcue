@@ -11,9 +11,9 @@
  *
  * So each step reports itself, with elapsed milliseconds, to a Rust command
  * that prints through `tracing` and appends to `logs/client-trace.log`. The
- * trace names the step, the state and the timing, and nothing else: no
- * transcript text. Lines are composed from fixed step names, small scalars
- * and error messages, and no caller passes recognised words. An error message
+ * trace names the step, the state and the timing, plus an error message when
+ * a step fails: no transcript text. Lines are composed from fixed step names,
+ * small scalars and error messages, and no caller passes recognised words. An error message
  * is free text, though, so keep recogniser output out of the errors this
  * reports.
  *

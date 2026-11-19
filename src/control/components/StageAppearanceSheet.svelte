@@ -131,8 +131,8 @@
     readerTheme?: ReaderTheme;
     /**
      * A rig profile (a saved rig, or the automatic one) decided this take's
-     * appearance, so the panel reports it rather than setting it, and points
-     * at the wizard.
+     * appearance. The panel reports what the rig set and points at the
+     * wizard; an automatic profile still offers the Size balance slider.
      */
     rigResolved: boolean;
     /**
