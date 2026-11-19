@@ -429,10 +429,16 @@ export interface StartTakeOptions {
    * IS what somebody is practising. A rehearsal with the following switched off
    * would be a different feature that rehearses nothing.
    *
-   * Three things follow from the flag, and they are the whole of it:
+   * Four things follow from the flag, and they are the whole of it:
    *
-   *   1. The window. A practice is always `'reader'`, and the mode is FORCED
-   *      rather than resolved — see below.
+   *   1. The window. A practice OPENS as `'reader'`, and the mode is FORCED
+   *      rather than resolved — see below. It is where a practice starts, not
+   *      where it must stay: the take's own "Switch to teleprompter" moves a
+   *      running practice onto the glass at the size and line breaks the
+   *      recording will use, and it is still a practice there. Opening on the
+   *      display instead was considered and left alone (#241): rehearsing at a
+   *      desk is the common case, and the one-step switch already covers the
+   *      rest without a second launch row for it.
    *   2. The document. The stage renders it as a rehearsal rather than as a
    *      performance projection, so a reference table stays a table instead of
    *      becoming the words REFER TO TABLE. `performance-view.ts` has said this
@@ -440,13 +446,21 @@ export interface StartTakeOptions {
    *   3. The ending. Nothing is reported: `stopSession` produces no summary, so
    *      the practice ends by putting the editor back rather than by opening a
    *      card about a performance nobody gave.
+   *   4. The resume point. A practice's session row is an ordinary voice
+   *      session, but it is closed WITHOUT an ending (#241), so "From last
+   *      ending" — "Picks up where the last take stopped" — goes on meaning the
+   *      last recording. It used to pick a rehearsal up as if it were one:
+   *      record part two, practise part three, come back to record, and the
+   *      resume point was wherever the rehearsal had stopped. A rehearsal is
+   *      not where the footage left off, so it does not count as an ending.
    *
-   * The SESSION ROW is deliberately untouched — an ordinary voice session, in
-   * the ordinary place. A rehearsal is a real reading of the script and its
-   * ending is a real place in it, so "From last ending" on the Present menu
-   * should pick a practice up exactly as it picks a take up. The flag lives in
-   * the control-side session store and nowhere else, which is also why it needs
-   * no migration.
+   * The flag lives in the control-side session store and nowhere else, which
+   * is also why it needs no migration: the row says what it always said, minus
+   * the one number a rehearsal must not supply.
+   *
+   * A practice CAN carry a `part` (#241). It bounds nothing, as for a take, and
+   * since nothing is reported at the end it is only ever a label: which part is
+   * being rehearsed, on the glass, and when its end has been reached.
    */
   practice?: boolean;
   /**
@@ -700,18 +714,15 @@ export async function startTake(
      * runs unbounded, which is what every take did before §parts.
      */
     /*
-     * A PRACTICE IS NEVER BOUNDED TO A PART, and that is enforced here rather
-     * than only at the call site. `stopSession` produces no summary for a
-     * rehearsal (§practice), so "you reached the end of part three" and "record
-     * part four next" would both be claims about a reading the app has already
-     * decided not to report on — and the Live readout would name a part whose
-     * completion nothing would ever act on.
-     *
-     * The Editor's Present menu already refuses the combination. This is the
-     * invariant, in the one place every caller of the exported `startTake` goes
-     * through.
+     * A practice resolves its part exactly as a take does (#241). It used to
+     * be stripped here, on the grounds that a rehearsal reports nothing and so
+     * "you reached the end of part three" would be a claim nothing acts on. The
+     * claim turned out to be the useful half: the person rehearsing the part
+     * about to be filmed wants the glass to say which part it is and when its
+     * end has gone by. The summary card and its "record the next part" offer
+     * stay withheld, because `stopSession` withholds the whole summary.
      */
-    const compiledParts = options.practice ? [] : compiled.parts;
+    const compiledParts = compiled.parts;
     const takePart = options.part
       ? reduceToTakePart(
           compiledParts.find((p) => p.id === options.part!.id) ?? null,
@@ -735,9 +746,11 @@ export async function startTake(
      * that gets noticed only in the footage. This happens when a break is renamed
      * or deleted while the launch menu or the take summary is still open.
      */
-    if (options.part && takePart === null && !options.practice) {
+    if (options.part && takePart === null) {
       showToast(
-        'That part is no longer in the script, so the take will run to the end.',
+        options.practice
+          ? 'That part is no longer in the script, so the practice runs without one.'
+          : 'That part is no longer in the script, so the take will run to the end.',
         'info',
       );
     }

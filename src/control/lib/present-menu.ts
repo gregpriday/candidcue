@@ -8,7 +8,7 @@
  * window"), and has one line to say what will happen to the window.
  */
 import type { ScriptPart } from '../../shared/contracts';
-import { NOUNS } from '../../shared/take-vocabulary';
+import { NOUNS, PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import type { PresentationMode } from '../services/settings-types';
 import type { TakePartRequest } from './start-take';
 
@@ -199,6 +199,55 @@ export function startMenuItems(
     });
   }
 
+  return items;
+}
+
+/** What the practice rows need to know about the caret. */
+export interface PracticeMenuInput {
+  /** Snapped caret position, or null when the editor has no caret. */
+  hereTokenIndex: number | null;
+  /** Where the caret position is: a quoted opening phrase or a heading. */
+  hereLabel: string | null;
+  /** The part the caret sits in, or null on an undivided script. */
+  herePart: ScriptPart | null;
+}
+
+/**
+ * The rehearsal rows: the whole script, and a single section (#241).
+ *
+ * A rehearsal is most useful for the section about to be filmed, so "Practise
+ * from here" is the take's "From here" told it is a rehearsal: it opens at the
+ * caret, and on a divided script it carries the part the caret is in, so the
+ * stage can say which part is being practised. That is also how ANY part is
+ * reached — a caret on a heading (an outline click) or on a part's first
+ * words — without a second list of part rows doubling the menu.
+ *
+ * A part bounds nothing here either: reading carries on past its end, and a
+ * practice reports nothing when it stops, so the part is a label and an "end
+ * reached" mark on the glass and nothing more.
+ */
+export function practiceMenuItems(
+  input: PracticeMenuInput,
+  practise: (tokenIndex?: number, part?: TakePartRequest) => void,
+): PresentMenuItem[] {
+  const items: PresentMenuItem[] = [
+    {
+      label: PRACTICE_LABEL,
+      description: 'A rehearsal in a window · nothing is reported',
+      group: {},
+      onselect: () => practise(),
+    },
+  ];
+  // At the beginning of an undivided script it would be the row above again.
+  if (input.hereTokenIndex !== null && (input.hereTokenIndex > 0 || input.herePart !== null)) {
+    const token = input.hereTokenIndex;
+    const part = input.herePart;
+    items.push({
+      label: `${PRACTICE_LABEL} from here`,
+      description: locate(input.hereLabel ?? 'From the cursor', part),
+      onselect: () => practise(token, part === null ? undefined : { id: part.id }),
+    });
+  }
   return items;
 }
 

@@ -1916,3 +1916,55 @@ fn update_commands_refuse_when_they_promised_to() {
         .expect_err("no check has found anything to install");
     assert_eq!(refused["code"], json!("UPDATE_NOT_AVAILABLE"), "{refused}");
 }
+
+/// #241 — `withEnding` reaches `list_sessions` through the real argument
+/// mapping, and the filter it switches on is applied: a practice closes its
+/// row without an ending (or, from an older build, with zero), and "From last
+/// ending" lists only the rows that recorded one. Asserted on the returned ids,
+/// so a command that dropped the argument or hard-coded `false` fails here.
+#[test]
+fn list_sessions_with_ending_returns_only_rows_that_recorded_one() {
+    let h = harness();
+    let created = h.expect_ok(
+        "create_script",
+        json!({ "input": { "title": "Take", "source": "# Take\n\nHello there.\n" } }),
+    );
+    let script_id = created["id"].as_str().unwrap().to_string();
+    let input = json!({ "input": {
+        "scriptId": script_id,
+        "scriptSourceHash": "sha256:take",
+        "mode": "voice",
+        "startTokenIndex": 0,
+    }});
+
+    let close = |summary: Value| -> String {
+        let row = h.expect_ok("start_session", input.clone());
+        let id = row["id"].as_str().unwrap().to_string();
+        h.expect_ok("end_session", json!({ "sessionId": id, "summary": summary }));
+        id
+    };
+    let take = close(json!({ "endTokenIndex": 1 }));
+    let practice = close(json!({ "retakeCount": 0 }));
+    let zero = close(json!({ "endTokenIndex": 0 }));
+
+    let ids = |rows: Value| -> Vec<String> {
+        rows.as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let all = ids(h.expect_ok("list_sessions", json!({ "scriptId": script_id, "limit": 20 })));
+    for id in [&take, &practice, &zero] {
+        assert!(all.contains(id), "without the argument every row is listed");
+    }
+
+    for scope in [json!(script_id), Value::Null] {
+        let filtered = ids(h.expect_ok(
+            "list_sessions",
+            json!({ "scriptId": scope, "limit": 20, "withEnding": true }),
+        ));
+        assert_eq!(filtered, vec![take.clone()], "only the row with an ending ({scope})");
+    }
+}
