@@ -358,7 +358,16 @@ describe('error copy never offers a session mode that is not offered', () => {
     // The class is \s, the range U+2010–U+2015, and a trailing ASCII hyphen.
     fixed: [/\bfixed[\s‐-―-]+speed\b/iu],
   };
-  const bansFor = (mode: string): RegExp[] => SPELLINGS[mode] ?? [];
+  // A glossary label is banned only as the name of a MODE ("Roll at pace
+  // mode"); as a description of auto-scroll it is true.
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const bansFor = (mode: string): RegExp[] => [
+    ...(SPELLINGS[mode] ?? []),
+    new RegExp(
+      `\\b${escape(SESSION_MODE_LABELS[mode as keyof typeof SESSION_MODE_LABELS])}\\s+(?:mode|session)s?\\b`,
+      'i',
+    ),
+  ];
   const unoffered = Object.keys(SESSION_MODE_LABELS).filter(
     (mode) => !(OFFERED_SESSION_MODES as readonly string[]).includes(mode),
   );
@@ -372,7 +381,14 @@ describe('error copy never offers a session mode that is not offered', () => {
     ]) {
       expect(bansFor('manual').some((ban) => ban.test(spelling)), spelling).toBe(true);
     }
-    for (const spelling of ['fixed-speed', 'fixed speed', 'Fixed Speed', 'fixed‑speed', 'fixed–speed']) {
+    for (const spelling of [
+      'fixed-speed',
+      'fixed speed',
+      'Fixed Speed',
+      'fixed‑speed',
+      'fixed–speed',
+      'Or switch to Roll at pace mode.',
+    ]) {
       expect(bansFor('fixed').some((ban) => ban.test(spelling)), spelling).toBe(true);
     }
     // Auto-scroll IS a fixed pace, "manually" is a different word, and a
@@ -488,6 +504,11 @@ describe('recogniser copy stays true on the surface with no take', () => {
       // The scoped clause is where that advice goes, and the copy opens with
       // the fault rather than with a condition.
       expect(inTake.trim(), `${code} offers no fallback in a take`).not.toBe('');
+      // One sentence: a second one would sit outside the scope on every
+      // surface that shows the whole copy.
+      expect(inTake.trim(), `${code}'s take clause runs to a second sentence`).not.toMatch(
+        /[.!?]\s+\S/,
+      );
       expect(copyForErrorCode(code).startsWith(fault), `${code} opens with a condition`).toBe(true);
     }
   });
@@ -712,8 +733,9 @@ describe('a refused model address points at the network, not the release', () =>
   it('advises on the network and never blames the release', () => {
     const copy = copyForErrorCode('STT_MODEL_URL_BLOCKED');
     expect(hasErrorCopy('STT_MODEL_URL_BLOCKED')).toBe(true);
-    // The fault is the network's answer, not the build: the copy must not send
-    // the reader to wait for a new release.
+    // The fault is the network's answer, not the build: the copy points at the
+    // network and does not send the reader to wait for a new release.
+    expect(copy).toMatch(/\bnetwork\b/i);
     expect(copy).not.toMatch(/release/i);
     expect(copy).not.toMatch(CODE_TOKEN);
     expect(describeError({ code: 'STT_MODEL_URL_BLOCKED', userMessage: 'x' })).toBe(copy);

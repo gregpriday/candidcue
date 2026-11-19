@@ -733,7 +733,7 @@ describe('claims the inventory bans', () => {
     // sentence that negates it does not count.
     {
       pattern:
-        /\b(?:updates? (?:are |is )?(?:installed|install(?:s)?) (?:themselves |itself )?automatically|install(?:s|ed)? (?:updates? )?automatically|automatically install(?:s|ed)? (?:updates?|new versions?)|auto-?install(?:s|ed)? (?:updates?|new versions?)|updates? itself automatically|automatic updates?\b[^.]*\bwithout (?:asking|you))/i,
+        /\b(?:updates? (?:are |is )?(?:installed|install(?:s)?) (?:themselves |itself )?automatically|install(?:s|ed)? (?:updates? )?automatically|automatically install(?:s|ed)? (?:updates?|new versions?)|auto-?install(?:s|ed)? (?:updates?|new versions?)|updates? itself automatically|automatic updates?\b(?! checks?)[^.]*\bwithout (?:asking|you))/i,
       bullet: '"Updates install automatically."',
       unlessNegated: true,
     },
@@ -831,6 +831,7 @@ describe('claims the inventory bans', () => {
       "Speaking Glass doesn't install updates automatically.",
       'Speaking Glass doesn’t install updates automatically.',
       'A speech model auto-installs after you approve its download.',
+      'Automatic update checks run without asking first.',
     ]) {
       const tripped = BANNED.filter((rule) => makes(honest, rule)).map((rule) => rule.bullet);
       expect(tripped, `"${honest}" is accurate`).toEqual([]);

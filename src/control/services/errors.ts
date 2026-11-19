@@ -206,9 +206,12 @@ export function withoutTakeAdvice(copy: string): string {
   const clauses = (Object.values(RECOGNISER_COPY) as RecogniserCopy[])
     .map((parts) => scopeToTake(parts.inTake))
     .sort((a, b) => b.length - a.length);
+  // Mark where each clause was, then close up only those gaps: the rest of the
+  // copy keeps its own spacing.
+  const GAP = '\u0000';
   let shown = copy;
-  for (const clause of clauses) shown = shown.split(clause).join(' ');
-  return shown === copy ? copy : shown.replace(/\s+/g, ' ').trim();
+  for (const clause of clauses) shown = shown.split(clause).join(GAP);
+  return shown === copy ? copy : shown.replace(/\s*\u0000\s*/g, ' ').trim();
 }
 
 /** The codes whose copy is built from parts, and so reaches surfaces with no take. */

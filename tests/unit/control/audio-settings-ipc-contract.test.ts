@@ -222,7 +222,9 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
     // here rather than through the module's composer, so a composer that
     // inverts or negates the advice fails too. Either order reads: "lower it
     // if a fan…" and "if a fan…, lower it".
-    const clauses = VAD_SENSITIVITY_COPY.description.toLowerCase().split(/[;.]/);
+    const clauses = VAD_SENSITIVITY_COPY.description
+      .toLowerCase()
+      .split(/[;.]|,\s*(?:and|but)\b/);
     for (const advice of [falseTriggers, missedSpeech]) {
       const clause = clauses.find((text) => text.includes(advice.symptom.toLowerCase()));
       expect(clause, `the description does not give the advice for "${advice.symptom}"`).toBeDefined();
@@ -233,7 +235,7 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
       expect(
         clause?.replace(advice.symptom.toLowerCase(), ''),
         'the advice is negated',
-      ).not.toMatch(/\b(?:not|never|don't|avoid)\b/);
+      ).not.toMatch(/\b(?:not|never|avoid)\b|n['’]t\b/);
     }
   });
 

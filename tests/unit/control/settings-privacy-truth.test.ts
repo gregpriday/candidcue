@@ -239,6 +239,18 @@ describe('#180 the privacy section describes what the app actually does', () => 
       /\bdownload[^.]*\b(?:speech|model|language)|\b(?:speech|model|language)\b[^.]*\bdownload/i,
     );
     expect(privacySection, 'the update check is the other').toMatch(HOST);
+    // A sentence that narrows the network to some uses has to name both.
+    const narrowing = privacySection
+      .split(UPDATE_HOST)
+      .join('UPDATE_HOST')
+      .split(/[.;<>]/)
+      .filter(
+        (sentence) =>
+          /\b(?:only|solely|just)\b/i.test(sentence) &&
+          /\b(?:network|internet|online)\b/i.test(sentence) &&
+          !(/\bdownload/i.test(sentence) && /\bupdate/i.test(sentence)),
+      );
+    expect(narrowing, 'a claim that only some of it uses the network').toEqual([]);
 
   });
 
@@ -255,11 +267,12 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // However it is spelled — "the mic opens solely during a take or test" —
     // unless the same sentence names the meter as the exception.
     const exclusive = flatSource
-      .split(/[.<>]/)
+      .split(/[.;<>]/)
       .filter(
-        (sentence) =>
-          /\b(?:mic|microphone)\b[^.]*\b(?:only|solely|just)\b[^.]*\b(?:take|test)\b/i.test(sentence) &&
-          !/\bmeter\b/i.test(sentence),
+        (clause) =>
+          /\b(?:mic|microphone)\b[^.]*\b(?:only|solely|just)\b[^.]*\b(?:take|test)\b/i.test(clause) &&
+          // Waived only where the clause itself lists the meter as an occasion.
+          !/\b(?:except|unless|while|and|or|also)\b[^.;]*\bmeter\b/i.test(clause),
       );
     expect(exclusive, 'an exclusive claim about the microphone').toEqual([]);
     expect(privacySection, 'the privacy block must name the meter').toMatch(/\bmeter\b/i);
@@ -290,7 +303,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
     expect(wholePane, 'no Select may return to this pane').not.toMatch(/<Select\b/);
     // Nor a hand-rolled control the component checks would not see.
     expect(wholePane, 'no raw form control in this pane').not.toMatch(
-      /<(?:input|select|textarea)\b|role="(?:switch|checkbox|combobox|slider)"/i,
+      /<(?:input|select|textarea)\b|role=["'](?:switch|checkbox|combobox|slider)["']/i,
     );
     const toggles = [...wholePane.matchAll(/<Toggle\b[\s\S]*?\/>/g)].map((match) => match[0]);
     expect(toggles, 'the update switch is the only toggle in this pane').toHaveLength(1);
@@ -333,9 +346,9 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // stop making the old one.
     const speech = pane('speech');
     expect(speech, 'the Speech pane could not be located').not.toBe('');
-    expect(speech).toMatch(/\b(?:(?:neither|no)\b[^.]*\bwords\b[^.]*\b(?:saved?|stored?|kept)|words\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i);
+    expect(speech).toMatch(/\b(?:(?:neither|no)\b[^.]*\bwords\b[^.]*\b(?:saved?|stored?|kept)|(?:not|never|n['’]t) (?:save|store|keep)s?\b[^.]*\bwords\b|words\b[^.]*\b(?:not|never|neither|nor)\b(?! always\b| all\b)[^.]*\b(?:saved?|stored?|kept))\b/i);
     expect(speech, 'and audio is still never saved').toMatch(
-      /\b(?:(?:neither|no)\b[^.]*\baudio\b[^.]*\b(?:saved?|stored?|kept)|audio\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i,
+      /\b(?:(?:neither|no)\b[^.]*\baudio\b[^.]*\b(?:saved?|stored?|kept)|(?:not|never|n['’]t) (?:save|store|keep)s?\b[^.]*\baudio\b|audio\b[^.]*\b(?:not|never|neither|nor)\b(?! always\b| all\b)[^.]*\b(?:saved?|stored?|kept))\b/i,
     );
   });
 
@@ -356,9 +369,9 @@ describe('#180 the privacy section describes what the app actually does', () => 
 
     // The claims, not one wording of them: each must be a negation in the
     // same sentence as the thing it is about.
-    expect(privacySection, 'audio is never saved').toMatch(/\b(?:(?:neither|no)\b[^.]*\baudio\b[^.]*\b(?:saved?|stored?|kept)|audio\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i);
+    expect(privacySection, 'audio is never saved').toMatch(/\b(?:(?:neither|no)\b[^.]*\baudio\b[^.]*\b(?:saved?|stored?|kept)|(?:not|never|n['’]t) (?:save|store|keep)s?\b[^.]*\baudio\b|audio\b[^.]*\b(?:not|never|neither|nor)\b(?! always\b| all\b)[^.]*\b(?:saved?|stored?|kept))\b/i);
     expect(privacySection, 'nor are the recognised words').toMatch(
-      /\b(?:(?:neither|no)\b[^.]*\bwords\b[^.]*\b(?:saved?|stored?|kept)|words\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i,
+      /\b(?:(?:neither|no)\b[^.]*\bwords\b[^.]*\b(?:saved?|stored?|kept)|(?:not|never|n['’]t) (?:save|store|keep)s?\b[^.]*\bwords\b|words\b[^.]*\b(?:not|never|neither|nor)\b(?! always\b| all\b)[^.]*\b(?:saved?|stored?|kept))\b/i,
     );
   });
 
@@ -383,7 +396,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
     expect(updateBlock, 'the Updates block must be found, or the ban below is vacuous').toMatch(
       /<Toggle\b/,
     );
-    expect(updateBlock, 'the Updates block must offer no button').not.toMatch(/<Button\b/);
+    expect(updateBlock, 'the Updates block must offer no button').not.toMatch(/<button\b/i);
 
     /*
      * The rendered node must actually consume the policy sentence. Asserting
@@ -461,7 +474,7 @@ describe('the update policy is stated truthfully', () => {
     expect(sentence, `the line must say every ${hours} hours`).toMatch(interval);
     // The switch's own caption, if it states a schedule, states this one.
     const toggle = /<Toggle\b[\s\S]*?\/>/.exec(privacySection)?.[0] ?? '';
-    const caption = /description="([^"]*)"/.exec(toggle)?.[1] ?? '';
+    const caption = /description=(?:"([^"]*)"|'([^']*)')/.exec(toggle)?.slice(1).join('') ?? '';
     if (/\bevery\b/i.test(caption)) {
       expect(caption, `the switch's caption must say every ${hours} hours`).toMatch(interval);
     }
@@ -501,13 +514,16 @@ describe('the update policy is stated truthfully', () => {
     expect(off, 'the switch position must change what the line says').not.toBe(
       describeUpdatePolicy('9.9.9-test', true),
     );
+    expect(off, 'and say the automatic checks are off').toMatch(
+      /\b(?:off|disabled|turned off)\b|\bonly when you\b/i,
+    );
     expect(off, 'the remaining contact is the host').toMatch(HOST);
     expect(off, 'by request').toContain(COMMANDS['help.check-for-updates'].label);
     expect(off, 'and it must not still describe a schedule').not.toMatch(
       /\bevery\b[^.]*\b(?:minutes?|hours?|days?)\b/i,
     );
     expect(off, 'nor a check of its own at launch').not.toMatch(
-      /\b(?:after|when|as) (?:it|Speaking Glass) (?:opens|starts|launches)\b|\bat (?:startup|launch)\b/i,
+      /(?<!\b(?:not|never)\b[^.]{0,20}|n['’]t\b[^.]{0,20})(?:\b(?:after|when|as) (?:it|Speaking Glass) (?:opens|starts|launches)\b|\bat (?:startup|launch)\b)/i,
     );
   });
 
