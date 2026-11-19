@@ -36,14 +36,11 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
  * provider to be down, so nothing here asks the presenter to go and fix
  * something on a website.
  *
- * Nor does anything here ask them to reinstall Speaking Glass any more, which is
- * what `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` used to say. The
- * weights were in the bundle when that copy was written; since §152 the stock
- * installer ships none and the model is downloaded into the app-data
- * directory instead. A reinstall leaves those bytes exactly as they were, so
- * it was an instruction that could not work — the same defect as naming a
- * greyed-out menu item, one step further along. The model is a DOWNLOAD, and
- * the download lives in Settings → Speech.
+ * Nor does anything here ask them to reinstall Speaking Glass. The stock
+ * installer ships no model; it is downloaded into the app-data directory, and
+ * a reinstall leaves those bytes exactly as they were, so it is an
+ * instruction that cannot work. The model is a DOWNLOAD, and the download
+ * lives in Settings → Speech.
  *
  * `STT_MODEL_NOT_INSTALLED` is the newest of the five and the most likely to
  * be read: a first run that skips Welcome and starts a take reaches it. It is
@@ -55,11 +52,10 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
  * usability check and arrive here too, so the copy says the model is not
  * installed rather than guessing at a history it cannot see.
  *
- * Each one also names the fallback that EXISTS. These used to end "Manual and
- * fixed-speed modes still work", which they no longer do: Settings shows both
- * as unavailable in this release, so that sentence sent a presenter whose
- * recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
- * the real answer.
+ * Each one also names the fallback that EXISTS. Settings offers neither a
+ * manual nor a fixed-speed mode, so naming either would send a presenter
+ * whose recogniser had just died hunting for a control that is not there.
+ * Auto-scroll is the real answer.
  *
  * The rescue is scoped — "In a take, …" — because these five strings have
  * THREE surfaces, and only one of them has a transport to press. In a take
