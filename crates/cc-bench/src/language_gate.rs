@@ -697,8 +697,8 @@ fn provenance_problems(
                 None => conditions = Some((run, record.conditions())),
                 Some((first_run, c)) if *c != record.conditions() => note(format!(
                     "{tier}: {first_run} and {run} were captured under different \
-                     conditions (language, model, weights, recogniser settings, \
-                     pace or build), so the corpus is not one measurement"
+                     conditions (language, model, weights, recogniser settings \
+                     or build), so the corpus is not one measurement"
                 )),
                 Some(_) => {}
             }
@@ -736,12 +736,6 @@ fn check_record(
         note(format!(
             "the recogniser that captured the corpus was not {}'s weights: {why}",
             record.model
-        ));
-    }
-    if record.pace != 1.0 {
-        note(format!(
-            "the corpus was captured at {}x pace; the bar was measured in real time",
-            record.pace
         ));
     }
     if record.revision.commit.is_none() {
@@ -1721,12 +1715,18 @@ mod tests {
         assert!(problems.contains("no recorded revision"), "{problems}");
     }
 
+    /// Pace is recorded but not judged: every metric is a function of the
+    /// audio clock, so a faster pass scores the same (bench/README.md).
     #[test]
-    fn a_corpus_not_captured_in_real_time_is_refused() {
+    fn capture_pace_is_recorded_but_not_judged() {
         let m = english_baseline_metrics();
         let (mut b, mut c) = saved(&english_corpus(), &m, &m);
-        edit_records(&mut b, &mut c, |_, r| r.pace = 4.0);
-        assert!(!evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
+        edit_records(&mut b, &mut c, |run, r| {
+            if run == "names__exact__xai" {
+                r.pace = 4.0;
+            }
+        });
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
     }
 
     /// A row is judged only from the tier its threshold names, and only once.

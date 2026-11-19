@@ -105,7 +105,8 @@ pub struct CaptureRecord {
     /// Every resolved recogniser knob, after the model's tuning and any
     /// command-line overrides — the config the recogniser was loaded with.
     pub recogniser: cc_stt::LocalSttConfig,
-    /// Audio pacing: 1.0 is real time.
+    /// Audio pacing: 1.0 is real time. Recorded, not judged — no metric
+    /// depends on it — but a fixture's latencies are only honest at 1.0.
     pub pace: f64,
     /// The cc-bench build that captured.
     pub revision: Revision,
@@ -115,13 +116,15 @@ pub struct CaptureRecord {
 
 impl CaptureRecord {
     /// The conditions with what legitimately differs between two runs of one
-    /// capture removed: the run's own name and fixture digest, and the model
-    /// directory, which is a path on one machine.
+    /// capture removed: the run's own name and fixture digest, the model
+    /// directory, which is a path on one machine, and the pace, which no
+    /// metric reads (every one is a function of the audio clock).
     pub fn conditions(&self) -> CaptureRecord {
         let mut c = self.clone();
         c.run = String::new();
         c.fixture_sha256 = String::new();
         c.recogniser.model_dir = Default::default();
+        c.pace = 1.0;
         c
     }
 }

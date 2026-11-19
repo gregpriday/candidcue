@@ -53,6 +53,18 @@ skips a run already present either in that corpus or in the shared completed-run
 directory. Pointing at a fresh corpus therefore reuses the same paid audio; it
 does not render it again.
 
+Every captured run gets a `capture.json` beside its `events.jsonl`, written
+last: the language the corpus is declared to be spoken in (`--language`, the
+model's default if omitted), the catalogue model whose tuning was applied, the
+SHA-256 of every weight file actually loaded from `--model`, every resolved
+recogniser setting, the pace, the cc-bench commit (and whether its crates were
+dirty), and a digest of the run's four fixture files. Tier B and Tier C copy
+each run's record into the saved result's `provenance`, beside the build that
+replayed it and — for Tier C — every layout exactly as rendered, focus lead
+included. A record whose digest no longer matches its run's files (copied from
+another corpus, or left behind when the events changed) stops the replay. Runs
+captured before records existed have none, and their results load but say so.
+
 Capture runs at real-time pace by default. Scoring does not depend on it — every
 Tier-B metric is a function of the audio clock and the text, and `wall_ms` is
 recorded but never read — but the fixtures are more honest at 1.0x, and the
@@ -713,9 +725,10 @@ families off the run names and refuses a corpus that is missing one.
 SPEAKING_GLASS_ALLOW_TTS_GENERATION=1 \
   cargo run --release -p cc-bench -- synth-audio --runs ../bench/runs-fr
 
-# 2. Stream it through the real recogniser at real-time pace.
+# 2. Stream it through the real recogniser at real-time pace, declaring the
+#    language the corpus is spoken in (recorded in every run's capture.json).
 cargo run --release -p cc-bench -- capture-local \
-  --runs ../bench/runs-fr --model ../src-tauri/models/<model>
+  --runs ../bench/runs-fr --model ../src-tauri/models/<model> --language fr
 ```
 
 Each language also needs **its own `blank_penalty` sweep**. The shipping 3.0 was
@@ -741,14 +754,20 @@ re-anchored with the proportional headroom the original bar chose (3.34% above
 English, 1.69% below); the other six anchors barely moved and their limits did
 not change.
 
-What the command actually checks: both results carry a scoring table, those
-tables cover the same 18 scoring runs (each once) across all eight families,
-both tiers were replayed under the same alignment config, the Tier C evidence is
-the lone `60hz` layout, every gated metric is present and a possible
-measurement, and each clears its limit. A result saved before scoring tables
-existed is refused; re-run the tier. What it does
-**not** check is in "Known gaps" below — most importantly, it takes the operator's
-word for which language produced the results.
+What the command actually checks: both results carry provenance and a scoring
+table, those tables cover the same 18 scoring runs (each once) across all eight
+families, both tiers were replayed under the same alignment config by the same
+cc-bench build, the Tier C evidence was rendered at the as-shipped rig alone (the
+`60hz` preset with `--focus-lead 0`, compared field by field), every gated
+metric is present and a possible measurement, and each clears its limit. It also
+holds the claim — `--label` — to what the results recorded: every scoring
+fixture has a capture record, the same one in both tiers; all of them were
+captured under one set of conditions; their language and the engine's compile
+language are the claimed one; the model transcribes it; and the weights it
+loaded are the bytes `src-tauri/models/catalogue.json` lists for that model.
+English results labelled `fr` fail. A result saved before scoring tables or
+provenance existed is refused; re-capture and re-run the tier. What it does
+**not** check is in "Known gaps" below.
 
 <!-- BEGIN LANGUAGE GATE TABLE (generated — see language_gate::render_bar_markdown) -->
 | Tier | Metric | English | Ship bar |
@@ -777,8 +796,8 @@ and inversely related to following past `blank_penalty` 3.0), and `live.freeze`
 
 ```bash
 # Tier C must be the as-shipped layout, or it scores a corridor the product
-# does not have. The gate rejects any other layout SET; the focus-lead value
-# itself is not recoverable from the saved result (see Known gaps).
+# does not have. The result records the layout it rendered, focus lead
+# included, and the gate refuses anything but the shipped 60hz rig.
 cargo run --release -p cc-bench -- tier-b --runs ../bench/runs-fr --label fr --out /tmp/fr-b.json
 cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-fr --layouts 60hz --focus-lead 0 \
   --label fr --out /tmp/fr-c.json
@@ -799,16 +818,18 @@ and not in the product.
   splits on whitespace before it is consulted. French `12 500` (space or
   narrow no-break space) therefore cannot be expressed at all — it arrives as
   two atoms.
-- **The gate does not verify which language produced its inputs.** `--label` is
-  free text and neither result embeds a language, so English results can be
-  labelled `fr`. Closing this means serialising the language into Tier B and
-  Tier C results.
-- **`focus_lead_atoms` is not verifiable from a saved Tier C result.** The gate
-  refuses anything other than a lone `60hz` layout, which catches a whole-sweep
-  run, but `Layout` is not serialised — so a 60 Hz run made with a non-zero
-  focus lead would pass. That matters: focus lead moved
-  `outcome.readable_availability` from 71.2% to 75.8% (all 21 directories,
-  2026-07-30).
+- **The language a corpus was captured in is the operator's statement.**
+  `capture-local --language` is checked against what the model transcribes and
+  what the engine compiles, and recorded; nothing listens to the audio to
+  confirm it. Likewise the gate checks a result is consistent with the
+  provenance it carries, not that the file is authentic — a saved result edited
+  consistently, provenance and numbers together, still reads.
+- **The committed English corpus predates capture records.** `bench/runs-local`
+  was captured before `capture.json` existed, and stdout from that capture is
+  all that recorded its recogniser settings, so it is not given records after
+  the fact. Gating English means re-capturing it into a fresh directory from the
+  shared rendered audio; `runs-local`, `runs/` and `runs-inworld-new/` stay as
+  they are for comparisons.
 - **`compute_weight` measures word length in UTF-8 bytes**, so an accented word
   reads as longer than it is and can cross the `>= 8` threshold early. Changing
   it would move English weights, so it is deferred rather than silently altered.
