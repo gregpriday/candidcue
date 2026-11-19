@@ -443,10 +443,13 @@ export function compareReports(base, candidate) {
     .map((n) => (n in b ? `${n} (${b[n].length} of ${validCandidatePairs} pairs)` : n));
   const invalidPairs = candidate.pairs.filter((p) => !p.valid).map((p) => ({ pair: p.pair, problems: p.problems }));
   const regressions = rows.filter((r) => r.crossed.length > 0).map((r) => r.name);
+  // A recording that stopped before its last pair is not the run it claims.
+  const stoppedEarly = typeof candidate.stoppedEarly === 'string' ? candidate.stoppedEarly : null;
   return {
+    stoppedEarly,
     comparable: true,
     load: { base: medianLoad(base), candidate: medianLoad(candidate) },
-    passed: regressions.length === 0 && missing.length === 0 && invalidPairs.length === 0,
+    passed: regressions.length === 0 && missing.length === 0 && invalidPairs.length === 0 && stoppedEarly === null,
     reasons: [],
     rows,
     missing,
@@ -485,6 +488,7 @@ export function formatComparison(result) {
   }
   for (const name of result.missing ?? []) lines.push(`${name.padEnd(34)} MISSING from the candidate`);
   for (const p of result.invalidPairs) lines.push(`pair ${p.pair} INVALID: ${p.problems.join('; ')}`);
+  if (result.stoppedEarly) lines.push(`the candidate STOPPED EARLY: ${result.stoppedEarly}`);
   if (result.load && (result.load.base !== null || result.load.candidate !== null)) {
     lines.push(
       `machine load (median 1-min average at each pair's start): base ${result.load.base ?? '—'}, candidate ${result.load.candidate ?? '—'}`,

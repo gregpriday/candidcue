@@ -87,7 +87,9 @@ export interface Comparison {
   comparable: boolean;
   /** Median 1-minute load at each pair's start, where the recordings carry it. */
   load?: { base: number | null; candidate: number | null };
-  /** Comparable, nothing regressed, nothing missing, no invalid candidate pair. */
+  /** Why the candidate recording stopped before its last pair, if it did. */
+  stoppedEarly?: string | null;
+  /** Comparable, nothing regressed, nothing missing, no invalid candidate pair, not stopped early. */
   passed: boolean;
   reasons: string[];
   rows: ComparisonRow[];

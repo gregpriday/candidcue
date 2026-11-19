@@ -303,9 +303,16 @@ async function main() {
   };
 
   for (let pair = 1; pair <= opts.pairs; pair++) {
-    // Stop, but keep the pairs already recorded: they are still evidence.
-    if (profileInUse()) {
-      report.stoppedEarly = `pair ${pair}: something had the benchmark profile open`;
+    // Stop, but keep the pairs already recorded: they are still evidence. A
+    // scan that fails is a stop too: the profile is not known to be free.
+    let busy;
+    try {
+      busy = profileInUse() ? 'something had the benchmark profile open' : null;
+    } catch (err) {
+      busy = err.message;
+    }
+    if (busy !== null) {
+      report.stoppedEarly = `pair ${pair}: ${busy}`;
       process.stderr.write(`${report.stoppedEarly}; saving ${pair - 1} pair(s)\n`);
       process.exitCode = 1;
       break;
@@ -336,7 +343,8 @@ async function main() {
         ` load ${round1(loadBefore)}→${round1(loadavg()[0])}\n`,
     );
   }
-  clearProfile();
+  // Never under whatever stopped the run: that profile is in someone's use.
+  if (report.stoppedEarly === undefined) clearProfile();
 
   mkdirSync(dirname(out), { recursive: true });
   // `wx` as well as the check above: nothing may have appeared there since,

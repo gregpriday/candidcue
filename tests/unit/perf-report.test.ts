@@ -443,6 +443,13 @@ describe('verdicts the first tests did not pin down', () => {
     expect(result.missing).toContain('launch.warm.bundle-evaluate (1 of 4 pairs)');
   });
 
+  it('fails a candidate recording that stopped before its last pair', () => {
+    const stopped = { ...report(pairs(3)), stoppedEarly: 'pair 4: something had the benchmark profile open' };
+    const result = compareReports(report(pairs(3)), stopped);
+    expect(result.passed).toBe(false);
+    expect(formatComparison(result)).toContain('STOPPED EARLY');
+  });
+
   it('fails a candidate with no measurements at all', () => {
     const result = compareReports(report(pairs(5)), report([]));
     expect(result.passed).toBe(false);
