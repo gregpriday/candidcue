@@ -1920,3 +1920,81 @@ async fn issue_253_startup_removes_nothing_on_doubtful_ground() {
     assert_eq!(report.unused_assets_removed, 1, "{report:?}");
     assert!(!removed_file.exists());
 }
+
+// ---------------------------------------------------------------------------
+// #450 — re-importing an exported Markdown script keeps its images
+// ---------------------------------------------------------------------------
+
+async fn import_file(h: &Harness, path: &std::path::Path) -> ImportOutcome {
+    speaking_glass_lib::scripts::import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        speaking_glass_lib::scripts::import_export::ImportOptions {
+            path: path.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+}
+
+/// A script showing one image, exported as Markdown with its images.
+async fn exported_markdown_with_an_image(
+    h: &Harness,
+) -> (tempfile::TempDir, std::path::PathBuf, speaking_glass_lib::assets::ImportedAsset) {
+    let (id, kept, _) = script_that_dropped_an_image(h, false).await;
+    let out = tempfile::tempdir().unwrap();
+    let md = out.path().join("talk.md");
+    let result = speaking_glass_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        ExportOptions {
+            include_assets: true,
+            ..export_options(&md, "markdown")
+        },
+    )
+    .await
+    .expect("markdown export");
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert!(out.path().join("assets").join(asset_name(&kept)).is_file());
+    (out, md, kept)
+}
+
+/// The issue's evidence: the image sat beside the exported script, and the
+/// re-imported script resolved none of it, with no warning.
+#[tokio::test]
+async fn issue_450_an_exported_markdown_script_reimports_with_its_images() {
+    let mut h = harness().await;
+    let (_out, md, kept) = exported_markdown_with_an_image(&h).await;
+
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    let id = sid(&imported.script.id);
+    assert!(resolves(&h, &id, &kept.markdown_path).await, "the image resolves for the new script");
+    assert_eq!(indexed_assets(&h, &id).await, vec![asset_name(&kept)]);
+    assert_eq!(file_names(&h.paths.assets_dir(&id)), vec![asset_name(&kept)]);
+
+    // It is the new script's own, so the next launch keeps it.
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.unused_assets_removed, 0, "{report:?}");
+    assert!(resolves(&h, &id, &kept.markdown_path).await, "still there after a relaunch");
+}
+
+/// A reference whose file is genuinely missing is named, with the format
+/// that would have kept it; the script still imports.
+#[tokio::test]
+async fn issue_450_a_missing_image_is_named_in_a_warning() {
+    let h = harness().await;
+    let (out, md, kept) = exported_markdown_with_an_image(&h).await;
+    fs::remove_file(out.path().join("assets").join(asset_name(&kept))).unwrap();
+
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    let id = sid(&imported.script.id);
+    assert!(!resolves(&h, &id, &kept.markdown_path).await);
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    let warning = &imported.warnings[0];
+    assert!(warning.contains(&kept.markdown_path), "names the reference: {warning}");
+    assert!(warning.contains(".speakingglass"), "says what preserves images: {warning}");
+}
