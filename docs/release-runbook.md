@@ -132,8 +132,9 @@ pipeline is green, so a failing Windows run never strands a good macOS build.
 ### The credentials, by name
 
 Every credential is a secret you add by hand; none is in the repository.
-`scripts/release-credentials.mjs` is the list, and each workflow checks it
-before it spends anything, naming every secret that is missing at once:
+`scripts/release-credentials.mjs` is the list. Each workflow checks the
+signing secrets before it builds and the R2 secrets before it publishes, and
+each check names every secret of its own kind that is missing at once:
 
 | Secret | Holds | Needed by | Checked |
 |---|---|---|---|
@@ -151,10 +152,12 @@ before it spends anything, naming every secret that is missing at once:
 
 The signing secrets are checked in each workflow's `Gates` job, and every test
 runner and build waits for it, so a missing one fails the run in a minute or
-two rather than at the end of a build. Dry runs are no exception: there is no
-unsigned fallback, because proving the signing is what a dry run is for (CI
-already builds and inspects every unsigned package). Keep the signing secrets
-at repository level; the build jobs name no environment, so they cannot see
+two rather than at the end of a build. The build job checks them again before
+it starts, because re-running only a failed build does not run the gates.
+Dry runs are no exception: there is no unsigned fallback, because proving the
+signing is what a dry run is for (CI already builds the unsigned macOS `.app`,
+Windows installer and Linux packages). Keep the signing secrets at repository
+level; the gates and build jobs name no environment, so they cannot see
 environment secrets.
 
 The R2 secrets are checked as the first step of each `publish` job instead,
@@ -236,23 +239,27 @@ The gates refuse a tag whose commit is not on `main`.
 Each OS's `publish` job runs `.github/actions/publish-speaking-glass`, in this
 order, and stops at the first failure:
 
-1. Receives the build job's artifact and checks every file against its
-   `SHA256SUMS` (`.github/actions/receive-speaking-glass`, which the build job
-   also runs on its own upload, so a dry run proves this handover too).
-2. Refuses a version older than what that OS's update feed already serves.
+1. Checks that every R2 secret is present (`release-credentials.mjs
+   publish`), naming any that are not.
+2. Receives the build job's artifact, checks every file against its
+   `SHA256SUMS`, and on macOS checks that the SBOMs and provenance it will
+   attach arrived too (`.github/actions/receive-speaking-glass`, which the
+   build job also runs on its own upload, so a dry run proves this handover
+   too).
+3. Refuses a version older than what that OS's update feed already serves.
    The same version is allowed through, so a re-run can finish a publish
    that failed half way.
-3. Refuses to change a file that is already published: every file already
+4. Refuses to change a file that is already published: every file already
    under `releases/<version>/` must be byte for byte the one staged.
-4. Uploads the installers, the updater payload and its `.sig`, and
+5. Uploads the installers, the updater payload and its `.sig`, and
    `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
    bucket, cached as immutable.
-5. Downloads every one of them back from `https://updates.speakingglass.com` and
+6. Downloads every one of them back from `https://updates.speakingglass.com` and
    compares the bytes.
-6. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
+7. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
    which installed copies poll, and `releases/<channel>-<os>.json`, which a
    download page reads. Both are served `no-cache`, and both are read back.
-7. Creates the GitHub Release (empty, so no draft is ever left for another
+8. Creates the GitHub Release (empty, so no draft is ever left for another
    OS to lose its files in), or finds the one another OS created, then
    attaches its files and checks each one arrived.
 
@@ -261,9 +268,9 @@ waiting behind it and cancels that one if a third arrives, so release one
 version at a time and let it finish publishing before tagging the next.
 
 **If a publish fails**, re-run only the failed `publish` job. It reuses the
-build that was staged, so step 3 passes and the rest repairs whatever the
+build that was staged, so step 4 passes and the rest repairs whatever the
 first attempt left undone. Re-running the whole workflow rebuilds every
-file with new bytes under the same names, and step 3 refuses that once any
+file with new bytes under the same names, and step 4 refuses that once any
 of them is published: release a new version instead.
 
 `scripts/release-feed.mjs` is the whole layout, with the reasons.

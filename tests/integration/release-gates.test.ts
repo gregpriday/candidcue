@@ -2067,20 +2067,52 @@ describe('every operating system gates, verifies and stages before it publishes'
 
 /* ------------------------------------------- credentials, by name, first */
 
-/** A step's body, from its `- name:` line to the next step. */
+/**
+ * A step's body, from its `- name:` line to the next step: the next line
+ * that starts a list item at the same indentation, whatever key it opens
+ * with (`- uses:`, `- id:`, `- if:` ...).
+ */
 function stepOf(text: string, name: string, label: string): string {
   const start = text.indexOf(`- name: ${name}\n`);
   expect(start, `${label} has no step named "${name}"`).toBeGreaterThan(-1);
+  const lineStart = text.lastIndexOf('\n', start) + 1;
+  const dash = ' '.repeat(start - lineStart);
   const rest = text.slice(start);
-  const next = rest.slice(1).search(/\n\s+- (name|uses|run):/);
+  const next = rest.slice(1).search(new RegExp(`\\n${dash}- [a-z][\\w-]*:`));
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
-/** Every `NAME: ${{ <context>.<key> }}` an env block maps, as [NAME, key]. */
+/** The lines of a step's own `env:` block, and nothing after it. */
+function envBlockOf(step: string): string {
+  const header = /^( +)env:\n/m.exec(step);
+  expect(header, 'the step has no env: block').not.toBeNull();
+  const indent = header![1]!.length;
+  const lines: string[] = [];
+  for (const line of step.slice(header!.index + header![0].length).split('\n')) {
+    if (line.trim() === '' || line.search(/\S/) <= indent) break;
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+/** Every `NAME: ${{ <context>.<key> }}` a step's env block maps, as [NAME, key]. */
 const envMappings = (step: string, context: 'secrets' | 'inputs') =>
-  [...step.matchAll(new RegExp(`^\\s+([A-Z][A-Z_0-9]*): \\$\\{\\{ ${context}\\.([A-Za-z_0-9]+) \\}\\}$`, 'gm'))].map(
-    (match) => [match[1]!, match[2]!] as const,
-  );
+  [
+    ...envBlockOf(step).matchAll(
+      new RegExp(`^\\s+([A-Z][A-Z_0-9]*): \\$\\{\\{ ${context}\\.([A-Za-z_0-9]+) \\}\\}$`, 'gm'),
+    ),
+  ].map((match) => [match[1]!, match[2]!] as const);
+
+/**
+ * A credential check that cannot be skipped or ignored: no condition, no
+ * `continue-on-error`, and exactly the one command.
+ */
+function expectEnforced(step: string, command: string, label: string) {
+  expect(step, `${label}: the check must run unconditionally`).not.toMatch(/^\s+if:/m);
+  expect(step, `${label}: a failed check must fail the job`).not.toContain('continue-on-error');
+  const runs = [...step.matchAll(/^\s+run: (.*)$/gm)].map((match) => match[1]);
+  expect(runs, label).toEqual([command]);
+}
 
 /** Each composite R2 input, and the repository secret every caller fills it from. */
 const R2_INPUTS = {
@@ -2097,26 +2129,32 @@ describe('a release names every missing credential before it spends anything', (
    * build job after four test runners had finished; every other missing
    * secret surfaced as a codesign, notarytool or S3 error an hour in.
    */
-  it.each(Object.entries(RELEASE_WORKFLOWS))('%s checks its signing secrets in the gates', async (os, relPath) => {
+  it.each(Object.entries(RELEASE_WORKFLOWS))('%s checks its signing secrets in the gates and again in the build', async (os, relPath) => {
     const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
+    const required = [...REQUIRED.build[os as keyof typeof REQUIRED.build]].sort();
     const uncommented = stripComments(readWorkflow(relPath));
-    const gates = jobOf(uncommented, 'gates', relPath);
-    const step = stepOf(gates, 'Every signing credential must be present', relPath);
 
-    expect(step).toMatch(new RegExp(`run: node scripts/release-credentials\\.mjs build ${os}$`, 'm'));
-    // Each from the secret of the same name, and exactly the script's list:
-    // a secret the script requires but the step never maps reads as missing
-    // on every run, and one mapped but not required is checked by nobody.
-    const mapped = envMappings(step, 'secrets');
-    expect(mapped.filter(([name, secret]) => name !== secret), 'each env name is its secret name').toEqual([]);
-    expect(mapped.map(([name]) => name).sort()).toEqual(
-      [...REQUIRED.build[os as keyof typeof REQUIRED.build]].sort(),
-    );
-    // Not interpolated into the script, where GitHub would write the value
-    // into the temporary shell file it generates for the step.
-    expect(step.slice(step.indexOf('run:'))).not.toContain('${{');
-    // And before the slower gate in the same job.
-    expect(gates.indexOf('release-credentials.mjs')).toBeLessThan(gates.indexOf('release-verify.mjs'));
+    const checks: Array<[string, string]> = [
+      ['gates', 'Every signing credential must be present'],
+      // Re-running only a failed build job does not run the gates again.
+      ['build', 'Every signing credential must still be present'],
+    ];
+    for (const [job, name] of checks) {
+      const body = jobOf(uncommented, job, relPath);
+      const step = stepOf(body, name, `${relPath} ${job}`);
+      expectEnforced(step, `node scripts/release-credentials.mjs build ${os}`, `${relPath} ${job}`);
+      // Each from the secret of the same name, and exactly the script's list:
+      // a secret the script requires but the step never maps reads as missing
+      // on every run, and one mapped but not required is checked by nobody.
+      const mapped = envMappings(step, 'secrets');
+      expect(mapped.filter(([env, secret]) => env !== secret), 'each env name is its secret name').toEqual([]);
+      expect(mapped.map(([env]) => env).sort(), `${relPath} ${job}`).toEqual(required);
+      // Before anything that takes time in the same job.
+      const at = body.indexOf('release-credentials.mjs');
+      for (const later of ['release-verify.mjs', 'rustup', 'pnpm install', 'pnpm tauri build']) {
+        if (body.includes(later)) expect(at, `${relPath} ${job}: before ${later}`).toBeLessThan(body.indexOf(later));
+      }
+    }
   });
 
   it.each(Object.values(RELEASE_WORKFLOWS))('%s starts no other runner until the gates pass', (relPath) => {
@@ -2136,7 +2174,8 @@ describe('a release names every missing credential before it spends anything', (
     const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
     const uncommented = stripComments(readWorkflow(RELEASE_WORKFLOWS.macos));
     const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
-    const used = new Set([...build.matchAll(/secrets\.([A-Z_0-9]+)/g)].map((match) => match[1]!));
+    const step = build.slice(build.indexOf('- name: Import the signing certificate'));
+    const used = new Set([...step.matchAll(/secrets\.([A-Z_0-9]+)/g)].map((match) => match[1]!));
     // The password is the one secret the build uses and the gate does not
     // require, because a key generated without one has an empty password.
     used.delete('TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
@@ -2148,16 +2187,15 @@ describe('a release names every missing credential before it spends anything', (
    * environment, so only it can see secrets kept there, and re-running only a
    * failed publish job never runs the gates again.
    */
-  it('checks every R2 credential before publishing receives or touches anything', async () => {
+  it('checks every R2 credential as the first thing publishing does', async () => {
     const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
     const action = stripComments(readWorkflow(PUBLISH_ACTION));
-    const steps = action.slice(action.indexOf('\n  steps:\n'));
-    const check = steps.indexOf('release-credentials.mjs publish');
-    expect(check, 'the publish action must check its credentials').toBeGreaterThan(-1);
-    expect(check).toBeLessThan(steps.indexOf('./.github/actions/receive-speaking-glass'));
-    expect(check).toBeLessThan(steps.indexOf('aws s3 cp'));
+    const steps = action.slice(action.indexOf('\n  steps:\n') + '\n  steps:\n'.length);
+    expect(steps.trimStart(), 'the first step').toMatch(/^- name: Every publishing credential must be present\n/);
 
     const step = stepOf(action, 'Every publishing credential must be present', PUBLISH_ACTION);
+    expect(step).toMatch(/^\s+shell: bash$/m);
+    expectEnforced(step, 'node scripts/release-credentials.mjs publish', PUBLISH_ACTION);
     const mapped = envMappings(step, 'inputs');
     expect(mapped.map(([name]) => name).sort()).toEqual([...REQUIRED.publish].sort());
     for (const [name, input] of mapped) {
@@ -2169,7 +2207,7 @@ describe('a release names every missing credential before it spends anything', (
     for (const relPath of Object.values(RELEASE_WORKFLOWS)) {
       const publish = jobOf(stripComments(readWorkflow(relPath)), 'publish', relPath);
       for (const [input, secret] of Object.entries(R2_INPUTS)) {
-        expect(publish, relPath).toContain(`${input}: \${{ secrets.${secret} }}`);
+        expect(publish, relPath).toMatch(new RegExp(`^\\s+${input}: \\$\\{\\{ secrets\\.${secret} \\}\\}$`, 'm'));
       }
     }
   });
@@ -2177,31 +2215,70 @@ describe('a release names every missing credential before it spends anything', (
 
 /* --------------------------------------- what the GitHub Release carries */
 
+describe('the files a release attaches beside the stage are declared once and checked on receipt', () => {
+  /*
+   * macOS attaches its SBOMs and provenance to the GitHub Release. The build
+   * checks they survived its own handover, and publishing checks again when
+   * it receives the artifact, before anything is written to R2.
+   */
+  it('passes the same extras to the build handover, the publish receipt and the attach step', () => {
+    const macos = stripComments(readWorkflow(RELEASE_WORKFLOWS.macos));
+    const build = jobOf(macos, 'build', RELEASE_WORKFLOWS.macos);
+    const publish = jobOf(macos, 'publish', RELEASE_WORKFLOWS.macos);
+    expect(publish).toMatch(/^\s+extra_assets: 'sbom\/\* provenance\/\*'$/m);
+    const handover = build.slice(build.indexOf('./.github/actions/receive-speaking-glass'));
+    expect(handover).toMatch(/^\s+extra_files: 'sbom\/\* provenance\/\*'$/m);
+
+    const action = stripComments(readWorkflow(PUBLISH_ACTION));
+    const receive = action.slice(action.indexOf('./.github/actions/receive-speaking-glass'));
+    expect(receive.slice(0, receive.indexOf('\n\n'))).toMatch(/^\s+extra_files: \$\{\{ inputs\.extra_assets \}\}$/m);
+    expect(action.indexOf('./.github/actions/receive-speaking-glass')).toBeLessThan(action.indexOf('aws s3 cp'));
+
+    const attach = stepOf(action, 'Attach the files to the GitHub Release', PUBLISH_ACTION);
+    expect(attach).toMatch(/^\s+shell: bash$/m);
+    expect(envBlockOf(attach)).toMatch(/^\s+EXTRA_ASSETS: \$\{\{ inputs\.extra_assets \}\}$/m);
+
+    const check = stepOf(
+      stripComments(readWorkflow(RECEIVE_ACTION)),
+      'Every declared extra file must have survived it too',
+      RECEIVE_ACTION,
+    );
+    expect(check).toMatch(/^\s+shell: bash$/m);
+    expect(check).not.toMatch(/^\s+if:/m);
+    expect(envBlockOf(check)).toMatch(/^\s+EXTRA_FILES: \$\{\{ inputs\.extra_files \}\}$/m);
+  });
+});
+
 /**
- * The publish action's "Attach the files to the GitHub Release" script, run
- * under bash against a received artifact, with `gh` faked. String assertions
- * cannot see what it was missing: it expanded `sbom/*` against the CHECKOUT,
- * where only the committed SBOM inputs live, so the SBOMs the build generated
- * were never attached and the attachment check checked the shortened list.
+ * A composite step's bash body, run in a scratch directory with `gh` faked.
+ * String assertions could not see what the attach step was missing: it
+ * expanded `sbom/*` against the CHECKOUT, where only the committed SBOM
+ * inputs live, so the SBOMs the build generated were never attached and the
+ * attachment check checked the shortened list.
  */
 describe.skipIf(process.platform === 'win32')('the GitHub Release carries what was staged', () => {
-  function attachScript(): string {
-    const lines = readWorkflow(PUBLISH_ACTION).split('\n');
-    const named = lines.findIndex((line) => line.trim() === '- name: Attach the files to the GitHub Release');
-    expect(named).toBeGreaterThan(-1);
+  function runBlock(relPath: string, stepName: string): string {
+    const lines = readWorkflow(relPath).split('\n');
+    const named = lines.findIndex((line) => line.trim() === `- name: ${stepName}`);
+    expect(named, `${relPath} has no step "${stepName}"`).toBeGreaterThan(-1);
+    const stepIndent = lines[named]!.search(/\S/);
     const runAt = lines.findIndex((line, at) => at > named && line.trim() === 'run: |');
+    expect(runAt).toBeGreaterThan(named);
+    // The run block belongs to this step: no other list item in between.
+    for (const line of lines.slice(named + 1, runAt)) {
+      expect(line.search(/\S/) > stepIndent || line.trim() === '', `${stepName}: run: | is not its own`).toBe(true);
+    }
     const indent = lines[runAt]!.search(/\S/);
     const body: string[] = [];
     for (const line of lines.slice(runAt + 1)) {
       if (line.trim() !== '' && line.search(/\S/) <= indent) break;
       body.push(line.slice(indent + 2));
     }
-    expect(body.join('\n')).toContain('gh release upload');
     return body.join('\n');
   }
 
   const GH = `
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 const state = process.env.FAKE_GH_STATE;
 const read = () => (existsSync(state) ? JSON.parse(readFileSync(state, 'utf8')) : { created: false, assets: [] });
@@ -2219,7 +2296,6 @@ switch (args[1]) {
   case 'create':
     s.created = true;
     s.notes = readFileSync(args[args.indexOf('--notes-file') + 1], 'utf8');
-    s.flags = args;
     save(s);
     process.exit(0);
   case 'upload':
@@ -2236,7 +2312,8 @@ switch (args[1]) {
 }
 `;
 
-  function publish({ extraAssets, publicUrl }: { extraAssets: string; publicUrl: string }) {
+  /** A checkout beside a received artifact, as the publish job has them. */
+  function scratchRelease(version: string, publicUrl: string) {
     const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-attach-'));
     workspaces.push(dir);
     const write = (rel: string, text: string) => {
@@ -2246,50 +2323,75 @@ switch (args[1]) {
     // The checkout: committed SBOM inputs only, as in the repository.
     write('sbom/native-components.json', '{"committed":true}');
     write('sbom/native-inputs.json', '{"committed":true}');
-    write('scripts/release-notes.mjs', "console.log('## 1.2.3\\n\\nWhat changed.');\n");
+    write('scripts/release-notes.mjs', "console.log('## the notes\\n\\nWhat changed.');\n");
     write('scripts/release-feed.mjs', "console.log('');\n");
     // The received artifact: what the build staged and generated.
-    write('verified/stage/release.json', JSON.stringify({ version: '1.2.3', os: 'macos', publicUrl }));
-    write('verified/stage/files/1.2.3/Speaking Glass_1.2.3_universal.dmg', 'dmg bytes');
-    write('verified/stage/files/1.2.3/SHA256SUMS-macos.txt', 'sums');
+    write('verified/stage/release.json', JSON.stringify({ version, os: 'macos', publicUrl }));
+    write(`verified/stage/files/${version}/Speaking Glass_${version}_universal.dmg`, 'dmg bytes');
+    write(`verified/stage/files/${version}/SHA256SUMS-macos.txt`, 'sums');
     write('verified/sbom/native-components.json', '{"committed":true}');
     write('verified/sbom/native-inputs.json', '{"committed":true}');
     write('verified/sbom/javascript.json', '{"generated":true}');
     write('verified/sbom/rust-app.txt', 'generated');
     write('verified/provenance/toolchain.txt', 'rustc 1.x');
+    // A directory, not a file: no pattern may count it as a match.
+    mkdirSync(join(dir, 'verified/licences/nested'), { recursive: true });
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     fakeTool(bin, 'gh', GH);
     mkdirSync(join(dir, 'tmp'));
-    const result = spawnSync('bash', ['-c', attachScript()], {
+    return dir;
+  }
+
+  /**
+   * The child's environment, allow-listed: nothing from the runner's own
+   * environment (`SHELLOPTS`, a stray `PUBLIC_URL`) may change the outcome.
+   */
+  function bash(dir: string, script: string, env: Record<string, string>) {
+    const result = spawnSync('bash', ['-c', script], {
       cwd: dir,
       encoding: 'utf8',
       env: {
-        ...process.env,
-        PATH: [bin, dirname(process.execPath), process.env.PATH].join(delimiter),
-        FAKE_GH_STATE: join(dir, 'gh.json'),
-        GITHUB_REF_NAME: 'v1.2.3',
-        RUNNER_TEMP: join(dir, 'tmp'),
-        GH_TOKEN: 'not-a-token',
-        EXTRA_ASSETS: extraAssets,
+        PATH: [join(dir, 'bin'), dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
+        HOME: dir,
+        ...env,
       },
     });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  }
+
+  function attach({ extraAssets, version = '1.2.3', publicUrl }: { extraAssets: string; version?: string; publicUrl: string }) {
+    const dir = scratchRelease(version, publicUrl);
+    const { status, output } = bash(dir, runBlock(PUBLISH_ACTION, 'Attach the files to the GitHub Release'), {
+      FAKE_GH_STATE: join(dir, 'gh.json'),
+      GITHUB_REF_NAME: `v${version}`,
+      RUNNER_TEMP: join(dir, 'tmp'),
+      GH_TOKEN: 'not-a-token',
+      EXTRA_ASSETS: extraAssets,
+      // What the step used to read. It must not be what the notes say.
+      PUBLIC_URL: 'https://stale.example.test',
+    });
     const state = existsSync(join(dir, 'gh.json'))
-      ? (JSON.parse(readFileSync(join(dir, 'gh.json'), 'utf8')) as {
-          notes?: string;
-          assets: Array<{ path: string }>;
-        })
+      ? (JSON.parse(readFileSync(join(dir, 'gh.json'), 'utf8')) as { notes?: string; assets: Array<{ path: string }> })
       : { assets: [] };
     return {
-      status: result.status,
-      output: `${result.stdout}${result.stderr}`,
+      status,
+      output,
       notes: state.notes ?? '',
       attached: state.assets.map((asset) => asset.path).sort(),
     };
   }
 
+  function receiveExtras(extraFiles: string) {
+    const dir = scratchRelease('1.2.3', 'https://updates.speakingglass.com');
+    return bash(dir, runBlock(RECEIVE_ACTION, 'Every declared extra file must have survived it too'), {
+      RECEIVED: 'verified',
+      EXTRA_FILES: extraFiles,
+    });
+  }
+
   it('attaches the SBOMs and provenance the build generated, not the checkout’s', () => {
-    const { status, output, attached } = publish({
+    const { status, output, attached } = attach({
       extraAssets: 'sbom/* provenance/*',
       publicUrl: 'https://updates.speakingglass.com',
     });
@@ -2308,7 +2410,7 @@ switch (args[1]) {
   });
 
   it('attaches only the staged files when there are no extras, as on Windows and Linux', () => {
-    const { status, output, attached } = publish({ extraAssets: '', publicUrl: 'https://updates.speakingglass.com' });
+    const { status, output, attached } = attach({ extraAssets: '', publicUrl: 'https://updates.speakingglass.com' });
     expect(status, output).toBe(0);
     expect(attached).toEqual([
       'verified/stage/files/1.2.3/SHA256SUMS-macos.txt',
@@ -2316,14 +2418,23 @@ switch (args[1]) {
     ]);
   });
 
-  it('refuses an extra pattern that matches nothing it received', () => {
-    const { status, output, attached } = publish({
-      extraAssets: 'sbom/* licences/*',
-      publicUrl: 'https://updates.speakingglass.com',
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain("extra_assets pattern 'licences/*' matches no file in the received artifact");
-    expect(attached, 'and attaches nothing').toEqual([]);
+  it('receives an artifact that carries every declared extra, and one that declares none', () => {
+    const declared = receiveExtras('sbom/* provenance/*');
+    expect(declared.status, declared.output).toBe(0);
+    expect(declared.output).toContain('sbom/*: received');
+    expect(declared.output).toContain('provenance/*: received');
+    const none = receiveExtras('');
+    expect(none.status, none.output).toBe(0);
+  });
+
+  it('refuses, on receipt, an extra that matches no file, or only a directory', () => {
+    const absent = receiveExtras('sbom/* attestations/*');
+    expect(absent.status).toBe(1);
+    expect(absent.output).toContain("::error::'attestations/*' matches no file in the received artifact");
+
+    const directory = receiveExtras('licences/*');
+    expect(directory.status).toBe(1);
+    expect(directory.output).toContain("::error::'licences/*' matches no file in the received artifact");
   });
 
   /*
@@ -2331,15 +2442,15 @@ switch (args[1]) {
    * script falls back to its default origin. The notes used the raw input and
    * pointed readers at `/releases/<version>/`, with no host.
    */
-  it('links the release notes to the origin the files were staged for', () => {
-    const fallback = publish({ extraAssets: '', publicUrl: 'https://updates.speakingglass.com' });
+  it('links the release notes to the origin and version the files were staged for', () => {
+    const fallback = attach({ extraAssets: '', publicUrl: 'https://updates.speakingglass.com' });
     expect(fallback.status, fallback.output).toBe(0);
     expect(fallback.notes).toContain('served from https://updates.speakingglass.com/releases/1.2.3/.');
     expect(fallback.notes).toContain('What changed.');
 
-    const custom = publish({ extraAssets: '', publicUrl: 'https://cdn.example.test/' });
+    const custom = attach({ extraAssets: '', version: '2.0.0-rc.1', publicUrl: 'https://cdn.example.test//' });
     expect(custom.status, custom.output).toBe(0);
-    expect(custom.notes).toContain('served from https://cdn.example.test/releases/1.2.3/.');
+    expect(custom.notes).toContain('served from https://cdn.example.test/releases/2.0.0-rc.1/.');
   });
 });
 

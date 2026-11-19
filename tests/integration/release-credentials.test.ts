@@ -31,13 +31,13 @@ const sentinel = (name: string) => `sentinel-value-of-${name.toLowerCase()}-0f3a
 
 const all = (names: readonly string[]) => Object.fromEntries(names.map((name) => [name, sentinel(name)]));
 
-function gate(args: string[], env: Record<string, string>) {
+function gate(args: string[], env: Record<string, string>, { withSummary = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'release-credentials-'));
   dirs.push(dir);
   const summary = join(dir, 'summary.md');
   const result = spawnSync(process.execPath, [SCRIPT, ...args], {
     encoding: 'utf8',
-    env: { ...env, GITHUB_STEP_SUMMARY: summary },
+    env: withSummary ? { ...env, GITHUB_STEP_SUMMARY: summary } : env,
   });
   let written = '';
   try {
@@ -104,7 +104,12 @@ describe('the release credential gate', () => {
         else env[absent] = empty;
         const { status, output, summary } = gate(args, env);
         expect(status, `${absent} = ${JSON.stringify(empty)}\n${output}`).toBe(1);
-        expect(output).toContain(`MISSING  ${absent}`);
+        // Every row says what it is: only the absent one is missing.
+        for (const name of names) {
+          const status = name === absent ? 'MISSING' : 'present';
+          expect(output, name).toContain(`${status}  ${name}`);
+          expect(summary, name).toContain(`\`${name}\` | ${name === absent ? '**missing**' : 'present'} |`);
+        }
         expect(output).toMatch(new RegExp(`::error title=Missing release credentials::[^\\n]*: ${absent}\\. `));
         expect(summary).toContain(`\`${absent}\` | **missing**`);
         for (const name of names) expect(output + summary).not.toContain(sentinel(name));
@@ -122,7 +127,7 @@ describe('the release credential gate', () => {
     expect(output).toContain(
       '3 secrets that are not set: APPLE_SIGNING_IDENTITY, APPLE_API_ISSUER, TAURI_SIGNING_PRIVATE_KEY.',
     );
-    expect(output).toContain('Nothing has been built.');
+    expect(output).toContain('This run stopped before building anything.');
   });
 
   it('tells a failed publish how to finish once the secrets are added', () => {
@@ -132,12 +137,27 @@ describe('the release credential gate', () => {
     expect(output).toContain('the release environment');
   });
 
-  it.each([[[]], [['build']], [['build', 'android']], [['build', 'macos', 'extra']], [['publish', 'macos']], [['sign']]])(
-    'refuses an invocation it does not know: %j',
-    (args) => {
-      const { status, output } = gate(args, all(REQUIRED.build.macos));
-      expect(status).toBe(2);
-      expect(output).toContain('Usage:');
-    },
-  );
+  it('writes no step summary outside a workflow, and still reports', () => {
+    const { status, output, summary } = gate(['build', 'linux'], all(REQUIRED.build.linux), { withSummary: false });
+    expect(status, output).toBe(0);
+    expect(output).toContain('present  TAURI_SIGNING_PRIVATE_KEY');
+    expect(summary).toBe('');
+  });
+
+  it.each([
+    [[]],
+    [['build']],
+    [['build', 'android']],
+    [['build', 'constructor']],
+    [['build', 'macos', 'extra']],
+    [['publish', 'macos']],
+    [['sign']],
+  ])('refuses an invocation it does not know: %j', (args) => {
+    const env = all(REQUIRED.build.macos);
+    const { status, output, summary } = gate(args, env);
+    expect(status).toBe(2);
+    expect(output).toContain('Usage:');
+    expect(summary).toBe('');
+    for (const name of REQUIRED.build.macos) expect(output).not.toContain(sentinel(name));
+  });
 });

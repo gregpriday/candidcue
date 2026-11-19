@@ -58,6 +58,7 @@ runs:
       with:
         artifact_name: ${{ inputs.artifact_name }}
         path: verified
+        extra_files: ${{ inputs.extra_assets }}
 
     # `--verify-tag` only checks that the tag EXISTS. A tag deleted and
     # recreated at another commit while this ran would satisfy it, and the
@@ -173,21 +174,15 @@ runs:
         # `$EXTRA_ASSETS` in a `for` list expands `sbom/*` against the
         # CHECKOUT, whose sbom/ holds only the committed inputs, and the SBOMs
         # the build generated were silently never attached. Each pattern is
-        # expanded under verified/ only, and one that matches nothing there
-        # is an error rather than a release with a file missing.
+        # expanded under verified/ only; receiving the artifact already
+        # refused one that matches nothing there.
         read -r -a patterns <<<"$EXTRA_ASSETS"
         for pattern in ${patterns[@]+"${patterns[@]}"}; do
-          matched=0
           for match in verified/$pattern; do
             if [ -f "$match" ]; then
               files+=("$match")
-              matched=1
             fi
           done
-          if [ "$matched" -eq 0 ]; then
-            echo "::error::extra_assets pattern '$pattern' matches no file in the received artifact"
-            exit 1
-          fi
         done
 
         # Created EMPTY, then filled. Given files, `gh release create` makes a

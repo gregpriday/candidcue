@@ -81,7 +81,7 @@ function requiredFor(argv) {
       label: `the ${os} build`,
       names: REQUIRED.build[os],
       where: 'the repository settings',
-      after: 'Nothing has been built.',
+      after: 'This run stopped before building anything.',
     };
   }
   if (kind === 'publish' && os === undefined) {
@@ -89,7 +89,7 @@ function requiredFor(argv) {
       label: 'publishing',
       names: REQUIRED.publish,
       where: 'the repository settings or the release environment',
-      after: 'Nothing has been published; once the secrets are added, re-run only this publish job.',
+      after: 'This publish attempt stopped before writing anything; once the secrets are added, re-run only this publish job.',
     };
   }
   return undefined;

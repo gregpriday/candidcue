@@ -146,6 +146,13 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      # Again, because re-running only a failed build job does not run the
+      # gates again, and a secret can have been removed in between.
+      - name: Every signing credential must still be present
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/release-credentials.mjs build windows
+
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           run_install: false
