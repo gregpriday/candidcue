@@ -20,8 +20,10 @@
  *
  * The workflow passes each secret through `env:` under its own repository
  * name. This script never prints a value — only names, and whether each is
- * present. Present is all it can establish: whether a certificate imports, a
- * key signs or a bucket accepts a write is for the step that uses it.
+ * present. Present is nearly all it can establish: whether a certificate
+ * imports, a key signs or a bucket accepts a write is for the step that uses
+ * it. The one exception is the SHAPE of `APPLE_SIGNING_IDENTITY` (see
+ * `FORMATS`), because the wrong shape does not fail at all: it signs.
  *
  * A missing credential is a failure in every run that reaches this, dry runs
  * included. There is deliberately no unsigned fallback: a dry run exists to
@@ -68,6 +70,53 @@ export const REQUIRED = {
  * against the key the app ships with.
  */
 
+/**
+ * `Developer ID Application: <name> (<TEAM ID>)`, and nothing else.
+ *
+ * The identity is the one credential whose wrong value does not fail. Tauri
+ * hands it straight to `codesign --sign`, so:
+ *
+ *   `-`                         is codesign's ad-hoc identity: the build
+ *                               signs ad hoc and succeeds, the very failure
+ *                               #189 is about, now with a green tick;
+ *   `Apple Development: …`,     sign happily and are refused by notarisation
+ *   `Apple Distribution: …`,    (or, for the Mac App Store identities, by
+ *   `3rd Party Mac Developer…`  Gatekeeper) after the universal build;
+ *   a certificate's SHA-1       signs correctly, but names no Team ID, and
+ *                               `verify-signed-bundle.mjs` binds the signed
+ *                               bundle to the team named here.
+ *
+ * A Team ID is ten upper-case letters and digits. The whole string must
+ * match, so a value pasted with a trailing newline is refused here rather
+ * than by `codesign` failing to find an identity with a newline in its name.
+ * `verify-signed-bundle.mjs` reads the Team ID out of the same pattern.
+ */
+export const DEVELOPER_ID_IDENTITY = /^Developer ID Application: \S(?:.*\S)? \(([A-Z0-9]{10})\)$/;
+
+/**
+ * Secrets whose value must also have a shape, checked only once present.
+ * `describe` is what the failure says the value should look like; the value
+ * itself is never printed.
+ */
+export const FORMATS = {
+  APPLE_SIGNING_IDENTITY: {
+    pattern: DEVELOPER_ID_IDENTITY,
+    describe:
+      'the full "Developer ID Application: <name> (<TEAM ID>)" name of the certificate, exactly as ' +
+      '`security find-identity -p codesigning` prints it ("-" signs ad hoc, an Apple Development or ' +
+      'Mac App Store identity cannot be notarised for direct download, and a SHA-1 hash names no Team ID)',
+  },
+};
+
+/** The present names in `names` whose value does not have its declared shape. */
+export function malformed(names, env) {
+  return names.filter((name) => {
+    const format = FORMATS[name];
+    const value = env[name] ?? '';
+    return format !== undefined && value.trim() !== '' && !format.pattern.test(value);
+  });
+}
+
 const RUNBOOK = 'docs/release-runbook.md';
 
 /** The names in `required` that are unset, empty or only whitespace in `env`. */
@@ -107,12 +156,15 @@ function main(argv, env) {
   }
 
   const absent = missing(wanted.names, env);
+  const invalid = malformed(wanted.names, env);
+  const status = (name) => (absent.includes(name) ? 'MISSING' : invalid.includes(name) ? 'INVALID' : 'present');
   for (const name of wanted.names) {
-    console.log(`  ${absent.includes(name) ? 'MISSING' : 'present'}  ${name}`);
+    console.log(`  ${status(name)}  ${name}`);
   }
 
   if (env.GITHUB_STEP_SUMMARY) {
-    const rows = wanted.names.map((name) => `| \`${name}\` | ${absent.includes(name) ? '**missing**' : 'present'} |`);
+    const cell = (name) => (status(name) === 'present' ? 'present' : `**${status(name).toLowerCase()}**`);
+    const rows = wanted.names.map((name) => `| \`${name}\` | ${cell(name)} |`);
     appendFileSync(
       env.GITHUB_STEP_SUMMARY,
       [`### Credentials for ${wanted.label}`, '', '| Secret | |', '|---|---|', ...rows, '', ''].join('\n'),
@@ -125,8 +177,14 @@ function main(argv, env) {
         `not set: ${absent.join(', ')}. Add ${absent.length === 1 ? 'it' : 'them'} in ${wanted.where} ` +
         `(${RUNBOOK} lists what each holds). ${wanted.after}`,
     );
-    return 1;
   }
+  for (const name of invalid) {
+    console.error(
+      `::error title=Malformed release credential::${name} is set, but not to ${FORMATS[name].describe}. ` +
+        `Correct it in ${wanted.where} (${RUNBOOK} lists what each holds). ${wanted.after}`,
+    );
+  }
+  if (absent.length > 0 || invalid.length > 0) return 1;
   console.log(`\nEvery credential ${wanted.label} needs is present.`);
   return 0;
 }
