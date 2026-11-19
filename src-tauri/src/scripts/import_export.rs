@@ -272,15 +272,16 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
                 .map(|entries| {
                     let mut names = std::collections::HashSet::new();
                     listing_complete = true;
-                    for entry in entries {
+                    // Every entry counts toward the cap, named in UTF-8 or not.
+                    for (seen, entry) in entries.enumerate() {
+                        if seen >= MAX_LISTED_BESIDE {
+                            listing_complete = false;
+                            break;
+                        }
                         let Ok(entry) = entry else {
                             listing_complete = false;
                             continue;
                         };
-                        if names.len() >= MAX_LISTED_BESIDE {
-                            listing_complete = false;
-                            break;
-                        }
                         if let Ok(name) = entry.file_name().into_string() {
                             names.insert(name);
                         }
