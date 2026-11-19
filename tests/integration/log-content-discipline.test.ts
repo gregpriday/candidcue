@@ -11,10 +11,16 @@
  * That is what this is. It does not try to be a scrubber. It refuses the one
  * mistake that actually happens — reaching for the variable that holds the
  * user's words while writing a log line about something going wrong with them.
+ *
+ * The promises: nothing logs a binding that holds the user's words, and the
+ * support-bundle copy promises no more than that discipline can deliver — it
+ * names what is left out and tells the reader to look before sending. The copy
+ * is read as the value the screen renders, and its words are otherwise free.
  */
 import { readFileSync, globSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SUPPORT_BUNDLE_EXCLUSIONS } from '../../src/control/lib/diagnostics-format';
 
 const REPO_ROOT = join(__dirname, '../..');
 
@@ -113,9 +119,10 @@ describe('nothing logs the user’s words', () => {
    * the archive against.
    */
   it('still tells the user what a support bundle leaves out', () => {
-    const source = readFileSync(join(REPO_ROOT, 'src/control/lib/diagnostics-format.ts'), 'utf8');
+    // The copy itself, not the module's source: a comment naming these would
+    // otherwise satisfy it.
     for (const excluded of [/script/i, /transcript/i, /audio/i]) {
-      expect(source, `the exclusion copy must name ${excluded}`).toMatch(excluded);
+      expect(SUPPORT_BUNDLE_EXCLUSIONS, `the exclusion copy must name ${excluded}`).toMatch(excluded);
     }
   });
 
@@ -131,9 +138,7 @@ describe('nothing logs the user’s words', () => {
    * log files, and neither of those is one of them.
    */
   it('claims a design about the user’s words, not a guarantee', () => {
-    const source = readFileSync(join(REPO_ROOT, 'src/control/lib/diagnostics-format.ts'), 'utf8');
-    const copy = /SUPPORT_BUNDLE_EXCLUSIONS\s*=\s*([\s\S]*?);\n/.exec(source)?.[1] ?? '';
-    expect(copy.length, 'SUPPORT_BUNDLE_EXCLUSIONS could not be read').toBeGreaterThan(80);
+    const copy = SUPPORT_BUNDLE_EXCLUSIONS;
 
     expect(
       copy,

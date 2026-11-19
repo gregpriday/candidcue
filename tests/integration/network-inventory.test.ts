@@ -1,6 +1,12 @@
 /**
  * The network inventory, checked against the code it describes.
  *
+ * The promise: every network path the shipping code has is listed in
+ * `docs/network-inventory.md`, and no public surface — README, CHANGELOG,
+ * Settings, Welcome, the About box — makes a claim the inventory rules out.
+ * The banned claims are the inventory's own list; a surface may say anything
+ * else, in any words.
+ *
  * `docs/network-inventory.md` is the single source of truth for every public
  * claim about what Speaking Glass does on the network — the README, the security
  * policy, the privacy policy, the Settings privacy section and any website page
@@ -282,6 +288,9 @@ function declaredFrontendFetches(): string[] {
     .map((match) => match[1]!)
     .sort();
 }
+
+/** A claim with its case and spacing set aside. */
+const norm = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /** The bullets under "Not accurate, and not to be written anywhere". */
 function bannedBullets(): string[] {
@@ -693,11 +702,21 @@ describe('claims the inventory bans', () => {
    * covers.
    */
   const BANNED: { pattern: RegExp; bullet: string }[] = [
-    { pattern: /never uses the internet/i, bullet: '"Speaking Glass never uses the internet."' },
+    // The whole app, not a part of it: "speech recognition never uses the
+    // internet" is true and must stay writable.
+    {
+      pattern: /\b(?:Speaking Glass|the app|this app) never uses the internet/i,
+      bullet: '"Speaking Glass never uses the internet."',
+    },
     { pattern: /nothing (ever )?leaves your/i, bullet: '"Nothing ever leaves your computer."' },
     { pattern: /completely offline/i, bullet: '"Completely offline from first launch."' },
     { pattern: /(there is )?no network code/i, bullet: '"There is no network code."' },
-    { pattern: /\bautomatic updates\b/i, bullet: '"Automatic updates."' },
+    // The check is automatic and may be called that; the install never is.
+    {
+      pattern:
+        /\bupdates? (?:are |is )?installed automatically|\binstalls? (?:updates )?automatically|\bautomatically installs?\b/i,
+      bullet: '"Updates install automatically."',
+    },
     {
       pattern: /never checks for updates/i,
       bullet: '"Speaking Glass never checks for updates."',
@@ -732,10 +751,11 @@ describe('claims the inventory bans', () => {
     ).toBeGreaterThan(3);
 
     // Bullets are matched by prefix: the document's line may carry a trailing
-    // clause ("— see …") that the rule's label does not.
-    const uncovered = bullets.filter(
-      (bullet) => !BANNED.some((rule) => bullet.startsWith(rule.bullet.slice(0, -1))),
-    );
+    // clause ("— see …") that the rule's label does not. Case and spacing are
+    // not part of a claim, so they are not part of the match either.
+    const same = (bullet: string, rule: string): boolean =>
+      norm(bullet).startsWith(norm(rule.slice(0, -1)));
+    const uncovered = bullets.filter((bullet) => !BANNED.some((rule) => same(bullet, rule.bullet)));
     expect(
       uncovered,
       `${INVENTORY} bans these and no rule in this file enforces them:\n` +
@@ -745,7 +765,7 @@ describe('claims the inventory bans', () => {
     ).toEqual([]);
 
     const unexplained = BANNED.filter(
-      (rule) => !bullets.some((bullet) => bullet.startsWith(rule.bullet.slice(0, -1))),
+      (rule) => !bullets.some((bullet) => same(bullet, rule.bullet)),
     ).map((rule) => rule.bullet);
     expect(
       unexplained,
@@ -764,6 +784,19 @@ describe('claims the inventory bans', () => {
       `These patterns do not match their own bullet, so they cannot match a ` +
         `document either:\n` + dead.map((bullet) => `  ${bullet}`).join('\n'),
     ).toEqual([]);
+  });
+
+  it('leaves the true statements next to each banned one writable', () => {
+    // The rules ban claims, not topics: each of these is accurate and must pass.
+    for (const honest of [
+      'Speech recognition never uses the internet.',
+      'Speaking Glass checks for updates automatically, and installs one only when you choose.',
+      'Automatic update checks can be turned off.',
+      'The speech model is downloaded when you choose to install it.',
+    ]) {
+      const tripped = BANNED.filter((rule) => rule.pattern.test(honest)).map((rule) => rule.bullet);
+      expect(tripped, `"${honest}" is accurate`).toEqual([]);
+    }
   });
 
   it('has something to scan', () => {

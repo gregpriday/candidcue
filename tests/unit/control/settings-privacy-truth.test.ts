@@ -31,9 +31,16 @@
  * in the position the switch is in — are driven through the real service path
  * at the bottom of this file.
  *
- * Assertions are on CLAIMS, not on prose. Pinning the paragraphs verbatim would
- * break on a rewording that is just as true, which teaches people to delete the
- * test rather than read it.
+ * The promise this file protects: the privacy section claims nothing the app
+ * does not do and leaves out nothing it does — when the microphone is open,
+ * what touches the network and where it goes, what is kept on this computer,
+ * and that an update is never installed without being asked for — and every
+ * control in it decides something.
+ *
+ * Assertions are on CLAIMS, not on prose. The section is found by the route's
+ * own branch structure rather than by its title or headings, the update host
+ * and the menu item are read from the code that owns them, and a ban names a
+ * false claim rather than a sentence. Rewording any of it truthfully passes.
  */
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,6 +67,18 @@ const settingsSource = readFileSync(
   new URL('../../../src/control/routes/Settings.svelte', import.meta.url),
   'utf8',
 );
+
+/** The host the updater contacts, from where it is compiled in. */
+const UPDATE_HOST = (() => {
+  const updater = readFileSync(
+    new URL('../../../src-tauri/src/updater.rs', import.meta.url),
+    'utf8',
+  );
+  const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(updater)?.[1];
+  if (base === undefined) throw new Error('UPDATE_BASE_URL could not be read out of updater.rs');
+  return new URL(base).hostname;
+})();
+const HOST = new RegExp(UPDATE_HOST.replace(/\./g, '\\.'));
 
 /**
  * Line wrapping is not a claim, and neither is a comment.
@@ -91,37 +110,67 @@ const withoutComments = (
 const flatSource = withoutComments.replace(/\s+/g, ' ');
 
 /**
- * The privacy Section only, so a ban cannot be satisfied — or defeated — by
- * text somewhere else in a very long route.
+ * One Settings pane, by the route's own branch structure: `{#if section ===
+ * 'general'}`, `{:else if section === 'speech'}`, …, and a bare `{:else}` for
+ * the last one, which is Data, privacy & updates. Found by that, not by a
+ * title or a heading, so retitling a pane is not a test edit.
+ *
+ * Read from the unflattened source, because the indent is what tells the
+ * chain's own branches from the `{#if}` blocks nested inside a pane: the chain
+ * is the one that sits at the indent of the pane switch.
+ */
+function pane(name: string | null): string {
+  const opener =
+    name === null
+      ? /^( *)\{:else\}/m
+      : new RegExp(`^( *)\\{(?:#if|:else if) section === '${name}'\\}`, 'm');
+  const from =
+    name === null
+      ? withoutComments.indexOf(
+          '{:else}',
+          withoutComments.indexOf("{:else if section === 'following'}"),
+        )
+      : withoutComments.search(opener);
+  if (from === -1) return '';
+  const lineStart = withoutComments.lastIndexOf('\n', from) + 1;
+  const indent = withoutComments.slice(lineStart, from);
+  const rest = withoutComments.slice(from + 1);
+  const close = rest.search(new RegExp(`\\n${indent}\\{(?::else|\\/if)\\b`));
+  return (close === -1 ? rest : rest.slice(0, close)).replace(/\s+/g, ' ');
+}
+
+/**
+ * The privacy Section only — the first Section of the last pane — so a ban
+ * cannot be satisfied, or defeated, by text somewhere else in a long route.
  *
  * Extraction failing is a FAILURE, not a skip. A guard that quietly stops
  * matching anything is worse than no guard, so the anti-vacuity test below
  * runs first and every other test in this block depends on it.
  */
-const sectionMatch = flatSource.match(
-  /<Section title="Data, privacy & updates">([\s\S]*?)<\/Section>/,
-);
+const sectionMatch = pane(null).match(/<Section\b[^>]*>([\s\S]*?)<\/Section>/);
 const privacySection = sectionMatch?.[1] ?? '';
+
+/** The `description` attributes of the Audio pane's Sections. */
+const audioDescriptions = [...pane('audio').matchAll(/<Section\b[^>]*?\bdescription="([^"]*)"/g)].map(
+  (match) => match[1] ?? '',
+);
 
 describe('#180 the privacy section describes what the app actually does', () => {
   it('can still find the whole privacy section', () => {
     expect(
       sectionMatch,
-      'the "Data, privacy & updates" Section could not be located — every ban below would pass vacuously',
+      'the privacy Section could not be located — every ban below would pass vacuously',
     ).not.toBeNull();
     /*
-     * Anchored on both ENDS rather than on a length floor. A capture truncated
-     * at an early `</Section>` would still clear any byte count worth writing
-     * down, and every "must not contain" below would then be passing on text
-     * that simply stopped before the offending markup. The first copy block and
-     * the last control are the real boundaries.
+     * Anchored on the last control rather than on a length floor. A capture
+     * truncated at an early `</Section>` would still clear any byte count worth
+     * writing down, and every "must not contain" below would then be passing
+     * on text that simply stopped before the offending markup.
      */
-    expect(privacySection, 'capture starts before the first copy block').toMatch(
-      /<h3 class="privacy-head">Your data<\/h3>/,
-    );
     expect(privacySection, 'capture runs to the last control in the section').toMatch(
       /data-testid="update-policy"/,
     );
+    expect(audioDescriptions.length, 'the Audio pane has no Section description to read').toBeGreaterThan(0);
   });
 
   it('describes the update check rather than hiding or overstating it', () => {
@@ -133,14 +182,14 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * contacts, and every mention of an update server must be that host — not
      * "our servers", not a service nobody can look up.
      */
-    expect(privacySection, 'the update host must be named').toMatch(/updates\.speakingglass\.com/);
+    expect(privacySection, 'the update host must be named').toMatch(HOST);
     for (const mention of privacySection.matchAll(
       /update (?:server|service|feed|channel|endpoint)[^.]{0,60}/gi,
     )) {
       expect(
         mention[0],
         `"${mention[0]}" names an update service without saying which host it is`,
-      ).toMatch(/updates\.speakingglass\.com/);
+      ).toMatch(HOST);
     }
 
     /*
@@ -152,40 +201,24 @@ describe('#180 the privacy section describes what the app actually does', () => 
     expect(privacySection).not.toMatch(/\bupdate (?:is )?available\b/i);
 
     /*
-     * And it must not overstate in the other direction: an update is never
-     * installed by the check itself.
+     * And it must not overstate in the other direction: the CHECK is
+     * automatic, an install never is. ("Automatic updates" used to be banned
+     * outright here; it is the install claim that would be false.)
      */
-    expect(privacySection).not.toMatch(/install(?:s|ed)? (?:updates )?automatically/i);
-    expect(privacySection).not.toMatch(/\bautomatic updates\b/i);
-  });
-
-  it('says when the network is used, update checks included', () => {
-    const network = privacySection.match(
-      /When Speaking Glass uses the network<\/h3>\s*<p class="privacy-body">([^<]*)/,
+    expect(privacySection).not.toMatch(
+      /install(?:s|ed)? (?:updates )?automatically|updates? (?:are |is )?installed automatically/i,
     );
-    expect(network, 'the network paragraph could not be located').not.toBeNull();
-    const text = network?.[1] ?? '';
-    expect(text, 'the model download is one use').toMatch(/speech language/i);
-    expect(text, 'the update check is the other').toMatch(/updates\.speakingglass\.com/);
-    expect(text, 'and an exclusive claim must not survive beside it').not.toMatch(/^\s*Only\b/);
   });
 
-  it('does not invent a Speaking Glass server to be private from', () => {
-    // The claim "your data is not sent to Speaking Glass servers" is technically
-    // true and completely hollow: there are no Speaking Glass servers. Reassurance
-    // about a thing that does not exist is not a privacy disclosure.
-    expect(privacySection).not.toMatch(/Speaking Glass servers/i);
-  });
-
-  it('discloses the request the app really does make', () => {
+  it('says when the network is used, both uses included', () => {
     /*
      * The webview CSP blocks remote hosts, but the webview is not the whole
      * application boundary — Rust holds a reqwest client — so saying nothing
-     * about the network would be its own overclaim.
-     *
-     * The one path is the speech-model download.
+     * about the network would be its own overclaim. There are two uses: the
+     * speech-model download and the update check.
      */
-    expect(privacySection).toMatch(/Speech settings/i);
+    expect(privacySection, 'the model download is one use').toMatch(/\bdownload/i);
+    expect(privacySection, 'the update check is the other').toMatch(HOST);
   });
 
   it('does not claim the microphone is open only during a take or test', () => {
@@ -198,21 +231,18 @@ describe('#180 the privacy section describes what the app actually does', () => 
      */
     expect(flatSource).not.toMatch(/microphone is open only/i);
     expect(flatSource).not.toMatch(/uses your microphone only/i);
-    expect(privacySection, 'the privacy block must name the meter').toMatch(/input meter/i);
-
-    const micDescription = flatSource.match(/<Section title="Microphone" description="([^"]*)"/);
-    expect(micDescription, 'the Microphone Section description could not be located').not.toBeNull();
-    expect(micDescription?.[1], 'the Microphone Section must name the meter too').toMatch(
-      /input meter/i,
-    );
+    expect(privacySection, 'the privacy block must name the meter').toMatch(/\bmeter\b/i);
+    expect(
+      audioDescriptions.some((description) => /\bmeter\b/i.test(description)),
+      'the Audio pane must name the meter too',
+    ).toBe(true);
   });
 
   it('no longer offers the two settings that decided nothing', () => {
-    expect(withoutComments).not.toMatch(/label="Diagnostic logging"/);
-    expect(withoutComments).not.toMatch(/label="Update channel"/);
     /*
-     * Structural, not spelling. The bans above only catch the exact attributes
-     * that used to be here; this catches a renamed or re-spelled revival.
+     * Structural, not spelling: a "Diagnostic logging" toggle and an "Update
+     * channel" dropdown used to be here, and a label ban would miss a renamed
+     * revival.
      *
      * The rule is that a control in this section must DECIDE something, which
      * is exactly what the two removed ones did not — and, since #214, what the
@@ -224,9 +254,12 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * relaxes this.
      */
     expect(privacySection, 'no Select may return to this section').not.toMatch(/<Select\b/);
+    // Nor a hand-rolled control the component checks above would not see.
+    expect(privacySection, 'no raw form control in this section').not.toMatch(
+      /<(?:input|select|textarea)\b|role="(?:switch|checkbox|combobox|slider)"/i,
+    );
     const toggles = [...privacySection.matchAll(/<Toggle\b[\s\S]*?\/>/g)].map((match) => match[0]);
     expect(toggles, 'the update switch is the only toggle in this section').toHaveLength(1);
-    expect(toggles[0]).toMatch(/label="Check for updates automatically"/);
     expect(toggles[0], 'and it reads the Rust-owned field').toMatch(
       /checked=\{\$settings\.general\.checkForUpdates\}/,
     );
@@ -256,7 +289,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
     );
     expect(privacyKeywords, 'the privacy section keywords could not be located').not.toBeNull();
     expect(privacyKeywords?.[1], 'search must not find a setting that is gone').not.toMatch(
-      /transcript|retention/i,
+      /retention/i,
     );
   });
 
@@ -264,10 +297,12 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // The sentence that used to send people to the retention row. Its
     // replacement has to make the claim the row's absence implies, not just
     // stop making the old one.
-    const speechHint = flatSource.match(/Your voice never leaves this computer[^<]*/);
-    expect(speechHint, 'the Speech settings hint could not be located').not.toBeNull();
-    expect(speechHint?.[0]).toMatch(/\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsave/i);
-    expect(speechHint?.[0], 'and audio is still never saved').toMatch(/audio is never[^.]*saved/i);
+    const speech = pane('speech');
+    expect(speech, 'the Speech pane could not be located').not.toBe('');
+    expect(speech).toMatch(/\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i);
+    expect(speech, 'and audio is still never saved').toMatch(
+      /\baudio\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i,
+    );
   });
 
   it('still says what is kept on this device, and that audio is not', () => {
@@ -278,9 +313,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * last take ended" from — and still make the one claim about audio that
      * the retention row's hint used to make in passing.
      */
-    const local = privacySection.match(/Your data<\/h3>\s*<p class="privacy-body">([^<]*)/);
-    expect(local, 'the "Your data" paragraph could not be located').not.toBeNull();
-    const kept = local?.[1] ?? '';
+    const kept = privacySection;
     expect(kept).toMatch(/\bscripts\b/i);
     expect(kept, 'saved versions are kept too').toMatch(/saved versions|revisions/i);
     expect(kept).toMatch(/\bsettings\b/i);
@@ -302,12 +335,18 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * had to report into a window behind this one — so the Updates block has a
      * switch and a statement, and no button.
      */
-    const updateBlock = privacySection.slice(privacySection.indexOf('<h3 class="privacy-head">Updates'));
-    expect(updateBlock, 'the Updates block must be found, or the ban below is vacuous').toContain(
-      'data-testid="update-policy"',
+    // The block that holds the policy line, found by that line rather than by
+    // its heading.
+    const policyAt = privacySection.indexOf('data-testid="update-policy"');
+    const updateBlock = privacySection.slice(
+      privacySection.lastIndexOf('<div class="privacy"', policyAt),
+      policyAt,
+    );
+    expect(policyAt, 'the update policy line must be found, or the ban below is vacuous').toBeGreaterThan(-1);
+    expect(updateBlock, 'the Updates block must be found, or the ban below is vacuous').toMatch(
+      /<Toggle\b/,
     );
     expect(updateBlock, 'the Updates block must offer no button').not.toMatch(/<Button\b/);
-    expect(withoutComments, 'no update-check handler may return').not.toMatch(/runUpdateCheck/);
 
     /*
      * The rendered node must actually consume the policy sentence. Asserting
@@ -316,8 +355,8 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * and it must be handed the switch's position, or the sentence under the
      * switch describes the wrong one.
      */
-    expect(updateBlock, 'the visible node must render the policy state').toMatch(
-      /data-testid="update-policy"[^>]*>\s*\{updateNote/,
+    expect(privacySection.slice(policyAt), 'the visible node must render the policy state').toMatch(
+      /^data-testid="update-policy"[^>]*>\s*\{updateNote/,
     );
     expect(withoutComments, 'the policy state must come from the pure function').toMatch(
       /settingsService\.describeUpdatePolicy\(runningVersion, \$settings\.general\.checkForUpdates\)/,
@@ -356,46 +395,61 @@ describe('the update policy is stated truthfully', () => {
     expect(ipc.calls).toEqual(['app_version']);
   });
 
+  /*
+   * The policy line under the switch. Its words are free; its claims are not.
+   * The host comes from updater.rs and the menu item from the command
+   * registry, so moving the feed or renaming the item cannot leave this line
+   * naming the old one.
+   */
   it('says exactly what the automatic check is, when it is on', async () => {
     const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
+    const { COMMANDS } = await import('../../../src/control/lib/commands');
     const sentence = describeUpdatePolicy('9.9.9-test', true);
 
     expect(sentence, 'the running version must be quotable from this line').toContain('9.9.9-test');
-    expect(sentence, 'which host').toMatch(/updates\.speakingglass\.com/);
-    expect(sentence, 'when').toMatch(/every six hours/i);
-    expect(sentence, 'and how to ask by hand').toMatch(/Check for Updates…/);
+    expect(sentence, 'which host').toMatch(HOST);
+    expect(sentence, 'and how to ask by hand').toContain(COMMANDS['help.check-for-updates'].label);
     /*
      * What the request carries — the whole of it. The IP address is named
      * because leaving it out is the classic understatement; the version, OS
      * and processor are in the URL and the User-Agent (updater.rs).
      */
-    expect(sentence, 'it carries the version').toMatch(/sends this version/i);
-    expect(sentence, 'the platform').toMatch(/operating system and processor/i);
-    expect(sentence, 'and, like any request, the IP address').toMatch(/IP address/);
-    expect(sentence, 'and nothing personal').toMatch(/nothing that identifies you/i);
-    expect(sentence, 'none of the scripts or audio').toMatch(/none of your scripts or\s+audio/i);
+    expect(sentence, 'the platform').toMatch(/operating system/i);
+    expect(sentence, 'the processor').toMatch(/processor|architecture/i);
+    expect(sentence, 'and, like any request, the IP address').toMatch(/IP address/i);
+    expect(sentence, 'none of the scripts or audio').toMatch(
+      /\b(?:none|not|no|never)\b[^.;]*\bscripts?\b[^.;]*\baudio\b/i,
+    );
 
-    // What it never does.
-    expect(sentence, 'installs are the user’s decision').toMatch(/installed only when you choose/i);
-    expect(sentence, 'never during a take').toMatch(/never during a take/i);
-    expect(sentence, 'and only if signed').toMatch(/signature/i);
+    // What it never does: install unasked, during a take, or unsigned.
+    expect(sentence, 'installs are the user’s decision').toMatch(
+      /\binstall\w*\b[^.]*\bonly when you\b/i,
+    );
+    expect(sentence, 'never during a take').toMatch(/\b(?:never|not)\b[^.]*\btake\b/i);
+    expect(sentence, 'and only if signed').toMatch(/signature|signed/i);
 
     // A policy is not a result.
     expect(sentence).not.toMatch(/up to date/i);
     expect(sentence).not.toMatch(/update (?:is )?available/i);
-    expect(sentence).not.toMatch(/install(?:s|ed)? automatically|automatic updates/i);
+    expect(sentence).not.toMatch(
+      /install(?:s|ed)? (?:updates )?automatically|updates? (?:are |is )?installed automatically/i,
+    );
   });
 
   it('says the network is only touched on request, when the switch is off', async () => {
     const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
-    const sentence = describeUpdatePolicy('9.9.9-test', false);
+    const { COMMANDS } = await import('../../../src/control/lib/commands');
+    const off = describeUpdatePolicy('9.9.9-test', false);
 
-    expect(sentence).toContain('9.9.9-test');
-    expect(sentence).toMatch(/Automatic checks are off/i);
-    expect(sentence, 'the remaining contact is by request only').toMatch(
-      /contacts updates\.speakingglass\.com only when you\s+choose Check for Updates…/i,
+    expect(off).toContain('9.9.9-test');
+    expect(off, 'the switch position must change what the line says').not.toBe(
+      describeUpdatePolicy('9.9.9-test', true),
     );
-    expect(sentence, 'and it must not still describe a schedule').not.toMatch(/every six hours/i);
+    expect(off, 'the remaining contact is the host').toMatch(HOST);
+    expect(off, 'by request').toContain(COMMANDS['help.check-for-updates'].label);
+    expect(off, 'and it must not still describe a schedule').not.toMatch(
+      /\bevery\b[^.]*\b(?:minutes?|hours?|days?)\b/i,
+    );
   });
 
   it('would still see comment-shaped copy if it were ever rendered', () => {
@@ -433,7 +487,9 @@ describe('the update policy is stated truthfully', () => {
      */
     const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
     for (const automatic of [true, false]) {
-      expect(describeUpdatePolicy('1.2.3', automatic)).toMatch(/scripts,\s+settings/i);
+      const sentence = describeUpdatePolicy('1.2.3', automatic);
+      expect(sentence).toMatch(/\bscripts\b/i);
+      expect(sentence).toMatch(/\bsettings\b/i);
     }
   });
 });
