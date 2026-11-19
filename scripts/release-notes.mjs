@@ -195,8 +195,9 @@ if (prose.length < 120) {
 const stub =
   prose.match(/\b(TODO|T\.?B\.?D\.?|FIXME|XXX|coming soon|placeholder)\b/i) ??
   prose.match(/\bDRAFT\b/) ??
-  // …or as a heading, where "### Draft notes" is a marker and never a note.
-  body.match(/^ {0,3}#{1,6}[ \t].*\bdraft\b.*$/im);
+  // …or as a heading that only says so ("### Draft", "## Draft notes"), which
+  // is a marker and never a note. "### Draft recovery" is a note.
+  prose.match(/^ {0,3}#{1,6}[ \t]+\[?draft\]?(?:[ \t]+(?:release[ \t]+)?notes?)?[ \t]*#*[ \t]*$/im);
 if (stub) {
   fail(`the "## ${wanted.title}" section still contains "${stub[0]}".`);
 }

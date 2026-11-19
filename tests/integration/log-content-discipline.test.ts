@@ -148,9 +148,16 @@ describe('nothing logs the user’s words', () => {
         'Say what the bundle is designed to leave out, and tell the reader to ' +
         'look before they send it.',
     ).not.toMatch(/\bnever\b[^.]*\b(script|transcript|prose|words)/i);
-    expect(copy, 'nor in other words').not.toMatch(
-      /\b(?:guarantee[sd]?|always (?:leaves? out|excludes?)|cannot contain|can never)\b[^.]*\b(script|transcript|prose|words)/i,
+    // Nor in other words, in either order — "guaranteed to exclude your
+    // scripts", "your scripts are guaranteed to stay out" — while a sentence
+    // that disclaims the guarantee stays legal.
+    const absolutes = copy.split('.').filter(
+      (sentence) =>
+        /\b(script|transcript|prose|words)/i.test(sentence) &&
+        /\b(?:guarantee[sd]?|always (?:leaves? out|excludes?)|cannot contain|can never)\b/i.test(sentence) &&
+        !/\b(?:not|no|cannot) (?:be )?guarantee/i.test(sentence),
     );
+    expect(absolutes, 'the exclusion copy guarantees what it can only intend').toEqual([]);
 
     expect(
       copy,

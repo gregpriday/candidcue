@@ -202,10 +202,12 @@ export const RECOGNISER_COPY = {
  * is returned unchanged.
  */
 export function withoutTakeAdvice(copy: string): string {
+  // Longest first, so a clause that begins with a shorter one goes whole.
+  const clauses = (Object.values(RECOGNISER_COPY) as RecogniserCopy[])
+    .map((parts) => scopeToTake(parts.inTake))
+    .sort((a, b) => b.length - a.length);
   let shown = copy;
-  for (const parts of Object.values(RECOGNISER_COPY) as RecogniserCopy[]) {
-    shown = shown.split(scopeToTake(parts.inTake)).join(' ');
-  }
+  for (const clause of clauses) shown = shown.split(clause).join(' ');
   return shown === copy ? copy : shown.replace(/\s+/g, ' ').trim();
 }
 

@@ -294,20 +294,17 @@ const norm = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').t
 
 /**
  * Whether `text` makes a banned claim: the pattern matches, and — for a rule
- * whose denial is the accurate statement — not inside a sentence that says
- * "not", "never" or "no" before it.
+ * whose denial is the accurate statement — the two words just before it do not
+ * negate it ("never installs…", "doesn’t install…"). Only those two words: a
+ * "no" earlier in the sentence ("No action is needed because it installs
+ * updates automatically") does not deny the claim after it.
  */
 function makes(text: string, rule: { pattern: RegExp; unlessNegated?: boolean }): boolean {
   const global = new RegExp(rule.pattern.source, rule.pattern.flags.replace('g', '') + 'g');
   for (const match of text.matchAll(global)) {
     if (!rule.unlessNegated) return true;
-    const sentenceStart = Math.max(
-      text.lastIndexOf('.', match.index),
-      text.lastIndexOf(';', match.index),
-      text.lastIndexOf('\n', match.index),
-    );
-    const before = text.slice(sentenceStart + 1, match.index + match[0].length);
-    if (!/(?:\bnot|\bnever|\bno|n't|\bnothing)\b/i.test(before)) return true;
+    const before = text.slice(0, match.index).split(/\s+/).filter(Boolean).slice(-2).join(' ');
+    if (!/(?:\bnot|\bnever|n['’]t)\b/i.test(before)) return true;
   }
   return false;
 }
@@ -725,7 +722,7 @@ describe('claims the inventory bans', () => {
     // The whole app, not a part of it: "speech recognition never uses the
     // internet" is true and must stay writable.
     {
-      pattern: /\b(?:Speaking Glass|the app|this app) never uses the internet/i,
+      pattern: /\b(?:Speaking Glass|the app|this app)(?: itself)? never uses the internet/i,
       bullet: '"Speaking Glass never uses the internet."',
     },
     { pattern: /nothing (ever )?leaves your/i, bullet: '"Nothing ever leaves your computer."' },
@@ -736,7 +733,7 @@ describe('claims the inventory bans', () => {
     // sentence that negates it does not count.
     {
       pattern:
-        /\b(?:updates? (?:are |is )?(?:installed|install(?:s)?) (?:themselves |itself )?automatically|install(?:s|ed)? (?:updates? )?automatically|automatically install(?:s|ed)?|auto-?install(?:s|ed)?|updates? itself automatically|automatic updates?\b[^.]*\bwithout (?:asking|you))/i,
+        /\b(?:updates? (?:are |is )?(?:installed|install(?:s)?) (?:themselves |itself )?automatically|install(?:s|ed)? (?:updates? )?automatically|automatically install(?:s|ed)? (?:updates?|new versions?)|auto-?install(?:s|ed)? (?:updates?|new versions?)|updates? itself automatically|automatic updates?\b[^.]*\bwithout (?:asking|you))/i,
       bullet: '"Updates install automatically."',
       unlessNegated: true,
     },
@@ -816,6 +813,7 @@ describe('claims the inventory bans', () => {
       'Speaking Glass auto-installs updates.',
       'Speaking Glass updates itself automatically.',
       'Automatic updates keep the app current without asking.',
+      'No action is required because Speaking Glass installs updates automatically.',
     ]) {
       expect(makes(claim, rule), claim).toBe(true);
     }
@@ -831,6 +829,8 @@ describe('claims the inventory bans', () => {
       'Speaking Glass never installs updates automatically.',
       'Updates are not installed automatically; you choose when.',
       "Speaking Glass doesn't install updates automatically.",
+      'Speaking Glass doesn’t install updates automatically.',
+      'A speech model auto-installs after you approve its download.',
     ]) {
       const tripped = BANNED.filter((rule) => makes(honest, rule)).map((rule) => rule.bullet);
       expect(tripped, `"${honest}" is accurate`).toEqual([]);

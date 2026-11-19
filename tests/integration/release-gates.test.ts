@@ -2171,6 +2171,7 @@ describe('the release notes gate refuses what it exists to refuse', () => {
   // note; only the capitalised marker is a stub.
   it('reads "draft" in ordinary prose as prose', () => {
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nRecovers a draft script. ${WRITTEN}\n`).status).toBe(0);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\n### Draft recovery\n\n${WRITTEN}\n`).status).toBe(0);
   });
 
   /*

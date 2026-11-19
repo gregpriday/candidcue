@@ -451,6 +451,15 @@ describe('recogniser copy stays true on the surface with no take', () => {
     expect(voiceLiveSource, 'the mic test no longer routes failures through describeError').toMatch(
       /events\.onError\(describeError\(/,
     );
+    // And Settings shows that failure with the take's advice taken out.
+    const settings = readFileSync(
+      new URL('../../../src/control/routes/Settings.svelte', import.meta.url),
+      'utf8',
+    );
+    expect(settings, 'Settings must strip take advice from the mic-test error').toMatch(
+      /withoutTakeAdvice\(micTestError\)/,
+    );
+    expect(settings, 'and show only the stripped text').not.toMatch(/text: micTestError\b/);
   });
 
   it('is the composition of its parts', () => {
@@ -463,7 +472,10 @@ describe('recogniser copy stays true on the surface with no take', () => {
     // The composer keeps the clause and says it is about a take.
     const scoped = scopeToTake('clause');
     expect(scoped).toContain('clause');
-    expect(scoped.replace('clause', ''), 'the scope must name the take').toMatch(/\btake\b/i);
+    const scope = scoped.slice(0, scoped.indexOf('clause'));
+    expect(scope, 'the scope must name the take').toMatch(/\btake\b/i);
+    // …in the same sentence as the clause, not as a sentence of its own.
+    expect(scope, 'the scope is a separate sentence').not.toMatch(/[.!?]/);
     expect(TAKE_ONLY.test('Tap A to keep the script rolling.')).toBe(true);
 
     for (const code of RECOGNISER_CODES) {
@@ -484,14 +496,20 @@ describe('recogniser copy stays true on the surface with no take', () => {
     // Settings' microphone test shows the fault and the repair, without the
     // fallback a take alone has.
     for (const code of RECOGNISER_CODES) {
+      const { fault } = RECOGNISER_COPY[code];
+      const repair = (RECOGNISER_COPY[code] as { repair?: string }).repair;
       const shown = withoutTakeAdvice(copyForErrorCode(code));
-      expect(shown.startsWith(RECOGNISER_COPY[code].fault), code).toBe(true);
+      // Exactly the fault and the repair: nothing of the clause left behind,
+      // nothing of the rest taken with it.
+      expect(shown, code).toBe([fault, repair].filter((part) => part !== undefined).join(' '));
       expect(shown, `${code} still offers take-only advice with no take`).not.toMatch(TAKE_ONLY);
     }
     // …including when the test puts its own sentence in front of the copy.
     const prefixed = `The transcription test could not start. ${copyForErrorCode('STT_ENGINE_ERROR')}`;
     expect(withoutTakeAdvice(prefixed)).not.toMatch(TAKE_ONLY);
-    expect(withoutTakeAdvice(prefixed)).toContain(RECOGNISER_COPY.STT_ENGINE_ERROR.fault);
+    expect(withoutTakeAdvice(prefixed)).toBe(
+      `The transcription test could not start. ${RECOGNISER_COPY.STT_ENGINE_ERROR.fault}`,
+    );
     // Any other copy passes through untouched.
     expect(withoutTakeAdvice(copyForErrorCode('NETWORK_OFFLINE'))).toBe(
       copyForErrorCode('NETWORK_OFFLINE'),

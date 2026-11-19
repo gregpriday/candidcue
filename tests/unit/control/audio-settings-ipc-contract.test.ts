@@ -217,19 +217,23 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
     );
     expect(missedSpeech.symptom).not.toMatch(/\b(?:fan|noise|people|nearby)\b/i);
 
-    // And the screen gives that advice: each direction's word comes before its
-    // own symptom, in the same clause. Read here rather than through the
-    // module's composer, so an inverted composer fails too.
-    const description = VAD_SENSITIVITY_COPY.description.toLowerCase();
-    const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // And the screen gives that advice: the clause that names each symptom
+    // names its direction, not the other one, and does not negate it. Read
+    // here rather than through the module's composer, so a composer that
+    // inverts or negates the advice fails too. Either order reads: "lower it
+    // if a fan…" and "if a fan…, lower it".
+    const clauses = VAD_SENSITIVITY_COPY.description.toLowerCase().split(/[;.]/);
     for (const advice of [falseTriggers, missedSpeech]) {
-      expect(description).toMatch(
-        new RegExp(`\\b${advice.direction}\\b[^;.]*?${escape(advice.symptom.toLowerCase())}`),
-      );
+      const clause = clauses.find((text) => text.includes(advice.symptom.toLowerCase()));
+      expect(clause, `the description does not give the advice for "${advice.symptom}"`).toBeDefined();
       const other = advice.direction === 'lower' ? 'raise' : 'lower';
-      expect(description).not.toMatch(
-        new RegExp(`\\b${other}\\b[^;.]*?${escape(advice.symptom.toLowerCase())}`),
-      );
+      expect(clause).toMatch(new RegExp(`\\b${advice.direction}\\b`));
+      expect(clause).not.toMatch(new RegExp(`\\b${other}\\b`));
+      // The symptom may say "not" ("does not register"); the advice may not.
+      expect(
+        clause?.replace(advice.symptom.toLowerCase(), ''),
+        'the advice is negated',
+      ).not.toMatch(/\b(?:not|never|don't|avoid)\b/);
     }
   });
 
