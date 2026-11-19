@@ -12,7 +12,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { openScript } from './fixtures/library';
-import { hashString } from '../../../src/shared/markdown/hash';
+import { sourceHash } from '../../../src/shared/markdown/hash';
 
 const SCRIPT = {
   id: '44844844-0448-4448-8448-448448448448',
@@ -29,9 +29,8 @@ const HISTORY = [
     id: 'session-448-0001',
     sessionGeneration: 3,
     scriptId: SCRIPT.id,
-    // The compiler's own hash: it hashes the source with any leading BOM
-    // removed, and the seed has none.
-    scriptSourceHash: hashString(SCRIPT.source),
+    // The compiler's own hash of the seeded source.
+    scriptSourceHash: sourceHash(SCRIPT.source),
     startedAt: '2026-11-18T09:00:00.000Z',
     endedAt: '2026-11-18T09:01:10.000Z',
     mode: 'voice',

@@ -27,7 +27,7 @@ import type {
   SpokenToken,
   SpokenTokenRange,
 } from '../contracts';
-import { hashString, shortHash } from './hash';
+import { hashString, shortHash, sourceHash } from './hash';
 import { DEFAULT_WORDS_PER_MINUTE } from '../speaking-rate';
 import {
   BYTE_ORDER_MARK,
@@ -156,7 +156,6 @@ function shiftPastByteOrderMark(node: MdNode): void {
   for (const child of node.children ?? []) shiftPastByteOrderMark(child);
 }
 
-const LEADING_BYTE_ORDER_MARKS = /^\uFEFF+/;
 
 function shiftPoint(point: MdPoint): MdPoint {
   const shifted: MdPoint = {
@@ -2099,7 +2098,7 @@ function finalize(
     // The editor can hold a pasted one that the saved file, and so the take's
     // compile, does not; the stale-editor gate compares these two hashes and
     // must not call that a changed script (#247).
-    sourceHash: hashString(source.replace(LEADING_BYTE_ORDER_MARKS, '')),
+    sourceHash: sourceHash(source),
     settingsHash: hashString(
       JSON.stringify({
         readHeadings: state.readHeadings,

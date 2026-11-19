@@ -58,6 +58,7 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
     type StartPoint,
   } from '../lib/take-start-point';
   import { partAt } from '../../shared/markdown/parts';
+  import { sourceHash } from '../../shared/markdown/hash';
   import { listSessionRecords } from '../services/session-records';
   import { session } from '../stores/session';
   import { takeDestination, watchTakeDestination } from '../stores/destination';
@@ -991,21 +992,20 @@ import type { PresentationMode } from '../services/settings-types';
   });
 
   /*
-   * Only against a compile of the text on screen. Typing advances the editor's
-   * revision at once while the compile follows a debounce later, and in that
-   * window the previous compile still matches the recorded source — so the row
-   * would quote a sentence the presenter has just deleted.
+   * The compiler's hash of the text on screen, so the row is offered only from
+   * a compile of that text: the compile trails typing by a debounce. Through
+   * its own `$derived`, so it is recomputed when the text changes and not on
+   * every other editor update.
    */
-  const compileIsCurrent = $derived(
-    $editor.scriptId === scriptId &&
-      !$editor.loading &&
-      $compiled.scriptId === scriptId &&
-      $compiled.status === 'ready' &&
-      $compiled.editorRevision === $editor.editorRevision,
+  const editorSource = $derived(
+    $editor.scriptId === scriptId && !$editor.loading ? $editor.source : null,
   );
+  const onScreenSourceHash = $derived(editorSource === null ? null : sourceHash(editorSource));
 
   const lastEndingPoint = $derived(
-    compileIsCurrent ? lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput) : null,
+    $compiled.scriptId === scriptId
+      ? lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput, onScreenSourceHash)
+      : null,
   );
 
   const presentStartItems = $derived(
