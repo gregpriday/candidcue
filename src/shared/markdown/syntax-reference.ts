@@ -29,8 +29,8 @@
  * each so there is little in them to go stale. Syntax inside prose sits in
  * backticks, which the page sets as code.
  *
- * The retired coaching syntax is deliberately absent; it is being removed, and
- * documenting it would invite new scripts to depend on it.
+ * The retired coaching syntax is deliberately absent: documenting it would
+ * invite new scripts to depend on it.
  */
 import type { CompiledBlock, CompileOptions } from '../contracts';
 import { PERFORMANCE_CUE_LABELS } from '../performance-view';

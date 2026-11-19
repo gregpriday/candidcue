@@ -102,7 +102,7 @@ export interface HoldStatusInput {
   hasFault: boolean;
   /** The name of that condition. Never a code, never "something went wrong". */
   faultLabel: string | null;
-  /** §48. Voice following is switched off; the presenter is driving. */
+  /** Voice following is switched off; the presenter is driving. */
   followPaused?: boolean;
   /**
    * The fixed-pace transport is already carrying the script.
@@ -348,7 +348,7 @@ export function resolveHoldStatus(
    *
    * BELOW the named fault, deliberately. A microphone that has stopped working
    * is still worth naming while following is off — transcription stays
-   * connected either way (§48), so the fault is still true, still actionable,
+   * connected either way, so the fault is still true, still actionable,
    * and still the more urgent of the two.
    */
   if (input.followPaused === true && input.autoScrollRunning !== true) {

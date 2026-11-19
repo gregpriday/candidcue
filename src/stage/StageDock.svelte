@@ -2,43 +2,14 @@
   The session dock — one quiet control location, bottom left.
 
   ---------------------------------------------------------------------------
-  THE DESKTOP REFINEMENT'S §13.2 CODE REVIEW: NOTHING CHANGED HERE, ON PURPOSE
-
-  Read "review", not "audit". What happened was a reading of this file against
-  §13.2's checklist; what §13.2 actually asks for is verification on a real
-  panel at a real viewing distance, and that has not happened. The verdicts
-  below are therefore reasoned, not measured.
+  NOT SUBJECT TO THE DESK'S DENSITY
   ---------------------------------------------------------------------------
-  The desktop-structure pass reduced radii, control heights and shadow use
-  across the whole control window. It stopped at this file, and the reason is
-  written into the review itself: §29.6 says to change stage appearance only
-  where real-device testing demonstrates a problem, and §31.5 lists weakening
-  the stage architecture among the changes that would make the product worse.
-
-  What the review found, and why each item stands:
-
-    40px buttons        §13.2 asks whether they remain usable viewed directly
-                        at the rig. They are sized for exactly that — see the
-                        note below on the 48px pointer target claimed by a
-                        pseudo-element — and shrinking them to match the
-                        workspace's new 32px would be applying a density rule
-                        to the one surface §31.3 exempts from it.
-
-    12px radius         §13.2 offers a flatter dock "if the current control
-                        group looks too pill-like". At 12px on a 40px square
-                        this is a squircle rather than a capsule, and deciding
-                        it looks wrong needs eyes on a real panel at a real
-                        viewing distance. Nobody has had those since the
-                        question was asked.
-
-    the chrome shadow   §9.3 keeps shadows for genuinely floating things. This
-                        dock floats over moving text on glass, which is the
-                        clearest case for one in the product.
-
-  So the honest state is: reviewed, unchanged, and waiting on the one kind of
-  evidence that could justify changing it. The control window's tokens no
-  longer reach in here — `--stage-chrome-*` are the stage's own — so a future
-  density pass cannot alter this surface by accident.
+  The dock's 40px controls, 44px hit targets, 12px radius and chrome shadow
+  are sized for a panel read at the rig, not for the desk. The control
+  window's tokens do not reach in here — `--stage-chrome-*` are the stage's
+  own — so a density pass over the desk cannot alter this surface by accident.
+  Change any of them only after checking it on a real panel at reading
+  distance.
 
   ---------------------------------------------------------------------------
   WHY IT IS ONE THING AND WHY IT IS UNMIRRORED
@@ -187,12 +158,12 @@
      * it" — see the note at the button.
      */
     onpresentationtoggle?: () => void;
-    /** §48. Voice following is off; the presenter is driving the script. */
+    /** Voice following is off; the presenter is driving the script. */
     followPaused?: boolean;
     /** The follow control was activated. The host owns the decision (§16.9). */
     onfollowtoggle?: () => void;
     /**
-     * §practice. This reading is a rehearsal, so say so on the way out.
+     * A practice: this reading is a rehearsal, so say so on the way out.
      *
      * The only thing it changes here is the WORDS on the exit control and its
      * confirmation, and that is not decoration: "End take?" over a rehearsal
@@ -1417,9 +1388,6 @@
    * likely to be resting; `display: none` would take it out of the tab order
    * and collapse the row, so the buttons would shuffle sideways against each
    * other every time one of them changed state.
-   *
-   * The audio readout is no longer downstream of any of this — it is first in
-   * the row — but the rule stands for the cluster itself.
    */
   .dock-button[data-hidden='true'] {
     opacity: 0;

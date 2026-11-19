@@ -9,9 +9,9 @@
  * system font installed mid-session, a font file that failed to load and put
  * the humanist fallback on the glass — and each of those re-wraps every line
  * while every declared fingerprint field holds still. A rebuild with an
- * unchanged fingerprint is classified coverage-only, so the §33 semantic
- * re-anchor is skipped and the presenter's position is carried across a layout
- * that moved underneath it.
+ * unchanged fingerprint is classified coverage-only, so the companion §33
+ * semantic re-anchor is skipped and the presenter's position is carried across
+ * a layout that moved underneath it.
  *
  * `fontHash` is the §7.2 contract's term for that, and this is what fills it.
  *

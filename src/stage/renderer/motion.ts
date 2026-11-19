@@ -86,7 +86,7 @@ export type TransitionClass =
   | 'instant';
 
 /**
- * A bound stated in lines, met by the bound the panel sets (§30).
+ * A bound stated in lines, met by the bound the panel sets.
  *
  * `resolveLineLimitPx` already refuses an implausible pitch by clamping the
  * line-relative answer into a band around the pixel default, which catches a
@@ -159,8 +159,8 @@ export function classifyTransition(opts: {
 }): TransitionClass {
   if (opts.reducedMotion) return 'instant';
   /*
-   * §30.5. An accepted retake is a walk at every distance, and the branch below
-   * never sees it.
+   * An accepted retake is a walk at every distance, and the
+   * branch below never sees it.
    *
    * The threshold under this one asks "is this correction small enough to be
    * worth showing?", which is the right question for a FORWARD jump: the text

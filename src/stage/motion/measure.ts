@@ -45,11 +45,11 @@ export interface MeasureStageOptions {
   blocks: readonly CompiledBlock[];
   fallbackLineHeightPx: number;
   /**
-   * Whether the plane is inside an active mirror transform (§16.7). MUST be
-   * passed: `getBoundingClientRect()` reports VIEWPORT-space rects, which
-   * include every ancestor transform, so under `scaleY(-1)` later lines have
-   * DECREASING tops and the whole document measures upside down. Mirror mode is
-   * a core teleprompter feature (glass rigs), not an edge case.
+   * Whether the plane is inside an active mirror transform (primary §16.7).
+   * MUST be passed: `getBoundingClientRect()` reports VIEWPORT-space rects,
+   * which include every ancestor transform, so under `scaleY(-1)` later lines
+   * have DECREASING tops and the whole document measures upside down. Mirror
+   * mode is a core teleprompter feature (glass rigs), not an edge case.
    */
   mirrorX?: boolean;
   mirrorY?: boolean;
@@ -229,7 +229,10 @@ export interface FingerprintInput {
   viewportWidthPx: number;
   viewportHeightPx: number;
   displayScaleFactor: number;
-  /** Actual rendered top padding, px — NOT a constant (§16 compact viewports). */
+  /**
+   * Actual rendered top padding, px — NOT a constant: the fingerprint has to
+   * see the actual layout input (companion §7.2).
+   */
   paddingTopPx: number;
   /** Actual rendered bottom padding, px. */
   paddingBottomPx: number;
@@ -241,7 +244,7 @@ export interface FingerprintInput {
    *
    * `stageMode === 'diagnostic'` used to be the only way to reach the rehearsal
    * projection, so this was derived from the settings alone. A practice
-   * (§practice) reaches it from a per-take flag that no settings field records,
+   * reaches it from a per-take flag that no settings field records,
    * and a fingerprint that cannot see it would call a table and the words REFER
    * TO TABLE the same layout — the exact omission `IDENTIFIES_LAYOUT` exists to
    * prevent. The caller that renders the document is the one that knows, so it
