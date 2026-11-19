@@ -269,7 +269,10 @@ const RESOLVE_AS = [
  * `/index.*` suffixes below finds a real file inside it.
  */
 function resolvesFrom(fromFile, spec) {
-  const base = resolve(dirname(join(ROOT, fromFile)), spec);
+  // A Vite query (`?raw`, `?url`) changes how a file is loaded, not which
+  // file: `huge.md?raw` still needs `huge.md` to be there, and it is checked
+  // exactly like any other path once the query is off.
+  const base = resolve(dirname(join(ROOT, fromFile)), spec.replace(/\?[a-z]+$/, ''));
   return RESOLVE_AS.some((suffix) => {
     const candidate = base + suffix;
     try {
