@@ -75,7 +75,9 @@ fn main() {
     // `logs/HEAD` is this worktree's reflog, appended on every commit,
     // checkout and reset — including a commit to a branch that only existed in
     // `packed-refs`, which creates a loose ref nothing was watching.
-    for name in ["HEAD", "logs/HEAD", "packed-refs"] {
+    // `index` changes on every commit, reset and (un)stage whatever the ref
+    // storage or reflog settings, and the status below never writes it.
+    for name in ["HEAD", "logs/HEAD", "packed-refs", "index"] {
         if let Some(path) = git_path(&manifest, name) {
             watch(&path);
         }
@@ -90,9 +92,27 @@ fn main() {
     // the repository does not change a measurement, and calling it dirty
     // would teach people to ignore the flag. A status that cannot be read is
     // dirty: clean is a claim, and nothing here can make it.
-    let mut status = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
+    //
+    // `git status` does not look at a file flagged assume-unchanged or
+    // skip-worktree (`core.ignoreStat` sets the first on its own), so an edit
+    // to one would build into a binary stamped clean. Any such flag on an
+    // input is dirty too: `ls-files -v` prints it as a lowercase or `S` tag.
+    let mut status = vec![
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+        "--",
+    ];
     status.extend_from_slice(INPUTS);
-    let dirty = git(&crates, &status).is_none_or(|s| !s.is_empty());
+    let mut flags = vec!["ls-files", "-v", "--"];
+    flags.extend_from_slice(INPUTS);
+    let changed = git(&crates, &status).is_none_or(|s| !s.is_empty());
+    let unwatched = git(&crates, &flags).is_none_or(|s| {
+        s.lines()
+            .any(|l| l.starts_with(|c: char| c.is_ascii_lowercase() || c == 'S'))
+    });
+    let dirty = changed || unwatched;
 
     println!("cargo:rustc-env=CC_BENCH_COMMIT={commit}");
     println!("cargo:rustc-env=CC_BENCH_DIRTY={}", if dirty { "1" } else { "0" });

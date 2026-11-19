@@ -666,24 +666,26 @@ fn provenance_problems(
 
     // Scripts are read from the checkout, not the build, so one binary can
     // replay against two different texts. Every scoring fixture's script must
-    // be recorded by both tiers, with the same text; a diagnostic's script is
-    // not the claim's business, exactly as its capture record is not.
-    let scoring_scripts: std::collections::BTreeSet<&str> = tiers
-        .iter()
-        .flat_map(|(_, _, runs)| runs.iter())
-        .map(|run| role_of(run))
-        .collect();
-    for script in scoring_scripts {
-        let digests: Vec<Option<&String>> =
-            tiers.iter().map(|(_, prov, _)| prov.scripts.get(script)).collect();
+    // be recorded by every tier that scored it, with the same text; a
+    // diagnostic's script is not the claim's business, exactly as its capture
+    // record is not.
+    let scored: std::collections::BTreeSet<&String> =
+        tiers.iter().flat_map(|(_, _, runs)| runs.iter()).collect();
+    for run in scored {
+        let scored_by: Vec<&Provenance> = tiers
+            .iter()
+            .filter(|(_, _, runs)| runs.contains(run))
+            .map(|(_, prov, _)| *prov)
+            .collect();
+        let digests: Vec<Option<&String>> = scored_by.iter().map(|p| p.scripts.get(run)).collect();
         if digests.iter().any(Option::is_none) {
             note(format!(
-                "the replay did not record the text of the script {script}, so \
-                 nothing says what its fixtures were scored against"
+                "the replay did not record the script text {run} was scored \
+                 against"
             ));
         } else if digests.windows(2).any(|w| w[0] != w[1]) {
             note(format!(
-                "Tier B and Tier C replayed different text for the script {script}"
+                "Tier B and Tier C scored {run} against different script text"
             ));
         }
     }
@@ -1341,19 +1343,14 @@ mod tests {
             app_tokens: false,
             source,
             layouts,
-            scripts: [
-                "brands",
-                "figures",
-                "longform",
-                "names",
-                "product-update",
-                "refrain",
-                "starter",
-                "technical",
-            ]
-            .into_iter()
-            .map(|s| (s.to_string(), format!("digest of {s}")))
-            .collect(),
+            scripts: english_corpus()
+                .into_iter()
+                .chain(["starter__exact__qwen".to_string()])
+                .map(|run| {
+                    let script = role_of(&run).to_string();
+                    (run, format!("digest of {script}"))
+                })
+                .collect(),
         }
     }
 
@@ -1881,26 +1878,29 @@ mod tests {
             .as_mut()
             .unwrap()
             .scripts
-            .insert("starter".into(), "an edited starter".into());
-        assert!(problems_of("en", &b, &c).contains("different text for the script starter"));
+            .insert("starter__retake__gemini".into(), "an edited starter".into());
+        assert!(problems_of("en", &b, &c)
+            .contains("scored starter__retake__gemini against different script text"));
 
         // Not recorded at all — by one tier, or by both.
         for both in [false, true] {
             let (mut b, mut c) = saved(&english_corpus(), &m, &m);
-            c.provenance.as_mut().unwrap().scripts.remove("names");
+            c.provenance.as_mut().unwrap().scripts.remove("names__exact__xai");
             if both {
                 b.provenance.as_mut().unwrap().scripts.clear();
             }
-            assert!(problems_of("en", &b, &c).contains("did not record the text of the script names"));
+            assert!(problems_of("en", &b, &c)
+                .contains("did not record the script text names__exact__xai was scored against"));
         }
 
-        // A diagnostic's script may differ, as its fixtures may.
+        // A diagnostic's script may differ, as its fixtures may — in both
+        // maps, so the rule cannot be passing only because one tier lacks it.
         let (mut b, c) = saved(&english_corpus(), &m, &m);
         b.provenance
             .as_mut()
             .unwrap()
             .scripts
-            .insert("fuzzy-follow".into(), "one text".into());
+            .insert("fuzzy-follow__fuzzy_voice__xai".into(), "one text".into());
         assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
     }
 

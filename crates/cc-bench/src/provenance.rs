@@ -169,7 +169,12 @@ pub struct Provenance {
     /// included. Empty for Tier A and Tier B, which render nothing.
     #[serde(default)]
     pub layouts: Vec<Layout>,
-    /// SHA-256 of every script source the replay compiled, by script name.
+    /// SHA-256 of the script source each run was replayed against, by run
+    /// (manifest) name.
+    ///
+    /// By run rather than by script, so the gate compares exactly what each
+    /// scoring fixture was scored against without assuming its manifest's
+    /// `script` matches the family in its name.
     ///
     /// Scripts are read from the checkout at run time, not built into the
     /// binary, and a capture's fixtures do not contain them — so without this

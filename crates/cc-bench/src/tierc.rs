@@ -283,7 +283,7 @@ pub fn run_tier_c_captured(
         let events = crate::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
         let source = std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
         scripts.insert(
-            manifest.script.clone(),
+            manifest.name.clone(),
             crate::provenance::script_digest(&source),
         );
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
