@@ -77,6 +77,11 @@ the load line before believing a regression.
 - **1** when a series regressed at its p50 or p95, a series the baseline has is **missing** from the candidate, or the candidate has an **invalid pair**. A launch that never became ready is the worst regression there is, and reporting only the pairs that survived would hide it.
 - **2** when the two cannot be compared: a malformed report, a baseline with no valid pairs, an unusable threshold, or another model, chip, scenario or fixture. The OS version and the display are recorded but not checked, so read them.
 
+Record 20 pairs for a comparison, not a handful. The first launch of a
+freshly built binary costs about 0.8 s more (see below): in 20 pairs it
+reaches only the maximum, but a one-pair recording of a new build is all
+first launch and fails `launch.cold.*` on it.
+
 Maxima are printed but never decide a verdict. The script never rewrites a
 baseline. To replace one, copy a recording over it and commit that.
 
