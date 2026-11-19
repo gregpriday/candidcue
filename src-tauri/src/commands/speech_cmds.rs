@@ -42,8 +42,9 @@ async fn selected_model(db: &Database) -> Result<&'static BundledModel, AppError
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechEngineStatus {
-    /// Always true for a healthy installation — false means the bundle is
-    /// broken, which is a reinstall rather than anything the user can fix.
+    /// Whether the selected model's files are present and usable. False until
+    /// a model is downloaded from Settings › Speech, when its files are missing
+    /// or unusable, or when the selection cannot be read; `detail` says which.
     pub available: bool,
     /// Whether the model is resident in memory right now.
     pub loaded: bool,
@@ -56,9 +57,9 @@ pub struct SpeechEngineStatus {
 
 /// Whether this installation can transcribe, and whether it is warm.
 ///
-/// Never fails: a broken bundle is reported as `available: false` with a
-/// reason, because Settings asking "can I transcribe?" wants an answer rather
-/// than an exception.
+/// Never fails: a missing or broken model is reported as `available: false`
+/// with a reason, because Settings asking "can I transcribe?" wants an answer
+/// rather than an exception.
 #[tauri::command]
 pub async fn get_speech_engine_status<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,

@@ -1174,7 +1174,8 @@ pub async fn create_revision_snapshot(
 /// Spec §21.4: a session start captures a revision of the script as it is
 /// about to be performed, so the text that was on stage stays recoverable
 /// even if the script is edited afterwards. This is a Rust-owned step of
-/// session start.
+/// session start. Takes recorded before it was implemented have no
+/// `pre_session` revision.
 ///
 /// Returns the revision id, or `None` when the script has no canonical file.
 pub async fn snapshot_pre_session(

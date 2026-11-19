@@ -1,14 +1,14 @@
-//! The script as a TAKE compiles it: token by token, not from the Markdown.
+//! The script as a TAKE compiles it: from the app's tokens, not the Markdown.
 //!
 //! The app never hands the engine Markdown. It tokenises the spoken text
 //! itself (`src/shared/markdown/tokenize.ts`), sends each word with its block
 //! ordinal and sentence end (`alignTokensFor`), and the host compiles those
-//! with [`cc_align::compile_tokens_in`] — one token at a time. Every replay in
+//! with [`cc_align::compile_tokens_in`], which normalises a sentence at a time
+//! and attributes the atoms back to the tokens they came from. Every replay in
 //! this crate compiled the Markdown with [`cc_align::compile`] instead, which
-//! normalises a whole spoken line at once. The two agree for most prose and
-//! disagree wherever normalisation reaches across a word boundary: a script
-//! that writes `forty two` compiles to `42` on the Markdown path and to `40 2`
-//! in the app, while the recogniser's own `forty two` normalises to `42`.
+//! normalises a whole spoken line at once and numbers its atoms in its own
+//! space. The two agree for most prose, but they are different compiles, and
+//! the app's is the one a take runs.
 //!
 //! So a Tier-B number about the Markdown path is a number about a compile the
 //! product does not perform. This module reproduces the app's tokens closely

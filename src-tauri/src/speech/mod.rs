@@ -114,8 +114,8 @@ pub const SAMPLE_RATE_HZ: u32 = 24_000;
 ///
 /// Not to be confused with `models/catalogue.json`, which `catalogue.rs` reads.
 /// That one is a FETCH manifest — URLs, digests, sizes, licences for everything
-/// `pnpm models:fetch` can download. This one is a BUNDLE manifest: the models
-/// this build actually ships and the tuning each was measured with. The fetch
+/// `pnpm models:fetch` can download. This one is a BUILD manifest: the models
+/// this build can load and the tuning each was measured with. The fetch
 /// catalogue may be the longer list, so the two are asserted equal only where
 /// they overlap, at the default.
 pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};

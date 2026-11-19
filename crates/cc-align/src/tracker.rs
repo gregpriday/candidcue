@@ -406,9 +406,8 @@ pub struct Engine {
     /// `update`, so it stands only while the evidence does. Reaches the
     /// snapshot as `suggestion` when no jump is pending.
     off_screen_target: Option<u32>,
-    /// Consecutive events with weak local evidence — the trigger for global
-    /// search (Navigation spec §11.2: global proposals only when local evidence
-    /// fails).
+    /// Consecutive events with weak local evidence — one of the triggers for
+    /// global search (Navigation spec §11.2).
     weak_streak: u32,
     /// Approximate-only local continuations since the last exact-content
     /// update. This is deliberately not inferred from `weak_streak`: a valid

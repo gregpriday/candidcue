@@ -277,7 +277,7 @@ pub struct AudioSettings {
     /// which takes two questions rather than a constant: the selected
     /// recogniser has to transcribe it and the alignment engine has to have a
     /// normalisation profile for it. Both are facts about the build, and they
-    /// do not give the same answer — the shipped bundle is bilingual (`zh-en`,
+    /// do not give the same answer — the shipping model is bilingual (`zh-en`,
     /// a fact the code denied for long enough to be worth stating here), while
     /// the engine normalises English alone and has no Chinese. The two overlap
     /// on English alone. See `migrate_in_place`.

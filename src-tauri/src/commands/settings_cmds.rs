@@ -106,8 +106,9 @@ pub(crate) fn broadcast_settings<R: tauri::Runtime>(
 /// JavaScript (§50.7), and validates the destination before handing it on.
 ///
 /// A `destination` taken from the webview could never be supplied, for the
-/// same reason: JavaScript has no picker to obtain one from. `Ok(None)` means
-/// the operator cancelled.
+/// same reason: JavaScript has no picker to obtain one from, so the call would
+/// fail to deserialize before the command ran and the button would silently do
+/// nothing. `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_all_data<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
@@ -178,10 +179,12 @@ pub struct ClearResult {
 
 /// The directories a `clear_cache` kind empties.
 ///
-/// `logs` is the only kind (#219). Nothing ever wrote `cache/compiled`,
-/// `cache/vocabulary` or `cache/thumbnails`, and once the Settings button that
-/// asked for `all` was gone nothing asked for them either; a request naming one
-/// is refused like any other unknown kind.
+/// `logs` is the only kind (#219), and it names the log directory alone. When
+/// "Clear logs" mapped onto a broad `all` kind, it deleted every cache, left
+/// every log file in place, and reported "Logs cleared." Nothing ever wrote
+/// `cache/compiled`, `cache/vocabulary` or `cache/thumbnails`, and once the
+/// Settings button that asked for `all` was gone nothing asked for them either;
+/// a request naming one is refused like any other unknown kind.
 pub fn clear_cache_targets(paths: &DataPaths, kind: &str) -> Result<Vec<PathBuf>, AppError> {
     Ok(match kind {
         "logs" => vec![paths.logs_dir()],
@@ -421,9 +424,9 @@ pub fn write_support_bundle(
 
 /// Frontend diagnostic line → the process log AND a file.
 ///
-/// Audio capture lives in the control WEBVIEW, and a `console.log` there does
-/// not reach the terminal running `tauri dev`, so a failure only the webview
-/// can see is invisible from the outside without this.
+/// A take's audio capture lives in the control WEBVIEW, and a `console.log`
+/// there does not reach the terminal running `tauri dev`, so a failure only the
+/// webview can see is invisible from the outside without this.
 ///
 /// It writes to a FILE as well as to `tracing`, and that mattered more than it
 /// should have: `tracing` used to reach stdout only, so a trace survived only if

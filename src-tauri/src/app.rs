@@ -130,7 +130,7 @@ pub fn run() {
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
-            // Speech-model install (#152): the recogniser is downloaded after
+            // Speech-model install (#152): the model files are downloaded after
             // installation rather than bundled.
             commands::get_speech_model_status,
             commands::start_speech_model_download,
@@ -338,8 +338,9 @@ pub fn run() {
             handle.manage(crate::speech::model_manager::SpeechModelManager::new());
 
             // Put back any model whose replacement was interrupted mid-commit
-            // (#152). Restore-only: it never deletes, so it cannot damage an
-            // install running in another instance. Stale staging is swept by
+            // (#152). It only puts a backup back (replacing an unusable target)
+            // and never sweeps staging, so it cannot damage an install running
+            // in another instance. Stale staging is swept by
             // the next install of that model instead, which is the moment it
             // is provably garbage.
             crate::speech::model_store::recover_interrupted(&data_dir);
@@ -359,7 +360,8 @@ pub fn run() {
             // (`$APPDATA/scripts/*/assets/*`), with an explicit `deny` list
             // that takes precedence over any runtime widening.
             //
-            // Nothing is granted at runtime any more. The one exception was the
+            // Startup grants nothing at runtime any more (imports still grant a
+            // script's flat assets directory). The one exception was the
             // bundled Listener pack directory, which in a dev build lived in the
             // repo, outside `$RESOURCE`, and so could not be expressed as a
             // static pattern. The Listener is gone (#106) and the exception with

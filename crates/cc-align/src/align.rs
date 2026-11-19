@@ -121,7 +121,8 @@ impl Default for AlignScratch {
 }
 
 /// Is `b` within a small edit distance of `a`? Bounded Levenshtein used for
-/// the fuzzy relation: distance ≤1 for length 5–8, ≤2 for 9+.
+/// the fuzzy relation: both words at least 5 long, distance ≤1 when the longer
+/// is 5–8, ≤2 when it is 9+.
 pub fn fuzzy_match(a: &str, b: &str) -> bool {
     if a.is_ascii() && b.is_ascii() {
         let (la, lb) = (a.len(), b.len());
