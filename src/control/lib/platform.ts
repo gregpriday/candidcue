@@ -1,10 +1,10 @@
 /**
- * Which desktop this window is on (desktop refinement §22.3).
+ * Which desktop this window is on.
  *
  * ---------------------------------------------------------------------------
  * ONE CHECK, ON THE ROOT ELEMENT
  * ---------------------------------------------------------------------------
- * §22.3's rule is explicit: add a platform attribute at the application root for
+ * The rule: add a platform attribute at the application root for
  * genuinely platform-specific CSS, and do not scatter user-agent checks through
  * components. The scattering is the failure mode — a dozen `navigator.platform`
  * tests written at a dozen moments drift, and none of them can be seen together.
@@ -18,12 +18,12 @@
  * ---------------------------------------------------------------------------
  * FOR: the handful of places where a platform's window chrome genuinely differs
  * — macOS traffic-light inset in a full-size-content titlebar, Windows caption
- * buttons, the scrollbar behaviour above.
+ * buttons, scrollbar behaviour.
  *
- * NOT FOR: making one platform look like the other. §22.3 again: keep the
+ * NOT FOR: making one platform look like the other. Keep the
  * colours and the typography, and let the native menu, window, keyboard and
  * dialog conventions do their job. A `[data-platform='windows']` block that
- * re-created macOS vibrancy would be exactly the mimicry the guardrails forbid.
+ * re-created macOS vibrancy would be exactly that mimicry.
  * (Each platform's OWN material is a different thing: `data-window-material`,
  * set from what Rust actually laid under the window — `lib/window-material.ts`.)
  */

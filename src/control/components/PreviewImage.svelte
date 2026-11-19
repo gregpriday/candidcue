@@ -1,5 +1,5 @@
 <!--
-  One image in the editor preview (#250, spec §13.2).
+  One image in the editor preview (#250).
 
   Draws only a url Rust resolved — never the authored href, which the webview
   has no business loading. Everything else is a labelled note, and a note

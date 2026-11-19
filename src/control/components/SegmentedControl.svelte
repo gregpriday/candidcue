@@ -23,7 +23,7 @@
 
   let { options, value = $bindable(), label, describedby, size = 'md', onchange }: Props = $props();
 
-  /* Roving tabindex (spec §20): the group is one tab stop and the arrow keys
+  /* Roving tabindex: the group is one tab stop and the arrow keys
      move focus and selection together, per the ARIA radiogroup pattern. */
   let buttons: HTMLButtonElement[] = $state([]);
 

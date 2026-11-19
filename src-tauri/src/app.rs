@@ -21,10 +21,18 @@ pub fn run() {
     // `_legacy_lock` is held for as long as the process runs: while it is,
     // no other launch replaces the folder this one is using. `run` below never
     // returns, so the binding is never dropped.
+    //
+    // The benchmark build (`perf`) never copies it: its profile has to start
+    // empty, and the owner's old library has no business in it.
+    let identifier = context.config().identifier.clone();
     let (legacy_data, _legacy_lock) = match dirs::data_dir() {
-        Some(data_dir) => crate::legacy_data::migrate(&data_dir, &context.config().identifier),
+        Some(_) if crate::perf::is_perf_identity(&identifier) => {
+            (crate::legacy_data::Outcome::NotNeeded, None)
+        }
+        Some(data_dir) => crate::legacy_data::migrate(&data_dir, &identifier),
         None => (crate::legacy_data::Outcome::NotNeeded, None),
     };
+    let perf_armed = crate::perf::decide(&identifier);
 
     // Logging is initialised inside `setup`, not here. It needs the log
     // directory, the log directory comes from the app data dir, and that needs
@@ -88,6 +96,8 @@ pub fn run() {
         // The system's glass under the desk's windows — vibrancy on a Mac,
         // Mica on Windows 11 — and the page told which before it paints.
         .plugin(crate::windows::material::plugin())
+        // Issue #240: the benchmark flag, `false` in every build people use.
+        .plugin(crate::perf::plugin(perf_armed))
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             // Recovery (§48.6). These work on FILES and never open the damaged

@@ -1,16 +1,15 @@
 /**
- * Session records (spec §36.1).
+ * Session records.
  *
  * These commands are registered in src-tauri/src/app.rs and implemented in
- * src-tauri/src/commands/sessions_cmds.rs. Until this service existed nothing in
- * the frontend invoked them, and two guarantees silently did not happen:
+ * src-tauri/src/commands/sessions_cmds.rs. Two guarantees depend on the
+ * frontend calling them, and both once silently failed because nothing did:
  *
- *  - §21.4: `start_session` takes the pre-session revision snapshot in Rust
- *    precisely "so it cannot be skipped by a frontend that forgets to ask" —
- *    and the frontend never asked;
- *  - §43.5: `AppCoordinator::begin_session` is the ONLY writer of the Rust-side
- *    session generation, so it stayed at its `Default` value of 0 while control
- *    stamped every stage payload with 1. `validate_stage_payload_header` then
+ *  - `start_session` takes the pre-session revision snapshot in Rust, so it
+ *    cannot be skipped by a frontend that forgets — provided it is called;
+ *  - `AppCoordinator::begin_session` is the ONLY writer of the Rust-side
+ *    session generation. Left at its `Default` value of 0 while control
+ *    stamped every stage payload with 1, `validate_stage_payload_header`
  *    dropped every tracking snapshot and the stage never moved.
  *
  * Generation ownership: RUST ASSIGNS, CONTROL ADOPTS. `StartSessionInput` has
@@ -50,14 +49,6 @@ export interface SessionRecord {
   retakeCount: number;
   reconnectCount: number;
   manualCorrectionCount: number;
-  /*
-   * No `estimatedCostUsd`. It was per-take API spend from the hosted
-   * transcription era; the column went with the 1.0 schema baseline.
-   * Transcription runs on this machine, so a take costs nothing.
-   *
-   * No `transcriptRetained` either: it said whether the session kept its
-   * transcript, and nothing keeps one any more (#217).
-   */
 }
 
 /** Mirror of `sessions::EndSessionSummary`. */

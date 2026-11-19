@@ -1,5 +1,5 @@
 /**
- * SettingsStore (spec §45.2) — validated settings view with optimistic
+ * SettingsStore — validated settings view with optimistic
  * patching through the settings service.
  */
 import { get, writable } from 'svelte/store';
@@ -14,7 +14,7 @@ export const settings = { subscribe: state.subscribe };
 let loaded = false;
 
 /**
- * Adopt a settings document another window wrote (§14.1).
+ * Adopt a settings document another window wrote.
  *
  * Called by `services/settings-sync.ts` when Rust broadcasts a change. It
  * REPLACES the store rather than merging, because the payload is the whole
@@ -165,28 +165,6 @@ export async function loadSettings(force = false): Promise<AppSettings> {
 }
 
 /**
- * Finish the presentation mode's move out of localStorage.
- *
- * ---------------------------------------------------------------------------
- * WHY A READ TRIGGERS A WRITE, JUST THIS ONCE
- * ---------------------------------------------------------------------------
- * Reading the old overlay as a fallback keeps an upgrading reader in reader
- * mode, and on its own that is only half a migration — Rust still holds
- * nothing, so the day the browser store is cleared they are silently back to
- * prompter. That is the exact failure the move was made to end, so the value
- * has to be written through rather than merely read.
- *
- * It happens here rather than in the service because a getter that writes is a
- * getter nobody can reason about. `pendingStageModeAdoption` reports what the
- * last read found; this acts on it once and then the flag stays null, because
- * the very next read sees a document that has an answer.
- *
- * Silent on failure, and deliberately: this is a migration the operator did not
- * ask for and cannot act on, the fallback keeps working in the meantime, and
- * the next launch tries again. A danger toast during startup for a settings
- * write nobody requested would be noise about a problem that fixes itself.
- */
-/**
  * Forget that a migrated document was ever seen.
  *
  * A test seam. The latch that stops these one-shot migrations running twice
@@ -223,6 +201,28 @@ async function commitAdoption(saved: AppSettings): Promise<void> {
   }
 }
 
+/**
+ * Finish the presentation mode's move out of localStorage.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A READ TRIGGERS A WRITE, JUST THIS ONCE
+ * ---------------------------------------------------------------------------
+ * Reading the old overlay as a fallback keeps an upgrading reader in reader
+ * mode, and on its own that is only half a migration — Rust still holds
+ * nothing, so the day the browser store is cleared they are silently back to
+ * prompter. That is the exact failure the move was made to end, so the value
+ * has to be written through rather than merely read.
+ *
+ * It happens here rather than in the service because a getter that writes is a
+ * getter nobody can reason about. `pendingStageModeAdoption` reports what the
+ * last read found; this acts on it once and then the flag stays null, because
+ * the very next read sees a document that has an answer.
+ *
+ * Silent on failure, and deliberately: this is a migration the operator did not
+ * ask for and cannot act on, the fallback keeps working in the meantime, and
+ * the next launch tries again. A danger toast during startup for a settings
+ * write nobody requested would be noise about a problem that fixes itself.
+ */
 async function adoptStageModeFromOverlay(): Promise<void> {
   const pending = settingsService.pendingStageModeAdoption();
   if (pending === null) return;
@@ -272,8 +272,7 @@ async function adoptDisplayPinFromOverlay(): Promise<void> {
 }
 
 /**
- * The same one-time move for calibrated rigs (§52), and the one that matters
- * most.
+ * The same one-time move for calibrated rigs, and the one that matters most.
  *
  * Every measured viewing distance and lens placement used to live only in the
  * localStorage overlay — cleared by the OS under storage pressure, wiped by a

@@ -2,12 +2,11 @@
   A setting that is a FACT rather than a choice.
 
   Some settings have exactly one value this release can honestly offer. The
-  temptation is to keep the dropdown and disable what is unavailable, which is
-  what this screen used to do in two places — a one-item Motion profile select,
-  and a Session mode select whose other two entries were permanently disabled
-  and labelled "not available in this release".
+  temptation is to keep the dropdown and disable what is unavailable — a
+  one-item select, or one whose other entries are permanently disabled and
+  labelled "not available in this release".
 
-  Both read as a decision the user is being asked to make. Neither is one. A
+  Either reads as a decision the user is being asked to make. Neither is one. A
   control shaped like a choice, offering none, spends the reader's attention on
   working out that there was nothing here for them — and it does it every time
   they open the screen.

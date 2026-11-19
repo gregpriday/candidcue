@@ -1,5 +1,5 @@
 /**
- * The icon set's vocabulary, and the one stroke it is drawn at (spec §11.7).
+ * The icon set's vocabulary, and the one stroke it is drawn at.
  *
  * A plain module rather than `Icon.svelte`'s `<script module>` block, because
  * four other modules need these two things and one of them is a test. Named

@@ -1,6 +1,7 @@
 <!--
-  Local input level meter (spec §14.2 C) — responds before anything is streamed.
-  Zones use the dedicated meter tokens; state is also written as text (§20).
+  Local input level meter, read from its own microphone capture rather than
+  from transcription. Zones use the dedicated meter tokens; state is also
+  written as text.
 -->
 <script lang="ts">
   import type { AudioLevelSnapshot } from '../../shared/contracts';
@@ -48,9 +49,8 @@
    * effect that reads and writes the same `$state`. `reduceMicLevel` always
    * returns a fresh object, so the write re-triggered the effect, which wrote
    * again, and Svelte 5 aborted the whole component with
-   * `effect_update_depth_exceeded` on the very first level frame. The meter on
-   * Preflight's microphone section died as soon as audio arrived; the DOM test
-   * project (tests/dom/mic-meter.test.ts) is what made it visible.
+   * `effect_update_depth_exceeded` on the very first level frame, so the meter
+   * died as soon as audio arrived (tests/dom/mic-meter.test.ts holds it).
    */
   let accumulator: MicAdviceState = seed();
   /** The frame `seed()` already folded, so the effect does not fold it twice. */
@@ -124,7 +124,7 @@
   const advice = $derived(
     paused ? 'The test is using the microphone; the level returns when it ends.' : MIC_ADVICE[condition],
   );
-  /** Conditions the operator can actually do something about (Appendix F.4). */
+  /** Conditions the operator can actually do something about. */
   const actionable = $derived(
     !paused && (condition === 'clipping' || condition === 'no_signal' || condition === 'too_low'),
   );

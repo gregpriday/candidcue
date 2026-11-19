@@ -1,11 +1,10 @@
 <!--
-  Following state (companion §48, §49; primary §15.2).
+  Following state.
 
   A calm, honest indicator: one plain-language status line, a banded
-  confidence meter (never a percentage — §48 "without implying false
-  precision"), the current behavior, and the Part XI degraded states with real
-  copy. There is no persistent animated widget (primary §11.1) and no
-  diagnostic score.
+  confidence meter (never a percentage, which would imply false precision),
+  the current behavior, and the degraded states with real copy. There is no
+  persistent animated widget and no diagnostic score.
 
   ONE ANSWER, AND THE REMEDY BESIDE IT.
 
@@ -41,9 +40,8 @@
      * Whether this take actually has a microphone and a transcription feed.
      *
      * False in a manual or fixed-speed take, where nothing is listening. The
-     * shared copy is written for voice — "still listening for Speaking Glass,
-     * resume", "Start speaking and the stage picks up your place" — and each
-     * of those sentences is a lie without a microphone. The operator reads this panel to decide whether a
+     * shared copy is written for voice — "Start speaking and the stage picks
+     * up your place" — and that sentence is a lie without a microphone. The operator reads this panel to decide whether a
      * problem is their microphone or their script, so it says what is true.
      */
     voiceInput?: boolean;
@@ -295,7 +293,7 @@
   </div>
 
   <!--
-    Part XI degraded states — each one names what is actually happening.
+    Degraded states — each one names what is actually happening.
 
     In a live region that is always mounted, because a notice usually arrives
     under an unchanged status line ("Following", and then the stage starts
@@ -319,7 +317,7 @@
   </div>
 
   <!--
-    NO DECISION-CODE ROW HERE (CCUX-001).
+    NO DECISION-CODE ROW HERE.
 
     This used to carry a "Doing" row rendering `FOLLOW_DECISION_LABELS`, which
     put "Local match confirmed", "Relocated" and "Possible jump — gathering
@@ -335,7 +333,7 @@
   {#if readingsLive || showSection}
     <dl class="readings">
       {#if readingsLive}
-        <!-- Banded confidence: four steps, labelled in words (§48). -->
+        <!-- Banded confidence: four steps, labelled in words. -->
         <div class="reading">
           <dt>Confidence</dt>
           <dd class="confidence">

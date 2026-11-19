@@ -1,5 +1,5 @@
 /**
- * Keyboard shortcuts (spec §19). One window-level listener translates key
+ * Keyboard shortcuts. One window-level listener translates key
  * events into named actions; screens subscribe with `onShortcut`. Cmd on
  * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, A, [, ]) are
  * suppressed while the user is typing and while the focused control activates
@@ -26,7 +26,7 @@ export type ShortcutAction =
   | 'blank-stage'
   | 'command-help'
   /**
-   * Pop the take out to the whole display, or back into a window (§ reader mode).
+   * Pop the take out to the whole display, or back into a window.
    *
    * The platform's own full-screen chord, deliberately: somebody reading in a
    * window who wants the whole screen reaches for the key their OS taught them,
@@ -38,14 +38,14 @@ export type ShortcutAction =
   /**
    * The fixed-pace transport: start/stop, and the pace itself.
    *
-   * Keys rather than a control, because during a take there is no control
-   * window to put a control in — the stage is full screen and the operator is
-   * standing at a camera. These are the whole of the in-take interface for it.
+   * Keys rather than a control, because during a take the window is the
+   * prompter and the operator is standing at a camera. These are the whole of
+   * the in-take interface for it.
    */
   | 'toggle-auto-scroll'
   | 'auto-scroll-faster'
   | 'auto-scroll-slower'
-  /** §16.9. Escape — twice ends the take; the screen owns the two-press rule. */
+  /** Escape — twice ends the take; the screen owns the two-press rule. */
   | 'escape';
 
 /** The screens a command can belong to, plus the one scope that is every screen. */
@@ -254,8 +254,8 @@ export function isModalOpen(doc?: { querySelector(sel: string): unknown } | null
  *
  * This used to run its own regular expression over `navigator.platform`, and by
  * the time the desktop pass added a second one for the root platform attribute
- * there were two user-agent tests in the tree that could disagree. §22.3 asks
- * for exactly one, at the application root; this stays as a name because it
+ * there were two user-agent tests in the tree that could disagree. There is
+ * exactly one, at the application root; this stays as a name because it
  * reads better at the call sites that are about a KEY rather than about a
  * platform, but it no longer knows anything.
  */
@@ -294,7 +294,7 @@ export interface ShortcutQuery {
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
-  /** The target is a text field or contenteditable (spec §19). */
+  /** The target is a text field or contenteditable. */
   typing: boolean;
   isMac: boolean;
   /**
@@ -322,19 +322,14 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
   const key = event.key;
 
   /*
-   * Escape (§16.9), and deliberately NOT in the plain-key block at the bottom.
+   * Escape, and deliberately NOT in the plain-key block at the bottom.
    *
    * That block stands down for a control that activates itself on the key —
    * a button, a switch, a menu item. Escape must not: someone reaching for it
-   * has a full-screen, always-on-top stage in front of them and no interest in
+   * has the prompter in front of them and no interest in
    * which button happens to have focus. It does stand down while typing, where
    * Escape means "leave this field", and behind a modal, which owns the
    * keyboard (handled above).
-   *
-   * The stage has always answered Escape. The control window did not, so the
-   * key worked only while the stage held focus — and the operator is at the
-   * control window, which is where they pressed Present. Pressing Escape at
-   * the machine you are sitting at did nothing at all.
    */
   if (key === 'Escape' && !primary && !event.altKey && !event.shiftKey && !event.typing) {
     return 'escape';
@@ -431,7 +426,7 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
     }
   }
 
-  // Plain keys — only when not typing (spec §19 "Space when not typing") and
+  // Plain keys — only when not typing and
   // never when the focused control activates itself on the same key.
   if (!primary && !event.altKey && !event.shiftKey && !event.typing && !event.selfActivating) {
     // `key` is normalised because Caps Lock reports 'B' with shiftKey false —

@@ -1,6 +1,6 @@
 /**
- * Editor insert controls (spec §13.6). Every action inserts plain Markdown
- * or Speaking Glass's documented directive syntax (spec §23) so documents remain
+ * Editor insert controls. Every action inserts plain Markdown
+ * or Speaking Glass's documented directive syntax so documents remain
  * readable outside Speaking Glass.
  */
 import { ensureSyntaxTree } from '@codemirror/language';
@@ -330,10 +330,9 @@ export function insertCue(view: EditorView): void {
 /**
  * Insert a reference to an image that has ALREADY been imported.
  *
- * C10: this used to insert the literal `![Image description](./assets/image.png)`
- * — a file that does not exist and never would, because nothing in the product
- * called `import_image`. The path now comes from the importer's `markdownPath`,
- * which is what the compiler and the asset-protocol scope both resolve.
+ * The path comes from the importer's `markdownPath`, which is what the
+ * compiler and the asset-protocol scope both resolve; never write a
+ * placeholder path to a file that was not imported.
  */
 export function insertImage(view: EditorView, markdownPath: string, altText = 'Image description'): void {
   const alt = altText.replace(/[[\]]/g, '');
@@ -343,7 +342,7 @@ export function insertImage(view: EditorView, markdownPath: string, altText = 'I
 /**
  * Insert Markdown that is already written, one block per entry.
  *
- * For dropped images (§20.2): Rust imports each file and hands back the finished
+ * For dropped images: Rust imports each file and hands back the finished
  * `![alt](assets/…)` string, so there is nothing left to compose — and composing
  * it again here would mean two places that know how an asset reference is
  * spelled. Goes through the same `insertBlock` every toolbar insertion uses, so
@@ -360,7 +359,7 @@ export function insertDiagram(view: EditorView): void {
 }
 
 /**
- * A part break: the `[Take: …]` marker, which starts a PART (§parts).
+ * A part break: the `[Take: …]` marker, which starts a PART.
  *
  * The placeholder names the thing that follows the marker rather than the
  * marker itself. `[Take: name this take]` read as an instruction to describe

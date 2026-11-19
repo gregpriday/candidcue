@@ -1,5 +1,5 @@
 /**
- * Whether to say anything before a take opens, and what (CCUX-013).
+ * Whether to say anything before a take opens, and what.
  *
  * ---------------------------------------------------------------------------
  * THIS IS NOT PREFLIGHT, AND MUST NOT BECOME IT
@@ -135,9 +135,9 @@ export function resolveReadiness(input: ReadinessInput): ReadinessVerdict {
 
   /*
    * A script with nothing speakable is the one condition that makes a take
-   * meaningless rather than degraded: the stage opens, the aligner is handed an
-   * empty token list, and everything reports healthy over a take that could
-   * never have followed anything.
+   * meaningless rather than degraded: the prompter opens, the aligner is
+   * handed an empty token list, and everything reports healthy over a take
+   * that could never have followed anything.
    */
   if (input.blockingDiagnostics > 0) {
     findings.push({
@@ -236,9 +236,9 @@ export function voiceModelFinding(
      * It was blocking on the reasoning that no action fixes it in place, and
      * that is true of the MODEL. It is not true of the take: an unloadable
      * recogniser leaves exactly the same take a missing model leaves, one
-     * that rolls at a pace and is driven by hand. Blocking it removed Start
-     * anyway and made this a gate over a take the product otherwise supports,
-     * which is the one thing this surface must never become.
+     * that holds still until it is moved by hand or auto-scrolled. Blocking
+     * it removed Start anyway and made this a gate over a take the product
+     * otherwise supports, which is the one thing this surface must never become.
      */
     return {
       id: 'model_unsupported',
@@ -276,8 +276,8 @@ export function voiceModelFinding(
     };
   }
   /*
-   * WARNING, not blocking. A take with no model still rolls at a fixed pace
-   * and can be driven by hand, and somebody who is already on camera is
+   * WARNING, not blocking. A take with no model can still be moved by hand
+   * or auto-scrolled at a set pace, and somebody who is already on camera is
    * better served by a take that works differently than by no take at all.
    */
   return {
@@ -293,11 +293,11 @@ export function voiceModelFinding(
  * Why this application cannot use the microphone yet, or null when nothing is
  * known to stand in the way (#303).
  *
- * WARNING, never blocking. A take with no microphone still rolls at a pace and
- * can be driven by hand, and Start anyway is how somebody who knows what they
- * are doing goes past it. What this changes is WHEN they find out: before
- * Present turns the window into the prompter, rather than from a prompt or a
- * refusal on top of it.
+ * WARNING, never blocking. A take with no microphone can still be moved by
+ * hand or auto-scrolled at a set pace, and Start anyway is how somebody who
+ * knows what they are doing goes past it. What this changes is WHEN they find
+ * out: before Present turns the window into the prompter, rather than from a
+ * prompt or a refusal on top of it.
  *
  * The words are the platform's (`lib/os-copy.ts`): this window's, unless a
  * caller names another.

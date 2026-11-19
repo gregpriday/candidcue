@@ -18,7 +18,7 @@
  *
  * The macOS column is the copy as it was before this table existed, byte for
  * byte. The node test project pins a Mac user agent (`tests/setup/
- * pin-mac-platform.ts`) so every assertion of it holds on any host, and the
+ * node-platform.ts`) so every assertion of it holds on any host, and the
  * Windows and Linux columns are tested by passing a platform explicitly.
  *
  * ---------------------------------------------------------------------------

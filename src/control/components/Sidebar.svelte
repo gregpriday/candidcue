@@ -1,45 +1,31 @@
 <!--
-  The source list (desktop refinement §7).
+  The source list.
 
   ---------------------------------------------------------------------------
-  WHAT CHANGED, AND WHY EACH THING WAS A "WEBSITE" TELL
+  A SOURCE LIST, NOT A WEBSITE SIDEBAR
   ---------------------------------------------------------------------------
-  This was a 224px branded rail with a wordmark, a raised call-to-action button,
-  36px navigation rows, and a white raised pill for the selected row. Each of
-  those is a good SaaS dashboard sidebar and each is the wrong object here:
+  Each of these is a good SaaS dashboard sidebar and the wrong object here:
 
-    the brand tile + wordmark   repeated identity the native titlebar already
-                                carries. §7.1: let the native title and icon do
-                                it. A small mark outlived the wordmark on the
-                                theory that the macOS traffic lights floated
-                                over this rail and needed something beside
-                                them — they do not: the page content starts
-                                below the titlebar (`App.svelte`, `.shell`), so
-                                the mark was a microphone-shaped tile that
-                                looked like a button and did nothing. Identity
-                                lives in the app icon, the titlebar and the
-                                Welcome screen.
-    the raised New Script CTA   read as a conversion button. It is a document
+    a brand tile or wordmark    repeats identity the native title and icon
+                                already carry. Identity lives in the app icon,
+                                the titlebar and the Welcome screen.
+    a raised New Script CTA     reads as a conversion button. It is a document
                                 command, so it looks like one: a source-list row
                                 with a plus, at the top of the list where every
                                 document app puts it.
-    the white raised pill       a selected row in a source list is a tonal fill,
-                                not a card floating off the panel. The shadow and
-                                the white surface were what made the rail read as
-                                a web nav.
-    Settings + Shortcuts rows   permanent chrome for two things the native menu
-                                now publishes (⌘, and ⌘/). §31.4: let native
-                                menus reduce visible chrome. Settings stays,
-                                because it is a place you go; Shortcuts is a
-                                dialog and is now Help-only.
-    the version line            moved to About, which is where a version belongs
-                                and where macOS users look for it.
+    a white raised pill         a selected row in a source list is a tonal fill,
+                                not a card floating off the panel. A shadow and
+                                a white surface make the rail read as a web nav.
+    a Shortcuts row             permanent chrome for a dialog the native menu
+                                publishes (⌘/), so it is Help-only. Settings
+                                keeps its row (see `activate`).
+    a version line              belongs in About, where macOS users look for it.
 
   ---------------------------------------------------------------------------
-  IT IS NOW OPERABLE
+  IT IS OPERABLE
   ---------------------------------------------------------------------------
-  Draggable trailing edge with a persisted width (§7.2), arrow-key movement
-  through the rows and first-letter navigation (§7.4), and — the part that is
+  Draggable trailing edge with a persisted width, arrow-key movement
+  through the rows and first-letter navigation, and — the part that is
   easy to get wrong — FOCUS AND SELECTION DRAWN DIFFERENTLY. Arrowing through a
   source list moves focus without navigating; Enter or Space commits. A rail
   where those two look identical tells a keyboard user that they have already
@@ -47,7 +33,7 @@
 -->
 <script lang="ts" module>
   /**
-   * A source list is ONE tab stop (§23.1's roving-tabindex rule).
+   * A source list is ONE tab stop (the roving-tabindex rule).
    *
    * Tabbing into the rail lands on the current route's row and the arrows take
    * over from there. Five separate tab stops would mean four presses of Tab to
@@ -103,7 +89,7 @@
   /**
    * Which row the arrows are on — NOT which route is current.
    *
-   * §7.4 asks for these to be visually distinct, and they are genuinely
+   * These are drawn distinctly because they are genuinely
    * different facts: the current route is where you are, and this is where the
    * next Enter would take you. Reset to -1 whenever focus leaves the rail, so
    * returning to it starts from the current route rather than from wherever the
@@ -127,13 +113,9 @@
         break;
       case 'settings':
         /*
-         * A WINDOW, not a destination (§14.1).
-         *
-         * The row stays in the rail because §7.1 only asked to move it out
-         * "if user testing shows the sidebar entry does not aid discovery" —
-         * and it plainly does, for anybody who has not learned ⌘,. What changed
-         * is what it does: opening Settings no longer takes the script off the
-         * screen, so the row is no longer a place you go.
+         * A WINDOW, not a destination: opening Settings does not take the
+         * script off the screen. The row stays in the rail because it aids
+         * discovery for anybody who has not learned ⌘,.
          */
         onsettings();
         break;
@@ -157,7 +139,7 @@
     items[index]?.focus();
   }
 
-  /** First-letter navigation, wrapping from the current row (§7.4). */
+  /** First-letter navigation, wrapping from the current row. */
   function typeahead(key: string): boolean {
     const lower = key.toLowerCase();
     for (let step = 1; step <= rows.length; step += 1) {
@@ -302,7 +284,7 @@
     padding: 0 var(--space-2);
     border: none;
     background: transparent;
-    /* 5px, not 8: §7.1 asks for a source-list row rather than a floating tile,
+    /* 5px, not 8: a source-list row rather than a floating tile,
        and the difference between those two shapes is almost entirely radius. */
     border-radius: 5px;
     /* Primary label colour at a regular weight, the way a Mac source list
@@ -328,7 +310,7 @@
     white-space: nowrap;
   }
 
-  /* No elevation on hover. §9.3: hover lift belongs to things that float. */
+  /* No elevation on hover: hover lift belongs to things that float. */
   .nav-item:hover {
     background: var(--bg-hover-chrome);
     color: var(--text-primary);
@@ -351,7 +333,7 @@
 
   /*
    * New Script reads as a command rather than a destination: a heavier ink
-   * label and its plus, in the same row geometry as everything else. §7.1 — a
+   * label and its plus, in the same row geometry as everything else — a
    * document command, not a marketing CTA. Ink rather than petrol, so the
    * window's one petrol action stays Present.
    */

@@ -1,5 +1,5 @@
 <!--
-  The conditional take-readiness sheet (CCUX-013).
+  The conditional take-readiness sheet.
 
   ---------------------------------------------------------------------------
   WHY THIS IS A DIALOG AND NOT A PAGE
@@ -346,8 +346,8 @@
       A start whenever continuing is safe, which is the guide's rule and also
       the difference between this and a gate. A blocked take offers no such
       button because there is genuinely nothing to start — a take with no spoken
-      words would open a stage over an empty token list and report health the
-      whole way through.
+      words would present an empty token list and report health the whole way
+      through.
 
       "Anyway" only when the sheet is warning about something. Somebody who
       asked to review a healthy setup is told it is ready, and "Start anyway"

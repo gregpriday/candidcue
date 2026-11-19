@@ -1,5 +1,5 @@
 /**
- * Microphone device enumeration and selection (spec §28.2).
+ * Microphone device enumeration and selection.
  *
  * Rules encoded here:
  * - labels may be unavailable before permission — synthesize placeholders;
@@ -29,7 +29,7 @@ export function toAudioDeviceInfos(devices: MediaDeviceInfoLike[]): AudioDeviceI
     const isDefault = d.deviceId === SYSTEM_DEFAULT_DEVICE_ID;
     let label = d.label;
     if (!label) {
-      // Pre-permission enumeration returns empty labels (spec §28.2).
+      // Pre-permission enumeration returns empty labels.
       unnamed += 1;
       label = isDefault ? 'System default microphone' : `Microphone ${unnamed}`;
     }
@@ -170,7 +170,7 @@ export interface ResolvedDevice {
 /**
  * Resolve a selection against the currently available inputs. A saved
  * specific device that has disappeared falls back to the system default
- * (spec §28.2) with `usedFallback: true` so the UI can say so.
+ * with `usedFallback: true` so the UI can say so.
  */
 export function resolveMicrophoneSelection(
   selection: MicrophoneSelection,
@@ -216,7 +216,7 @@ export function diffDeviceLists(
  * selection, re-enumerates on `devicechange`, and notifies listeners with a
  * diff. It never mutates the selection on its own during a live take — a
  * lost device is only *reported*; switching requires an explicit call to
- * `select()` (confirmation lives in the UI, spec §28.2).
+ * `select()` (confirmation lives in the UI).
  */
 export class MicrophoneDeviceManager {
   private selection: MicrophoneSelection = FOLLOW_SYSTEM_DEFAULT;

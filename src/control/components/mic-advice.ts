@@ -1,11 +1,11 @@
 /**
- * Input-level interpretation for MicMeter (spec §14.2 C, copy from F.4).
+ * Input-level interpretation for MicMeter.
  *
  * The raw AudioLevelSnapshot is a per-frame reading at ~90 ms, so a naive
  * mapping flickers: `clipped` is momentary and `speaking` drops out between
  * words. This module keeps a tiny amount of history — a decaying peak hold
  * and a clip latch — so the meter states a problem long enough for the
- * operator to read it, and pairs every problem with the remedy from F.4.
+ * operator to read it, and pairs every problem with its remedy.
  *
  * Pure and time-injected so the behaviour is unit-testable.
  */
@@ -90,7 +90,7 @@ export function micCondition(
   return 'quiet';
 }
 
-/** Short status word beside the meter (spec §20: state is also text). */
+/** Short status word beside the meter (state is also text). */
 export const MIC_STATUS_LABEL: Record<MicCondition, string> = {
   idle: 'No signal yet',
   clipping: 'Clipping',
@@ -110,9 +110,9 @@ export const MIC_STATUS_LABEL: Record<MicCondition, string> = {
  * only time the advice flickered was the only time anyone was looking at it.
  *
  * A line that is always present costs one row and removes the whole class of
- * problem. The remedies for the fault states are still verbatim from Appendix
- * F.4 — naming a problem without saying what to do about it is not worth
- * showing — and the healthy states simply say what is true.
+ * problem. Every fault state carries its remedy — naming a problem without
+ * saying what to do about it is not worth showing — and the healthy states
+ * simply say what is true.
  */
 export const MIC_ADVICE: Record<MicCondition, string> = {
   idle: 'Say a few words to check the level.',

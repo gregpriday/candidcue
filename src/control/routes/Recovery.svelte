@@ -2,14 +2,12 @@
   The screen the application shows instead of itself when the database did not
   come up.
 
-  The 1.0 readiness review's finding: `database::init` ran inside Tauri's setup
-  hook, so `DATABASE_CORRUPT` and a failed migration aborted startup BEFORE a
-  webview existed. The two failures most likely to need a human therefore
-  removed every in-app recovery action, and in a release build the user got an
-  application that vanished with nothing on screen saying why.
-
-  Rust now carries the failure into the running app (`database::BootStatus`),
-  the shell asks `get_boot_status` before it routes anywhere, and this renders.
+  Rust carries the failure into the running app (`database::BootStatus`), the
+  shell asks `get_boot_status` before it routes anywhere, and this renders. Do
+  not let `DATABASE_CORRUPT` or a failed migration abort startup in Tauri's
+  setup hook again: that ran before any webview existed, so the two failures
+  most likely to need a human left an app that vanished with nothing on screen
+  saying why.
 
   It reads in the order somebody standing in front of it needs answers:
 
@@ -696,7 +694,7 @@
           {@const isRecommended = backup.name === recommendedBackup}
           <li class="backup" class:damaged={!backup.verified}>
             <!--
-              Verified state as an ICON AND WORDS, never opacity alone (§9.4).
+              Verified state as an ICON AND WORDS, never opacity alone.
               A dimmed row says "this is less important"; it does not say "this
               backup is damaged and cannot be restored", which is the one thing
               somebody choosing between backups has to know.
@@ -778,9 +776,8 @@
 
 <style>
   /*
-   * A SYSTEM UTILITY, not an editorial page (§17.1), and every value comes from
-   * the token scale. Two colours here once named tokens that do not exist, and
-   * the backup rows rendered with no border and no background at all.
+   * A SYSTEM UTILITY, not an editorial page, and every value comes from the
+   * token scale.
    *
    * The scroller is the whole window and the column sits inside it. The column
    * used to BE the scroller — a fixed-height flex column — so instead of the
@@ -1077,7 +1074,7 @@
     font-family: var(--font-mono);
     overflow-wrap: anywhere;
   }
-  /* No opacity dimming — the icon and the words carry the state (§9.4). */
+  /* No opacity dimming — the icon and the words carry the state. */
   .damaged .backup-moment {
     color: var(--text-secondary);
   }

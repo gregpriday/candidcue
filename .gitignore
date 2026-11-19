@@ -73,3 +73,7 @@ sbom/*
 !sbom/native-inputs.json
 dist-release/
 provenance/
+
+# Ad-hoc perf recordings (scripts/perf-run.mjs). The baseline is committed
+# beside this folder, in bench/perf/<label>.json, on purpose.
+bench/perf/runs/

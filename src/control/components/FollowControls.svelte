@@ -1,10 +1,9 @@
 <!--
-  Live following controls (companion §48; action copy in the primary
-  Appendix F.12 voice).
+  Live following controls.
 
-  Pausing *following* is deliberately separate from pausing the *session*
-  (§15.3): this stops automatic movement while transcription keeps running.
-  The transport in the footer still owns session pause.
+  Pausing *following* is deliberately separate from pausing the *session*:
+  this stops automatic movement while transcription keeps running. Session
+  pause is not one of these controls.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
@@ -45,7 +44,7 @@
 </script>
 
 <!--
-  ONE VOCABULARY (CCUX-002).
+  ONE VOCABULARY.
 
   Every label here came from `take-vocabulary.ts` rather than being written in
   place, because writing them in place is how the app ended up with three names
@@ -61,7 +60,7 @@
 -->
 <div class="follow-controls">
   <!--
-    §48: offer the local candidates instead of guessing when lost.
+    Offer the local candidates instead of guessing when lost.
 
     The WHOLE line, wrapped. These are near-identical sentences by
     construction — that is why the tracker could not choose — and an ellipsis

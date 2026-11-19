@@ -41,7 +41,7 @@ export function onRouteCommand(handler: Handler): () => void {
 }
 
 /**
- * The editor's insertions, from the native Insert menu (§11.4).
+ * The editor's insertions, from the native Insert menu.
  *
  * Their own channel rather than eight `RouteCommand` ids, for the same reason
  * `InsertKind` is a union: they are one family answered one way, and the bus

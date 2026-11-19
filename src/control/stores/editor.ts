@@ -1,6 +1,6 @@
 /**
- * EditorStore (spec §45.2) — current source, save state, autosave.
- * Autosave debounces ~500 ms after typing stops (spec §13.5); Cmd/Ctrl+S
+ * EditorStore — current source, save state, autosave.
+ * Autosave debounces ~500 ms after typing stops; Cmd/Ctrl+S
  * saves immediately and shows a brief Saved state.
  */
 import { get, writable } from 'svelte/store';
@@ -32,13 +32,11 @@ export interface EditorState {
   /**
    * The editor's layout is NOT here.
    *
-   * It used to be a `mode: 'edit' | 'preview'` field on this store, which made
-   * it a property of the open DOCUMENT: closing a script reset it, so the
-   * arrangement somebody chose was forgotten on every open. §11.3 asks for the
-   * opposite — the last mode persists — and it also asks for a third, split
-   * arrangement this two-value union could not express.
+   * A field on this store would make it a property of the open DOCUMENT:
+   * closing a script would reset it, and the arrangement somebody chose would
+   * be forgotten on every open. The last layout has to persist.
    *
-   * It lives in `stores/workspace.ts` now, with the pane widths, where it is
+   * It lives in `stores/workspace.ts`, with the pane widths, where it is
    * persisted per machine and survives a relaunch. See `editorLayout` there.
    */
   lastError: string | null;
@@ -72,7 +70,7 @@ export const AUTOSAVE_DEBOUNCE_MS = 500;
 export const SAVED_BADGE_MS = 2400;
 
 /**
- * Caller-side compile debounce (spec §45.3). The worker coalescer already
+ * Caller-side compile debounce. The worker coalescer already
  * supersedes stale requests, but firing one per keystroke still ships the
  * whole document across the worker boundary on every character. 90 ms is
  * below the ~100 ms threshold where a preview stops feeling live, so the
@@ -145,12 +143,9 @@ function adoptDocument(doc: ScriptDocument): void {
      * `idle`, not `saved`.
      *
      * A freshly opened document has not been saved — it has been READ, and
-     * nothing has happened to it since. It used to open as `saved`, which was
-     * harmless while the label lived in a header nobody read closely and became
-     * wrong the moment the status bar adopted §11.7's rule: "Saved" is
-     * TRANSIENT, and a permanent one from the instant of opening is a claim the
-     * user learns to ignore — so the real one, after a real save, says nothing
-     * either.
+     * nothing has happened to it since. "Saved" is TRANSIENT, and a permanent
+     * one from the instant of opening is a claim the user learns to ignore — so
+     * the real one, after a real save, says nothing either.
      */
     saveState: 'idle',
   });
@@ -253,8 +248,9 @@ export async function saveDocument(): Promise<void> {
 /** Immediate save (the autosave flush, and every save that is not explicit). */
 export async function saveNow(): Promise<void> {
   // Flush the pending compile first, even when there is nothing to save:
-  // Preflight awaits saveNow() and then issues its own compile at revision 0,
-  // and a debounced keystroke landing after that would supersede it.
+  // `startTake` awaits saveNow() and then issues its own compile, the worker
+  // keeps only the latest request, and a debounced keystroke landing after
+  // that would supersede it.
   flushPendingCompile();
   /*
    * Behind the save already on the wire, and re-read afterwards: it will have
@@ -318,12 +314,11 @@ async function performSave(scriptId: string, s: EditorState): Promise<void> {
       lastError: null,
     }));
     /*
-     * "Saved" is TRANSIENT (§11.7), and this is what makes it so.
+     * "Saved" is TRANSIENT, and this is what makes it so.
      *
-     * `savedBadgeTimer` existed and was only ever CLEARED — nothing armed it —
-     * so the label, once shown, stayed for the life of the document. A status
-     * that is permanently on is a status nobody reads, which is exactly what
-     * makes the next one that matters invisible.
+     * Without this timer the label, once shown, would stay for the life of the
+     * document. A status that is permanently on is a status nobody reads, which
+     * is exactly what makes the next one that matters invisible.
      *
      * Back to `idle` rather than to a second state: `idle` already means "there
      * is nothing to report", which is the truth a couple of seconds after a save
@@ -340,7 +335,7 @@ async function performSave(scriptId: string, s: EditorState): Promise<void> {
   } catch (err) {
     if (generation !== openGeneration) return;
     /*
-     * F.8 external-change conflict.
+     * The external-change conflict.
      *
      * Rust signals a file that changed outside Speaking Glass as an ERROR
      * (`SCRIPT_CONFLICT`), not as a `SaveResult.status` — its SaveResult has no
@@ -382,7 +377,7 @@ export async function flushEditorEdits(scriptId: string): Promise<void> {
   }
 }
 
-/* --- F.8 external-conflict resolution --------------------------------- */
+/* --- External-conflict resolution ------------------------------------ */
 
 /**
  * The name the editor's text is filed under when the disk version wins.

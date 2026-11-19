@@ -1,5 +1,5 @@
 <!--
-  Rendered preview of CompiledScript blocks (spec §13.2). Consumes only the
+  Rendered preview of CompiledScript blocks. Consumes only the
   compiler contract's SafeRenderNode structure — never raw HTML.
 -->
 <script lang="ts" module>
@@ -27,7 +27,7 @@
     /** What is known about each image, by asset id (#250). */
     images?: PreviewImages;
     /**
-     * Problems the compiler found in a block, by block id (§23.8): drawn where
+     * Problems the compiler found in a block, by block id: drawn where
      * they are, so a broken directive is not just a line of faint source text
      * with its explanation somewhere else on the screen.
      */
@@ -584,7 +584,7 @@
     min-width: 0;
   }
 
-  /* A line of cues — visually distinct, clearly not spoken text (§23.2). The
+  /* A line of cues — visually distinct, clearly not spoken text. The
      chips are the inline chips, at the size they are inside a sentence, so a
      cue looks the same wherever it was written. */
   .cue-row {
@@ -594,7 +594,7 @@
   }
 
   /*
-   * A part break (§23.3): a named divider across the column. Neutral, because
+   * A part break: a named divider across the column. Neutral, because
    * it is structure rather than direction, and marked with the flag the Insert
    * toolbar already uses for it.
    */
@@ -742,7 +742,7 @@
   }
 
   /*
-   * A problem the compiler found in this block (§23.8), where it is. The same
+   * A problem the compiler found in this block, where it is. The same
    * family as an image that could not be found: the danger wash and a firmer
    * edge all the way round. A warning that does not stop presenting takes the
    * warning tone instead.

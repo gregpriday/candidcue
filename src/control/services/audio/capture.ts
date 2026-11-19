@@ -1,11 +1,12 @@
 /**
- * PCM capture for speech-to-text (spec §28.3).
+ * PCM capture for speech-to-text.
  *
  * Takes the single microphone stream the session already owns and produces
- * fixed-size mono frames at the one sample rate the provider is told about.
- * Nothing here decides whether the presenter is speaking: the recogniser endpoints
- * server-side, so this pipe is unconditional for the length of a take. A frame
- * of silence is not waste — it is what tells the server the sentence ended.
+ * fixed-size mono frames at the one sample rate Rust is told about.
+ * Nothing here decides whether the presenter is speaking: the recogniser
+ * endpoints on its own, in Rust, so this pipe is unconditional for the length
+ * of a take. A frame of silence is not waste — it is what tells the recogniser
+ * the sentence ended.
  *
  * ---------------------------------------------------------------------------
  * WHY `ScriptProcessorNode`
@@ -15,7 +16,7 @@
  * genuinely negligible at this rate — in exchange for a separately-bundled
  * module, a port protocol, and a load step that can fail after the take has
  * started. Every one of those is a way for a take to open the microphone and
- * send nothing, which is the exact failure this rewrite exists to eliminate.
+ * send nothing, which is the exact failure this pipeline is built to rule out.
  * If profiling ever shows this on a flame graph, revisit it then.
  *
  * ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ export interface PcmCaptureDeps {
  * Only runs when the engine refused the requested `sampleRate` — Safari has
  * honoured it since 14.1, so this is insurance rather than the normal path.
  * Insurance worth carrying: without it a context that came back at 48 kHz
- * would send double-speed audio under a config frame claiming 24 kHz, and the
+ * would send double-speed audio to a Rust clock that assumes 24 kHz, and the
  * result is not an error but a transcript of something nobody said.
  */
 export function resampleLinear(

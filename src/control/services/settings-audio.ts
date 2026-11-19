@@ -1,5 +1,5 @@
 /**
- * Audio-settings adapter (spec §28.3, §28.4) between the Rust settings document
+ * Audio-settings adapter between the Rust settings document
  * and the UI view.
  *
  * Only ONE field in the UI's `audio` section is Rust-owned: `vadSensitivity`.
@@ -10,47 +10,40 @@
  *
  * Sensitivity is different in kind. It describes a room and a microphone
  * rather than a machine, and it is the number both meters judge speech by, so
- * it belongs with `following` (§47): it changes what the app reports about a
+ * it belongs with `following`: it changes what the app reports about a
  * session, and it has to outlive the frontend's local storage rather than
  * quietly returning to neutral the first time that store is cleared.
- *
- * (It used to be Rust-owned for a stronger reason — `speech_ended` was the
- * commit cue for a hosted recogniser, so the threshold decided how much audio
- * was sent and billed. That recogniser is gone and nothing commits any more.
- * The setting stays server-side because a room's noise floor is still not
- * per-machine capture state, not because it costs anything.)
  *
  * ONE SLIDER, AND BOTH METERS READ IT. Settings → Audio is where the setting
  * lives, because it is a property of a room and a microphone rather than of a
  * take. It sits next to the mic meter, which is how anyone discovers they have
  * a problem worth fixing — the meter observes at this same sensitivity, so a
- * change is visible immediately instead of being felt mid-session. Preflight
- * used to carry a second copy of the control; it is gone, and the invariant
- * that outlived it is that the meter in Settings and the monitor during a take
- * both read this saved value, so the one you tune against is the one you get.
+ * change is visible immediately instead of being felt mid-session. The meter
+ * in Settings and the monitor during a take both read this saved value, so the
+ * one you tune against is the one you get.
  *
  * It decides what the METER calls speech, and nothing else. Audio streams to
  * the recogniser unconditionally at every position — see the description below.
  */
 /** Camel-cased twin of `settings::AudioSettings` in Rust. */
 export interface RustAudioSettings {
-  /** The bundled recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
+  /** The configured recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
   transcriptionModel: string;
   /** BCP-47 tag, e.g. `en-US`. Rust repairs a tag the selected recogniser
-   * cannot transcribe; the bundled one is bilingual (`zh-en`). */
+   * cannot transcribe; the catalogue's recogniser is bilingual (`zh-en`). */
   language: string;
   /*
    * No `softPauseAutoDisconnectMinutes`: nothing ever disconnected on it, and
    * Rust dropped it (#219).
    */
-  /** 0-1; 0.5 is the Appendix A.6 neutral (§28.4). */
+  /** 0-1; 0.5 is neutral, `DEFAULT_VAD_CONFIG` unchanged. */
   vadSensitivity: number;
 }
 
 export const VAD_SENSITIVITY_RANGE = {
   min: 0,
   max: 1,
-  /** Exactly the A.6 defaults — see `vadConfigForSensitivity`. */
+  /** Exactly `DEFAULT_VAD_CONFIG` — see `vadConfigForSensitivity`. */
   neutral: 0.5,
 } as const;
 

@@ -1,22 +1,12 @@
 <!--
-  The end-of-session summary (F.17), and it is deliberately NOT part of the Live
-  route any more.
+  The end-of-session summary, and it is deliberately NOT part of the Live
+  route.
 
   ---------------------------------------------------------------------------
-  WHY IT MOVED OUT OF LIVE
+  WHY IT IS NOT IN LIVE
   ---------------------------------------------------------------------------
-  A take now ends by going back to the editor. That is the whole point: the
-  three things anybody wants when a take stops are this report, the script they
-  just read, and another go — and the operator console Live falls back to when
-  no session is running answered none of them. It was laid out for a two-window
-  rig, so its centre pane is a scaled mirror of a prompter that was in this very
-  window, and half its controls (Start, End session, Resume following, Nudge)
-  offer to drive a take that is over.
-
-  Nobody ever saw it during a take, because presentation mounts the stage over
-  the whole window. It only appeared for the seconds between a take ending and
-  somebody pressing one of these buttons — which is the one moment it has
-  nothing useful to say.
+  A take ends by going back to the editor: the three things anybody wants when
+  a take stops are this report, the script they just read, and another go.
 
   So `endTake` navigates to the editor under its own cover, and this report has
   to outlive that navigation. Hence: an app-level host beside ToastRegion and
@@ -53,9 +43,7 @@
 
   /*
    * Dismissal is a plain close, because the screen behind this dialog is
-   * already the destination. It used to be a navigation — "Return to editor" —
-   * and that was the right answer while the summary opened over an operator
-   * console nobody wanted to be left on.
+   * already the destination.
    */
   function dismiss(): void {
     clearSession();
@@ -88,7 +76,7 @@
     await checkThenStartTake(scriptId, {
       ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
       /*
-       * §parts: identity only. `startTake` re-resolves the span against the
+       * The part travels as identity only. `startTake` re-resolves the span against the
        * compile the new take runs on, which matters most here — this dialog can
        * sit open while the editor behind it is being edited, and the part that
        * was recorded may not be the part that now bears its name.
@@ -102,8 +90,7 @@
   }
 
   /**
-   * The section this take ended in, when there is one to go back to
-   * (CCUX-008).
+   * The section this take ended in, when there is one to go back to.
    *
    * The whole point of the retake loop: a creator who fumbled a line six
    * minutes in should not have to read the first six minutes again, and the
@@ -115,7 +102,7 @@
   const retrySection = $derived($session.summary?.sectionStartTokenIndex ?? null);
 
   /*
-   * §parts. The part this take was recording, and the one after it.
+   * The part this take was recording, and the one after it.
    *
    * `part` being set is what turns the primary action from "the whole script
    * again" into "this part again": somebody who launched part three and stopped
@@ -140,11 +127,11 @@
   const alternatives = $derived(actions.filter((action) => !action.primary));
 
   /**
-   * The conclusion, drawn once (CCUX-006).
+   * The conclusion, drawn once.
    *
    * The measurements below it are unchanged and still exact — support and QA
    * need every one, and several exist because a specific failure was invisible
-   * without them. What changed is that the presenter is no longer the one
+   * without them. But the presenter is not the one
    * expected to derive "did it hear me, and did it follow" from nineteen rows
    * while standing up from a camera.
    */
@@ -209,7 +196,7 @@
     {@const followed = followedLabel(summary)}
 
     <!--
-      THE ANSWER, ABOVE THE EVIDENCE (CCUX-006).
+      THE ANSWER, ABOVE THE EVIDENCE.
 
       Nothing here judges the delivery, and it must stay that way: Speaking Glass can
       report whether it heard and whether it followed, and nothing in it
@@ -261,7 +248,7 @@
         <dt>Ended in</dt>
         <dd>{summary.endingLocation}</dd>
         <!--
-          §parts. Shown only for a take that was aimed at one — an unbounded
+          Shown only for a take that was aimed at one — an unbounded
           take has no part to have finished or fallen short of, and a row
           saying so would be reporting on a goal nobody set.
         -->
@@ -289,7 +276,7 @@
     {/if}
 
     <!--
-      THE MEASUREMENTS, COLLAPSED (CCUX-007).
+      THE MEASUREMENTS, COLLAPSED.
 
       Collapsed, not culled: a support request is unanswerable without them.
     -->
@@ -451,7 +438,7 @@
   }
 
   /*
-   * The outcome card (CCUX-006).
+   * The outcome card.
    *
    * It carries the conclusion, so it is the one element on this dialog with any
    * weight. The tones are deliberately restrained — `attention` is warm rather

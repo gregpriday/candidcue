@@ -237,7 +237,7 @@ const highlight = HighlightStyle.define([
   { tag: t.comment, color: 'var(--text-muted)', fontStyle: 'italic' },
   { tag: t.strikethrough, textDecoration: 'line-through', color: 'var(--text-muted)' },
   /*
-   * Markdown punctuation stays visible but restrained (spec §13.2). Reset to
+   * Markdown punctuation stays visible but restrained. Reset to
    * regular, upright and undecorated: the marks inherit the style of what they
    * wrap, so `**` came out bold, `*` italic and `~~` struck through, and the
    * punctuation weighed as much as the words it was marking.

@@ -1,8 +1,8 @@
 /**
- * Pure presentation helpers for the revision browser (spec §21.4).
+ * Pure presentation helpers for the revision browser.
  *
- * Kept out of the component so the labelling is unit-testable: this repo has
- * no jsdom, so anything that matters has to live in a plain module.
+ * Kept out of the component so the labelling is unit-testable in a plain node
+ * test, without mounting the component.
  *
  * The `reason` strings are written by Rust (`repo::create_revision_snapshot`
  * callers) and are the ONLY vocabulary that can appear:

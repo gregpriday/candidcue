@@ -1,5 +1,5 @@
 <!--
-  The external-change conflict sheet (F.8): "This script changed on disk".
+  The external-change conflict sheet: "This script changed on disk".
 
   The author meets this mid-sentence. Another program rewrote the file, every
   autosave since has been refused, and the text in front of them exists nowhere
@@ -7,9 +7,6 @@
   and the text is safe in this window, show how the two versions actually
   differ, and say — before the click — where the version that is not kept
   will be.
-
-  It used to do only the last, in one monospaced paragraph, and asked for a
-  choice between two versions it never showed.
 
   THE COMPARISON
   The disk version is on the left and the editor's on the right: the order a

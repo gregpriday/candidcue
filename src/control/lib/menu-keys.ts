@@ -44,7 +44,7 @@
  * - It works while typing, as a menu accelerator does: Ctrl+S saves from inside
  *   the editor.
  * - It stands down behind a modal dialog, which owns the keyboard — the rule
- *   `shortcuts.ts` already keeps (spec §19). Ctrl+B with the Keyboard Shortcuts
+ *   `shortcuts.ts` already keeps. Ctrl+B with the Keyboard Shortcuts
  *   sheet up must not reach into the document behind it and pull focus there.
  * - It never touches the Edit menu's Cut, Copy, Paste, Undo, Redo and Select
  *   All. Those are the platform's predefined items, not registry commands, and

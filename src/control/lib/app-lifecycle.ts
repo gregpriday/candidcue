@@ -31,12 +31,13 @@ import type { Route } from '../stores/router';
  * worse trade than opening on defaults and letting the save path report
  * failures as they happen.
  *
- * Honest limitation: neither code can currently reach this check. Both are
- * raised by `database::init()`, which runs inside Tauri's setup hook
- * (`src-tauri/src/app.rs`) and aborts startup before a webview exists, so they
- * never arrive as a `get_settings` rejection. This branch is the policy for if
- * that ever changes; what it actually fixes today is the far broader class of
- * ordinary rejections that used to hang the splash.
+ * Honest limitation: neither code normally reaches this check. Both are
+ * raised by `database::init()` in Tauri's setup hook (`src-tauri/src/app.rs`),
+ * which carries the failure into the running app as a boot status; the shell
+ * reads `get_boot_status` first and renders recovery before any settings read.
+ * This branch is the policy for a `get_settings` rejection that carries one
+ * anyway; what it mostly covers is the far broader class of ordinary
+ * rejections that would otherwise hang the splash.
  */
 const FATAL_BOOT_CODES: ReadonlySet<string> = new Set([
   'DATABASE_MIGRATION_FAILED',
@@ -47,19 +48,17 @@ const FATAL_BOOT_CODES: ReadonlySet<string> = new Set([
  * One body for both ways out of a take, so they cannot drift again.
  *
  * They had drifted: one path reassured the presenter their script kept its
- * place and the other did not, and both described "the realtime connection
- * closing" — a network that stopped existing when transcription moved
- * on-device. Neither says "full screen" any more either, because reader-window
- * mode is not full screen.
+ * place and the other did not. Neither says "full screen", because
+ * reader-window mode is not full screen.
  *
- * "Ending", not "stopping". §115 settled the vocabulary on one verb for one
- * action: the transport button, the stage dock, the shortcut help and both
+ * "Ending", not "stopping": one verb for one
+ * action. The transport button, the stage dock, the shortcut help and both
  * confirmations all say "end" now, because three names for one action read as
  * three actions and the presenter reaches for whichever they happen to see.
  *
  * It deliberately stops short of promising the take summary, which is the one
  * sentence Live's own dialog would like to add. Live's exit does show a summary
- * — that is what §115 fixed — but the other caller is App's navigation guard,
+ * — but the other caller is App's navigation guard,
  * which clears the session on its way to somewhere that is not Live. A shared
  * body that promised a summary would therefore be false on exactly one of the
  * two paths this constant exists to keep honest, which is the class of defect
@@ -83,7 +82,7 @@ export const STOP_SESSION_CONFIRM_BODY =
   'presenting again starts a new take from the beginning.';
 
 /**
- * The same question over a rehearsal (§practice).
+ * The same question over a rehearsal.
  *
  * Both halves of "End this take?" are wrong there — there is no take, and "end"
  * is the word for the thing that produces a report — which is why the dock's
@@ -110,7 +109,7 @@ export const STOP_PRACTICE_CONFIRM_BODY =
  * one that quits, so a copy that said less there would be the worst place for
  * it to drift.
  *
- * `practice` swaps all three words (§practice): over a rehearsal "End this
+ * `practice` swaps all three words: over a rehearsal "End this
  * take?" names neither the thing that is running nor what this does to it.
  */
 export function sessionEndConfirmation(practice: boolean): ConfirmRequest {

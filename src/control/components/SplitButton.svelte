@@ -448,7 +448,7 @@
   .caret:hover:not(:disabled) {
     background: var(--bg-hover-surface);
   }
-  /* Darkens rather than shrinks (§23.5, §9.3) — see `Button.svelte`. */
+  /* Darkens rather than shrinks — see `Button.svelte`. */
   .main:active:not(:disabled),
   .caret:active:not(:disabled) {
     background: var(--bg-secondary);
@@ -457,7 +457,7 @@
   /* Primary — the same flat accent fill and 13px label as Button: no lip, no
      shadow, no bigger hero label (see the note at the top of Button.svelte). */
   .primary {
-    /* The hero action's height (36px, tokens.css §9.1): Present is the one
+    /* The hero action's height (36px, tokens.css): Present is the one
        control on the route that is taller than its neighbours, and at 32px it
        sat shorter than the Edit / Preview / Both track beside it. */
     min-height: var(--control-h-lg);

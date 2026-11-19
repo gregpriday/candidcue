@@ -1,7 +1,6 @@
 /**
- * Request/response types for the script commands (spec §46.2) that are not
- * yet mirrored in `src/shared/contracts`. Kept UI-side so contract files stay
- * owned by the Rust integration; promote these additively when Rust lands.
+ * Request/response types for the script commands that are not mirrored in
+ * `src/shared/contracts`.
  */
 import type { ScriptSummary } from '../../shared/contracts';
 
@@ -59,7 +58,7 @@ export interface SaveResult {
  *
  * There is deliberately no path here. Rust runs the native open dialog itself
  * and imports what the operator chose in the same trusted operation, so the
- * webview cannot name a file (spec §50.7). It used to send an absolute path,
+ * webview cannot name a file. It used to send an absolute path,
  * which meant anything running in the control window could read any Markdown
  * or text file on the machine.
  */
@@ -78,7 +77,7 @@ export interface ImportResult {
  *
  * As with imports there is no destination: Rust runs the save dialog and writes
  * the file in one operation. The old shape let the webview name any absolute
- * destination, which `File::create` then truncated (spec §50.7).
+ * destination, which `File::create` then truncated.
  */
 export type ExportFormat = 'markdown' | 'text' | 'bundle';
 

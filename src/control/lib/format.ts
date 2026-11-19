@@ -74,7 +74,7 @@ export interface ScriptMetaCounts {
 }
 
 /**
- * "0 words · — · 0 cues" statistics line under the editor title (spec §21.8).
+ * "0 words · — · 0 cues" statistics line under the editor title.
  *
  * Never returns an empty string, and that is the whole point: the header
  * renders this line only when it has text, so a version that went empty at zero
@@ -109,7 +109,7 @@ export function formatClock(totalSeconds: number): string {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-/** Relative "last edited" label for library rows (spec §12.2). */
+/** Relative "last edited" label for library rows. */
 export function relativeTime(iso: string, nowMs: number = Date.now()): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return '';
