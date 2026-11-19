@@ -91,7 +91,10 @@ test('Welcome waits for the notice, then shows it above the buttons that would e
   await card.getByRole('button', { name: 'Dismiss' }).click();
   await expect(notice(page)).toHaveCount(0);
 
+  // The shim holds the reply again on a reload, as on the first boot.
   await page.reload();
+  await expect.poll(() => calls(page, 'get_legacy_library_notice')).toHaveLength(1);
+  await page.evaluate(() => window.__E2E__.setHeld('get_legacy_library_notice', false));
   await expect(notice(page)).toBeVisible();
 
   errors.expectClean();
