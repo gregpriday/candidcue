@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   HARDENED_RUNTIME,
   MICROPHONE,
@@ -34,7 +34,7 @@ const IDENTIFIER = 'com.speakingglass.app';
 const TEAM = 'A1B2C3D4E5';
 const IDENTITY = `Developer ID Application: Ada Lovelace (${TEAM})`;
 
-/** What the unsigned build printed in #189: the linker's signature and nothing else. */
+/** Synthetic, shaped on what #189 reported: the linker's signature and nothing else. */
 const ISSUE_ADHOC = `Executable=/tmp/Speaking Glass.app/Contents/MacOS/speaking-glass
 Identifier=speaking_glass-5f0c1d2e3a4b5c6d
 Format=app bundle with Mach-O universal (x86_64 arm64)
@@ -102,12 +102,29 @@ describe('reading a signature', () => {
     // `runtime` alongside other bits, as codesign prints for a library-validated app.
     const withKill = RELEASE.replace('flags=0x10000(runtime)', 'flags=0x12200(kill,library-validation,runtime)');
     expect(signatureProblems(parseCodesignDetails(withKill), expected)).toEqual([]);
+    // The number decides, not codesign's label for it.
+    const unlabelled = RELEASE.replace('flags=0x10000(runtime)', 'flags=0x10000');
+    expect(signatureProblems(parseCodesignDetails(unlabelled), expected)).toEqual([]);
+    const labelOnly = RELEASE.replace('flags=0x10000(runtime)', 'flags=0x0(runtime)');
+    expect(signatureProblems(parseCodesignDetails(labelOnly), expected).join('\n')).toContain(
+      'the hardened runtime is off',
+    );
+  });
+
+  it.each([
+    ['the ad-hoc flag alone', RELEASE.replace('flags=0x10000(runtime)', 'flags=0x10002(adhoc,runtime)')],
+    ['the Signature line alone', RELEASE.replace('Signature size=9041', 'Signature=adhoc')],
+  ])('calls a signature ad hoc on %s', (_label, text) => {
+    expect(signatureProblems(parseCodesignDetails(text), expected).join('\n')).toContain('it is signed ad hoc');
   });
 
   it.each([
     ['without the hardened runtime', RELEASE.replace('flags=0x10000(runtime)', 'flags=0x0(none)'), 'the hardened runtime is off'],
     ['by a development certificate', RELEASE.replace(`Authority=${IDENTITY}`, `Authority=Apple Development: Ada Lovelace (${TEAM})`), 'first authority: Apple Development: Ada Lovelace'],
-    ['by another team', RELEASE.replace(`TeamIdentifier=${TEAM}`, 'TeamIdentifier=Z9Y8X7W6V5'), `signed by Team ID Z9Y8X7W6V5, not ${TEAM}`],
+    ['by another team', RELEASE.replaceAll(TEAM, 'Z9Y8X7W6V5'), `signed by Team ID Z9Y8X7W6V5, not ${TEAM}`],
+    ['with a Developer ID that is not the leaf', RELEASE.replace(`Authority=${IDENTITY}`, `Authority=Apple Development: Ada (${TEAM})\nAuthority=${IDENTITY}`), 'first authority: Apple Development: Ada'],
+    ['with no TeamIdentifier line', RELEASE.replace(`TeamIdentifier=${TEAM}\n`, ''), 'it carries no Team ID'],
+    ['with an empty timestamp', RELEASE.replace(/^Timestamp=.*$/m, 'Timestamp='), 'no secure timestamp'],
     ['as another app', RELEASE.replace(`Identifier=${IDENTIFIER}`, 'Identifier=com.example.other'), `its signing identifier is com.example.other, not ${IDENTIFIER}`],
     ['with only the signer’s own clock', RELEASE.replace(/^Timestamp=.*$/m, 'Signed Time=19 Nov 2026 at 10:00:00'), 'no secure timestamp'],
     ['with no code directory at all', 'test.app: code object is not signed at all\n', 'not signed at all'],
@@ -149,6 +166,23 @@ describe('reading entitlements', () => {
     expect(problems[0]).toContain('not by the usage string');
   });
 
+  it('compares values, not just keys', () => {
+    expect(entitlementProblems({ ...SOURCE, 'com.apple.security.network.client': false }, SOURCE)).toEqual([
+      'com.apple.security.network.client is false in the signed bundle and true in src-tauri/entitlements/entitlements.macos.plist',
+    ]);
+  });
+
+  it('holds the microphone to the source in both directions too', () => {
+    // A source that stopped declaring it, or declared it false, is a change the
+    // signed bundle must follow, and the microphone check alone would miss it.
+    expect(entitlementProblems(SOURCE, { 'com.apple.security.network.client': true })).toEqual([
+      `${MICROPHONE} is granted by the signed bundle but not declared in src-tauri/entitlements/entitlements.macos.plist`,
+    ]);
+    expect(entitlementProblems(SOURCE, { ...SOURCE, [MICROPHONE]: false })).toEqual([
+      `${MICROPHONE} is true in the signed bundle and false in src-tauri/entitlements/entitlements.macos.plist`,
+    ]);
+  });
+
   it('refuses a declared entitlement that did not survive signing', () => {
     expect(entitlementProblems({ [MICROPHONE]: true }, SOURCE)).toEqual([
       'com.apple.security.network.client is absent in the signed bundle and true in src-tauri/entitlements/entitlements.macos.plist',
@@ -187,19 +221,26 @@ const canSign =
   spawnSync('codesign', ['-h']).error === undefined;
 
 describe.skipIf(!canSign)('the inspection, run on bundles signed here', () => {
-  const root = mkdtempSync(join(tmpdir(), 'verify-signed-bundle-'));
-  afterAll(() => rmSync(root, { recursive: true, force: true }));
-
-  const source = join(root, 'main.c');
-  writeFileSync(source, 'int main(void) { return 0; }\n');
-  const binary = join(root, 'speaking-glass');
-  const compiled = canSign
-    ? spawnSync('cc', ['-arch', 'arm64', '-arch', 'x86_64', '-o', binary, source], { encoding: 'utf8' })
-    : undefined;
+  let root = '';
+  let binary = '';
+  let compiled: ReturnType<typeof spawnSync> | undefined;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'verify-signed-bundle-'));
+    const source = join(root, 'main.c');
+    writeFileSync(source, 'int main(void) { return 0; }\n');
+    binary = join(root, 'speaking-glass');
+    compiled = spawnSync('cc', ['-arch', 'arm64', '-arch', 'x86_64', '-o', binary, source], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+  }, 90_000);
+  afterAll(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
 
   let count = 0;
   function bundle(sign?: string[], entitlements?: string): string {
-    expect(compiled?.status, compiled?.stderr).toBe(0);
+    expect(compiled?.status, String(compiled?.stderr)).toBe(0);
     const app = join(root, `case-${++count}`, 'Speaking Glass.app');
     mkdirSync(join(app, 'Contents/MacOS'), { recursive: true });
     writeFileSync(
@@ -231,6 +272,7 @@ describe.skipIf(!canSign)('the inspection, run on bundles signed here', () => {
     const result = spawnSync(process.execPath, [SCRIPT, app], {
       encoding: 'utf8',
       env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...env },
+      timeout: 60_000,
     });
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   }
@@ -293,7 +335,7 @@ describe.skipIf(!canSign)('the inspection, run on bundles signed here', () => {
 
   it('fails, rather than skipping the team, when the release identity is not given', { timeout: 30_000 }, () => {
     const app = bundle(['--options', 'runtime'], ENTITLEMENTS);
-    for (const env of [{}, { APPLE_SIGNING_IDENTITY: '-' }]) {
+    for (const env of [{}, { APPLE_SIGNING_IDENTITY: '-' }] as Array<Record<string, string>>) {
       const { status, stderr } = verify(app, env);
       expect(status).toBe(1);
       expect(stderr).toContain('APPLE_SIGNING_IDENTITY is not set to a "Developer ID Application: <name> (<TEAM ID>)" identity');

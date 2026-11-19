@@ -603,6 +603,13 @@ jobs:
           hdiutil verify "$DMG"
           xcrun stapler validate "$DMG"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+          # The app a browser download opens is the copy INSIDE the image, so
+          # it gets the full inspection too, read-only, where it sits.
+          MOUNT="$RUNNER_TEMP/dmg"
+          rm -rf "$MOUNT" && mkdir -p "$MOUNT"
+          hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT" >/dev/null
+          node scripts/verify-signed-bundle.mjs "$MOUNT/Speaking Glass.app"
+          hdiutil detach "$MOUNT" >/dev/null
           rm -rf "$RUNNER_TEMP/payload" && mkdir -p "$RUNNER_TEMP/payload"
           tar -xzf "$BUNDLE"/macos/*.app.tar.gz -C "$RUNNER_TEMP/payload"
           # The same inspection as the bundle beside it: an updater payload

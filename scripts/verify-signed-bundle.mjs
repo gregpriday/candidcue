@@ -168,7 +168,7 @@ export function entitlementProblems(signed, source) {
     }
   }
   for (const key of Object.keys(signed)) {
-    if (Object.hasOwn(source, key) || key === MICROPHONE) continue;
+    if (Object.hasOwn(source, key)) continue;
     problems.push(
       `${key} is granted by the signed bundle but not declared in ${ENTITLEMENTS_SOURCE}` +
         (key === 'com.apple.security.get-task-allow' ? ' (a debug entitlement notarisation refuses)' : ''),

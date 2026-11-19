@@ -200,8 +200,8 @@ gh run watch <id>
 Read the macOS log for: the keychain import, the universal build,
 notarisation of the app AND the DMG, the step that compares each link map
 against the slice lipo packaged, the copyleft check for both architectures,
-`verify-signed-bundle.mjs` (on the bundle and again on the unpacked updater
-payload: a `PASS` line per slice for the hardened runtime, the Developer ID
+`verify-signed-bundle.mjs` (on the bundle, on the app inside the mounted DMG
+and on the unpacked updater payload: a `PASS` line per slice for the hardened runtime, the Developer ID
 signature and the entitlements), the DMG inspection, the smoke
 launch, and the credential cleanup step reporting that it ran. Read the Windows
 and Linux logs for the TTS-free recogniser (`sherpa-no-tts.mjs`), the GPL check
@@ -339,7 +339,7 @@ BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents
 **Signature, notarisation, Gatekeeper**
 
 The release workflow already runs `scripts/verify-signed-bundle.mjs` on the
-app and on the updater payload, and fails the build on any of what follows. It
+app, on the app inside the DMG and on the updater payload, and fails the build on any of what follows. It
 runs on a downloaded copy too, given the identity it should have been signed
 with (the Team ID is read from it):
 

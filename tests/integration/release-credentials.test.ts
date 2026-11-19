@@ -151,6 +151,8 @@ describe('the release credential gate', () => {
     ['a name with no Team ID', `Developer ID Application: ${sentinel('noteam')}`],
     ['a lower-case Team ID', `Developer ID Application: ${sentinel('lower')} (a1b2c3d4e5)`],
     ['a nine-character Team ID', `Developer ID Application: ${sentinel('short')} (A1B2C3D4E)`],
+    ['an eleven-character Team ID', `Developer ID Application: ${sentinel('long')} (A1B2C3D4E5F)`],
+    ['an empty name', 'Developer ID Application:  (A1B2C3D4E5)'],
     ['a value pasted with a trailing newline', `Developer ID Application: ${sentinel('newline')} (A1B2C3D4E5)\n`],
     ['a value pasted with a leading space', ` Developer ID Application: ${sentinel('space')} (A1B2C3D4E5)`],
   ])('refuses %s as the signing identity, without printing it', (_label, identity) => {
@@ -166,13 +168,17 @@ describe('the release credential gate', () => {
       expect(output).toContain(`present  ${name}`);
     }
     expect(output).not.toContain('Missing release credentials');
+    // The value never appears: `-` cannot be searched for, so its output is
+    // held to another malformed value's, with the sentinel swapped out.
     if (identity.length > 1) expect(output + summary).not.toContain(identity.trim());
+    else expect(output).toBe(gate(['build', 'macos'], { ...env, APPLE_SIGNING_IDENTITY: 'x' }).output);
     for (const name of REQUIRED.build.macos) expect(output + summary).not.toContain(sentinel(name));
   });
 
   it('accepts a Developer ID Application identity, and reads its Team ID', () => {
     const identity = 'Developer ID Application: Ada O\'Neill-Lovelace (Z9Y8X7W6V5)';
     expect(malformed(['APPLE_SIGNING_IDENTITY'], { APPLE_SIGNING_IDENTITY: identity })).toEqual([]);
+    expect(malformed(['APPLE_SIGNING_IDENTITY'], { APPLE_SIGNING_IDENTITY: 'Developer ID Application: A (Z9Y8X7W6V5)' })).toEqual([]);
     expect(DEVELOPER_ID_IDENTITY.exec(identity)?.[1]).toBe('Z9Y8X7W6V5');
     // A name with parentheses of its own still yields the LAST group.
     expect(DEVELOPER_ID_IDENTITY.exec('Developer ID Application: Acme (UK) Ltd (A1B2C3D4E5)')?.[1]).toBe(
@@ -181,7 +187,7 @@ describe('the release credential gate', () => {
   });
 
   it('reports a malformed identity and missing secrets in the same run', () => {
-    const env = { ...all(REQUIRED.build.macos), APPLE_SIGNING_IDENTITY: '-' };
+    const env: Record<string, string> = { ...all(REQUIRED.build.macos), APPLE_SIGNING_IDENTITY: '-' };
     delete env.APPLE_API_ISSUER;
     const { status, output } = gate(['build', 'macos'], env);
     expect(status).toBe(1);
@@ -195,6 +201,10 @@ describe('the release credential gate', () => {
     expect(malformed(['APPLE_SIGNING_IDENTITY'], { APPLE_SIGNING_IDENTITY: '  ' })).toEqual([]);
     expect(malformed(['APPLE_SIGNING_IDENTITY'], {})).toEqual([]);
     expect(malformed(REQUIRED.build.windows, { TAURI_SIGNING_PRIVATE_KEY: '-' })).toEqual([]);
+    for (const os of ['windows', 'linux']) {
+      const env = { ...all(REQUIRED.build[os as 'windows' | 'linux']), APPLE_SIGNING_IDENTITY: '-' };
+      expect(gate(['build', os], env).status, os).toBe(0);
+    }
   });
 
   it('tells a failed publish how to finish once the secrets are added', () => {
