@@ -55,6 +55,28 @@ Playwright reuses any dev server already listening on its port, and the default
 is 1420, so with another checkout's server running there the suite silently
 tests that checkout's code instead of yours.
 
+### Remote runs (spotexec)
+
+Heavy checks can run on AWS Spot VMs through spotexec (`sx`), configured in
+`.spotexec.toml`. Every command runs in `.spotexec/Dockerfile` (Node, pnpm,
+the pinned Rust, Tauri's WebKitGTK), so it is a Linux run, like CI's `linux` job.
+
+```bash
+sx test tests/unit/foo.test.ts tests/dom/bar.test.ts  # files by path, each to its own vitest project
+sx typecheck            # svelte-check: the remote type check
+sx cargo-test           # cargo test, both Rust workspaces
+sx clippy               # Clippy -D warnings, both workspaces
+sx e2e [spec...]        # Playwright, on a port of the job's own
+sx verify               # typecheck + both vitest projects + cargo-test + clippy, in parallel
+```
+
+Single test files are quicker locally; send a set of files, the type check and
+anything Rust through `sx`. A cold slot builds the whole Rust dependency tree
+(minutes); a warm one rebuilds only what changed. Rust targets stay in the
+slot, held small (no incremental, line-table debuginfo) and cleared past a cap
+by `.spotexec/cargo.sh`. Editing `.spotexec/Dockerfile` rebuilds the image on
+the next run; the scripts beside it do not.
+
 Opt-in live tests (skip cleanly without the flag + key, so the normal suite
 never hits the network):
 

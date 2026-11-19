@@ -1,0 +1,4 @@
+# The image needs nothing from .spotexec/ but the Dockerfile. Without this, the
+# task scripts beside it would join the build context, and editing one would
+# change the image's tag and rebuild it on every VM.
+*

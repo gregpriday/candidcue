@@ -1,0 +1,97 @@
+# Runs heavy commands on remote runners with spotexec (`sx`). Runners and
+# accounts live in each developer's ~/.config/spotexec/config.toml; this file
+# says how the project syncs, installs and runs there. Every command runs in
+# .spotexec/Dockerfile (Node, pnpm, the pinned Rust and Tauri's WebKitGTK).
+#
+#   sx test tests/unit/foo.test.ts tests/dom/bar.test.ts   test files by path
+#   sx test                     both vitest projects in full (pnpm test:all)
+#   sx typecheck                svelte-check (pnpm check)
+#   sx cargo-test               cargo test, both Rust workspaces
+#   sx clippy                   Clippy -D warnings, both Rust workspaces
+#   sx e2e [spec...]            Playwright (Chromium) against the Vite dev server
+#   sx verify                   typecheck, test, cargo-test and clippy at once
+version = 1
+timeout = "15m"
+# A run may queue behind a cold cargo build.
+queue_timeout = "30m"
+env_allow = ["NODE_OPTIONS", "TZ"]
+
+# Rust targets are the one thing here that grows without bound: a slot keeps
+# its ignored files between runs, and a debug build of the app with its test
+# binaries runs to many GB. On a runner nothing needs incremental data (it is
+# the largest part of a debug target and only speeds up an edit-compile loop
+# on one machine) or full debuginfo, which every test binary under
+# src-tauri/tests repeats; line tables keep file:line in backtraces. The slot
+# cap in .spotexec/cargo.sh catches the rest.
+env = { CARGO_INCREMENTAL = "0", CARGO_PROFILE_DEV_DEBUG = "line-tables-only", CARGO_PROFILE_TEST_DEBUG = "line-tables-only", CARGO_TERM_COLOR = "always" }
+
+# This project's VMs: the global runner named aws (its account, regions,
+# instance types, baked images and fleet state), with three changes.
+#
+# Four jobs to a VM, not two. These jobs are short and bursty (measured on an
+# r8a.2xlarge, 2026-11-19: svelte-check 14 s, both vitest projects 85 s, a cold
+# cargo test of both workspaces 78 s), and the first `sx verify` spent up to
+# 2.6 minutes of its four parts queued while a second VM booted. Jobs borrow
+# whatever CPUs the others leave idle, and spotexec's memory gate holds a job
+# back until its measured peak fits, so a 32 GiB VM never overcommits.
+#
+# At most four VMs: past that, a burst of agents queues for a warm VM instead
+# of paying another cold start and another idle timeout.
+#
+# A larger work volume. It holds every slot workspace, one per worktree that
+# used the VM, and each keeps its own Rust targets (6.4 GB after a cold
+# cargo-test); 64 GB fills with a handful. Another 96 GB of gp3 on a VM that
+# lives for hours costs about a cent an hour.
+[runners.aws]
+extends = "aws"
+extends_type = "aws-spot"
+max_slots = 4
+max_instances = 4
+work_volume_gb = 160
+
+[sync]
+mode = "auto"
+writeback = "always"
+exclude = [".env*", "*.pem", "*.key"]
+# tests/integration/release-gates.test.ts asks git which sbom files are tracked.
+git_seed = true
+
+# `pnpm install --frozen-lockfile` checks package.json against the lockfile,
+# so both key the cache. Rust targets are deliberately NOT cached here: they
+# follow the sources, not a lockfile, and would be GBs per key.
+[deps]
+lockfiles = ["pnpm-lock.yaml", "package.json"]
+install = "pnpm install --frozen-lockfile"
+cache_dirs = ["node_modules"]
+
+[container]
+dockerfile = ".spotexec/Dockerfile"
+
+# Test files by path, routed to the vitest project that owns them
+# (.spotexec/vitest.mjs); with no paths, both projects in full.
+[tasks.test]
+run = "node .spotexec/vitest.mjs {args}"
+
+[tasks.typecheck]
+run = "pnpm check {args}"
+
+# A cold slot builds the app's whole dependency tree, sherpa-onnx's prebuilt
+# download included.
+[tasks.cargo-test]
+run = "bash .spotexec/cargo.sh test --locked {args}"
+timeout = "45m"
+
+[tasks.clippy]
+run = "bash .spotexec/cargo.sh clippy --locked --all-targets -- -D warnings"
+timeout = "45m"
+
+# Playwright fetches its browser into the slot's persistent $HOME at the
+# version the lockfile pins (a no-op once it is there). The dev server takes a
+# port from this job's range, so two e2e runs on one VM never meet on 1420.
+[tasks.e2e]
+run = '''pnpm exec playwright install chromium && SPEAKING_GLASS_E2E_PORT="$SPOTEXEC_PORT_BASE" pnpm exec playwright test --config=playwright.config.ts {args}'''
+timeout = "30m"
+
+[tasks.verify]
+parallel = ["typecheck", "test", "cargo-test", "clippy"]
+fail_fast = false
