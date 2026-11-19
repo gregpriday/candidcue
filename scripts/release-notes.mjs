@@ -190,11 +190,13 @@ if (prose.length < 120) {
  * Placeholder MARKERS only. "Draft" used to be on this list in any case, and
  * this is an app people write drafts in: "recovers a draft script" is a
  * release note, not a stub. A marker is written in capitals, so a capitalised
- * DRAFT still trips it.
+ * DRAFT still trips it, and so does a heading that calls the section a draft.
  */
 const stub =
   prose.match(/\b(TODO|T\.?B\.?D\.?|FIXME|XXX|coming soon|placeholder)\b/i) ??
-  prose.match(/\bDRAFT\b/);
+  prose.match(/\bDRAFT\b/) ??
+  // …or as a heading, where "### Draft notes" is a marker and never a note.
+  body.match(/^ {0,3}#{1,6}[ \t].*\bdraft\b.*$/im);
 if (stub) {
   fail(`the "## ${wanted.title}" section still contains "${stub[0]}".`);
 }

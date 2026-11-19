@@ -194,17 +194,19 @@ export const RECOGNISER_COPY = {
 } as const satisfies Record<string, RecogniserCopy>;
 
 /**
- * Recogniser copy as a screen with no take shows it: the fault and the repair,
- * without the take's fallback. Settings' microphone test reads it, where nothing
- * is scrolling and the key does nothing. Any other copy is returned unchanged.
+ * Recogniser copy as a screen with no take shows it: the take's fallback
+ * clause taken out, the fault and the repair left. Settings' microphone test
+ * reads it, where nothing is scrolling and the key does nothing. The clause is
+ * removed wherever it sits, because the test can put its own sentence in
+ * front ("The transcription test could not start. …"); any copy without one
+ * is returned unchanged.
  */
 export function withoutTakeAdvice(copy: string): string {
+  let shown = copy;
   for (const parts of Object.values(RECOGNISER_COPY) as RecogniserCopy[]) {
-    if (copy === composeRecogniserCopy(parts)) {
-      return [parts.fault, parts.repair].filter((part) => part !== undefined).join(' ');
-    }
+    shown = shown.split(scopeToTake(parts.inTake)).join(' ');
   }
-  return copy;
+  return shown === copy ? copy : shown.replace(/\s+/g, ' ').trim();
 }
 
 /** The codes whose copy is built from parts, and so reaches surfaces with no take. */

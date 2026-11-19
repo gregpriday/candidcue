@@ -148,12 +148,22 @@ describe('nothing logs the user’s words', () => {
         'Say what the bundle is designed to leave out, and tell the reader to ' +
         'look before they send it.',
     ).not.toMatch(/\bnever\b[^.]*\b(script|transcript|prose|words)/i);
+    expect(copy, 'nor in other words').not.toMatch(
+      /\b(?:guarantee[sd]?|always (?:leaves? out|excludes?)|cannot contain|can never)\b[^.]*\b(script|transcript|prose|words)/i,
+    );
 
     expect(
       copy,
       'The copy no longer tells the user to look at the bundle before sending ' +
         'it. That sentence is what makes the weaker promise honest rather than ' +
         'merely vaguer, and `reveal_support_bundle` exists to serve it.',
-    ).toMatch(/\b(reveal|read|review|look)\b/i);
+    ).toMatch(/\b(reveal|read|review|look|inspect|check|open|examine)\b/i);
+  });
+
+  it('is the text the support-bundle screen actually shows', () => {
+    // Importing the value proves what it says, not that anyone reads it.
+    const settings = readFileSync(join(REPO_ROOT, 'src/control/routes/Settings.svelte'), 'utf8')
+      .replace(/<!--[\s\S]*?-->/g, '');
+    expect(settings).toMatch(/>\s*\{SUPPORT_BUNDLE_EXCLUSIONS\}\s*</);
   });
 });

@@ -2164,6 +2164,7 @@ describe('the release notes gate refuses what it exists to refuse', () => {
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTODO: ${WRITTEN}\n`).status).toBe(1);
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTBD. ${WRITTEN}\n`).status).toBe(1);
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nDRAFT. ${WRITTEN}\n`).status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\n### Draft notes\n\n${WRITTEN}\n`).status).toBe(1);
   });
 
   // A draft is something this app's users write, so the word is a release
@@ -2218,6 +2219,25 @@ describe('the release notes gate refuses what it exists to refuse', () => {
     expect(printed.output, 'v2.0.0 must not absorb the section below it').not.toContain(
       'First release',
     );
+  });
+
+  /*
+   * The whole section and nothing else, byte for byte, on a fixture: a
+   * section cut short at its first sub-heading, or one that ran on into the
+   * next version's body without its heading, would still pass every check on
+   * the real notes, which test facts and not length.
+   */
+  it('publishes exactly the section, sub-headings included', () => {
+    const body =
+      `The second release. ${WRITTEN}\n\n### Known limitations\n\n` +
+      `Something a reader should know before downloading, stated plainly.`;
+    const changelog =
+      `# Changelog\n\n## v2.0.0\n\n${body}\n\n## v1.0.0\n\nThe first body. ${WRITTEN}\n`;
+    const dir = scratchRepo(NEEDS);
+    writeFileSync(join(dir, 'CHANGELOG.md'), changelog);
+    const printed = run(join(dir, 'scripts/release-notes.mjs'), ['v2.0.0'], dir);
+    expect(printed.status, printed.output).toBe(0);
+    expect(printed.output.trim()).toBe(body);
   });
 
   it('refuses two sections for the same version', () => {

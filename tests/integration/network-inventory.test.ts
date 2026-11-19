@@ -292,6 +292,26 @@ function declaredFrontendFetches(): string[] {
 /** A claim with its case and spacing set aside. */
 const norm = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
 
+/**
+ * Whether `text` makes a banned claim: the pattern matches, and — for a rule
+ * whose denial is the accurate statement — not inside a sentence that says
+ * "not", "never" or "no" before it.
+ */
+function makes(text: string, rule: { pattern: RegExp; unlessNegated?: boolean }): boolean {
+  const global = new RegExp(rule.pattern.source, rule.pattern.flags.replace('g', '') + 'g');
+  for (const match of text.matchAll(global)) {
+    if (!rule.unlessNegated) return true;
+    const sentenceStart = Math.max(
+      text.lastIndexOf('.', match.index),
+      text.lastIndexOf(';', match.index),
+      text.lastIndexOf('\n', match.index),
+    );
+    const before = text.slice(sentenceStart + 1, match.index + match[0].length);
+    if (!/(?:\bnot|\bnever|\bno|n't|\bnothing)\b/i.test(before)) return true;
+  }
+  return false;
+}
+
 /** The bullets under "Not accurate, and not to be written anywhere". */
 function bannedBullets(): string[] {
   const section = inventory.split('**Not accurate, and not to be written anywhere:**')[1] ?? '';
@@ -701,7 +721,7 @@ describe('claims the inventory bans', () => {
    * actually happened — the document cannot quietly grow a bullet no rule
    * covers.
    */
-  const BANNED: { pattern: RegExp; bullet: string }[] = [
+  const BANNED: { pattern: RegExp; bullet: string; unlessNegated?: boolean }[] = [
     // The whole app, not a part of it: "speech recognition never uses the
     // internet" is true and must stay writable.
     {
@@ -712,10 +732,13 @@ describe('claims the inventory bans', () => {
     { pattern: /completely offline/i, bullet: '"Completely offline from first launch."' },
     { pattern: /(there is )?no network code/i, bullet: '"There is no network code."' },
     // The check is automatic and may be called that; the install never is.
+    // A denial of the claim is the accurate statement, so a match in a
+    // sentence that negates it does not count.
     {
       pattern:
-        /\bupdates? (?:are |is )?installed automatically|\binstalls? (?:updates )?automatically|\bautomatically installs?\b/i,
+        /\b(?:updates? (?:are |is )?(?:installed|install(?:s)?) (?:themselves |itself )?automatically|install(?:s|ed)? (?:updates? )?automatically|automatically install(?:s|ed)?|auto-?install(?:s|ed)?|updates? itself automatically|automatic updates?\b[^.]*\bwithout (?:asking|you))/i,
       bullet: '"Updates install automatically."',
+      unlessNegated: true,
     },
     {
       pattern: /never checks for updates/i,
@@ -786,6 +809,18 @@ describe('claims the inventory bans', () => {
     ).toEqual([]);
   });
 
+  it('catches the ordinary spellings of an unattended install', () => {
+    const rule = BANNED.find((candidate) => candidate.bullet === '"Updates install automatically."')!;
+    for (const claim of [
+      'Updates install automatically.',
+      'Speaking Glass auto-installs updates.',
+      'Speaking Glass updates itself automatically.',
+      'Automatic updates keep the app current without asking.',
+    ]) {
+      expect(makes(claim, rule), claim).toBe(true);
+    }
+  });
+
   it('leaves the true statements next to each banned one writable', () => {
     // The rules ban claims, not topics: each of these is accurate and must pass.
     for (const honest of [
@@ -793,8 +828,11 @@ describe('claims the inventory bans', () => {
       'Speaking Glass checks for updates automatically, and installs one only when you choose.',
       'Automatic update checks can be turned off.',
       'The speech model is downloaded when you choose to install it.',
+      'Speaking Glass never installs updates automatically.',
+      'Updates are not installed automatically; you choose when.',
+      "Speaking Glass doesn't install updates automatically.",
     ]) {
-      const tripped = BANNED.filter((rule) => rule.pattern.test(honest)).map((rule) => rule.bullet);
+      const tripped = BANNED.filter((rule) => makes(honest, rule)).map((rule) => rule.bullet);
       expect(tripped, `"${honest}" is accurate`).toEqual([]);
     }
   });
@@ -804,8 +842,9 @@ describe('claims the inventory bans', () => {
   });
 
   it.each(SCANNED)('%s makes none of them', (relPath) => {
-    const source = stripSourceComments(relPath);
-    const broken = BANNED.filter(({ pattern }) => pattern.test(source)).map((rule) => {
+    // Line wrapping is not part of a claim.
+    const source = stripSourceComments(relPath).replace(/\s+/g, ' ');
+    const broken = BANNED.filter((rule) => makes(source, rule)).map((rule) => {
       const hit = pattern_hit(source, rule.pattern);
       return `${rule.bullet}  — matched: “${hit}”`;
     });

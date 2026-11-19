@@ -31,7 +31,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   audioToRustPatch,
   clampVadSensitivity,
-  vadAdviceClause,
   vadSensitivityFromRust,
   VAD_SENSITIVITY_ADVICE,
   VAD_SENSITIVITY_COPY,
@@ -202,11 +201,35 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
       'false triggers must be sent to the harder trigger',
     ).toBeGreaterThan(marginAt(endFor(missedSpeech.direction)));
 
-    // And the screen says exactly that advice: the description is composed
-    // from the entries, not written beside them where it could drift.
+    /*
+     * Each symptom has to be the one its key says. Swapping the two texts
+     * between the entries is #120 again with the directions untouched, so each
+     * text is held to its meaning — loosely, by what it is about rather than
+     * by its words: a false trigger is something other than the presenter
+     * keeping the meter open; missed speech is quiet speech.
+     */
+    expect(falseTriggers.symptom, 'the false-trigger symptom is about the room').toMatch(
+      /\b(?:fan|noise|noisy|hum|people|room|background|nearby|after you (?:have )?stopped)\b/i,
+    );
+    expect(falseTriggers.symptom).not.toMatch(/\b(?:quiet|soft|faint)\b/i);
+    expect(missedSpeech.symptom, 'the missed-speech symptom is about quiet speech').toMatch(
+      /\b(?:quiet|quietly|soft|softly|faint)\b/i,
+    );
+    expect(missedSpeech.symptom).not.toMatch(/\b(?:fan|noise|people|nearby)\b/i);
+
+    // And the screen gives that advice: each direction's word comes before its
+    // own symptom, in the same clause. Read here rather than through the
+    // module's composer, so an inverted composer fails too.
     const description = VAD_SENSITIVITY_COPY.description.toLowerCase();
+    const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const advice of [falseTriggers, missedSpeech]) {
-      expect(description).toContain(vadAdviceClause(advice).toLowerCase());
+      expect(description).toMatch(
+        new RegExp(`\\b${advice.direction}\\b[^;.]*?${escape(advice.symptom.toLowerCase())}`),
+      );
+      const other = advice.direction === 'lower' ? 'raise' : 'lower';
+      expect(description).not.toMatch(
+        new RegExp(`\\b${other}\\b[^;.]*?${escape(advice.symptom.toLowerCase())}`),
+      );
     }
   });
 

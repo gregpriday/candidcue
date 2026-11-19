@@ -350,18 +350,15 @@ describe('error copy never offers a session mode that is not offered', () => {
    * "mode" at all. It does not match "manually". `fixed` tolerates any run of
    * spaces or dashes, U+2010–U+2015 included, and is NOT broadened to "fixed
    * pace": auto-scroll genuinely is a fixed pace, and it is the fallback the
-   * copy has to be free to describe. Each mode's glossary label is banned too.
+   * copy has to be free to describe. The glossary labels are not banned:
+   * "Roll at pace" also names the auto-scroll movement, which copy may offer.
    */
   const SPELLINGS: Record<string, RegExp[]> = {
     manual: [/\bmanual\b/i],
     // The class is \s, the range U+2010–U+2015, and a trailing ASCII hyphen.
     fixed: [/\bfixed[\s‐-―-]+speed\b/iu],
   };
-  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const bansFor = (mode: string): RegExp[] => [
-    ...(SPELLINGS[mode] ?? []),
-    new RegExp(`\\b${escape(SESSION_MODE_LABELS[mode as keyof typeof SESSION_MODE_LABELS])}\\b`, 'i'),
-  ];
+  const bansFor = (mode: string): RegExp[] => SPELLINGS[mode] ?? [];
   const unoffered = Object.keys(SESSION_MODE_LABELS).filter(
     (mode) => !(OFFERED_SESSION_MODES as readonly string[]).includes(mode),
   );
@@ -384,6 +381,7 @@ describe('error copy never offers a session mode that is not offered', () => {
       'rolls the script at a fixed pace',
       'scroll the script manually',
       'Try again once the network problem is fixed.',
+      'In a take, press A to start auto-scroll and roll at pace.',
     ]) {
       for (const mode of ['manual', 'fixed']) {
         expect(bansFor(mode).some((ban) => ban.test(honest)), honest).toBe(false);
@@ -395,12 +393,17 @@ describe('error copy never offers a session mode that is not offered', () => {
     // Anti-vacuity: with every mode offered the sweep below checks nothing,
     // which is right the day it happens and worth a look until then.
     expect(OFFERED_SESSION_MODES.length).toBeGreaterThan(0);
-    expect(unoffered.sort()).toEqual(['fixed', 'manual']);
+    // Every mode still to be shipped has a way of being spelled to ban.
+    for (const mode of unoffered) {
+      expect(bansFor(mode).length, `no spelling of '${mode}' is banned`).toBeGreaterThan(0);
+    }
   });
 
   it('does not name a mode that cannot start a take', () => {
+    // The honest fallback for a code nobody wrote copy for is shown too.
+    const shown = [...KNOWN_ERROR_CODES, 'SOME_FUTURE_PROVIDER_FAULT'];
     for (const mode of unoffered) {
-      for (const code of KNOWN_ERROR_CODES) {
+      for (const code of shown) {
         const copy = copyForErrorCode(code);
         for (const ban of bansFor(mode)) {
           expect(copy, `${code} offers '${mode}', which nothing offers: ${copy}`).not.toMatch(ban);
@@ -430,7 +433,8 @@ describe('recogniser copy stays true on the surface with no take', () => {
 
   /** Advice that only exists while a take is running. */
   const TAKE_ONLY = new RegExp(
-    `\\bauto-scroll\\b|\\bpress (?:the )?${AUTO_SCROLL_KEY}\\b|\\b(?:the|a|your) take\\b`,
+    `\\bauto-?scroll|\\b(?:scroll|roll)(?:s|ing)?\\b|` +
+      `\\b(?:press|tap|hit|use|hold) (?:the )?${AUTO_SCROLL_KEY}\\b|\\b(?:the|a|your) take\\b`,
     'i',
   );
 
@@ -456,10 +460,11 @@ describe('recogniser copy stays true on the surface with no take', () => {
   });
 
   it('scopes the take-only clause, and only that clause', () => {
-    // The composer adds a scope to the clause it is given and keeps the clause.
+    // The composer keeps the clause and says it is about a take.
     const scoped = scopeToTake('clause');
-    expect(scoped).not.toBe('clause');
     expect(scoped).toContain('clause');
+    expect(scoped.replace('clause', ''), 'the scope must name the take').toMatch(/\btake\b/i);
+    expect(TAKE_ONLY.test('Tap A to keep the script rolling.')).toBe(true);
 
     for (const code of RECOGNISER_CODES) {
       const { fault, inTake } = RECOGNISER_COPY[code];
@@ -483,6 +488,10 @@ describe('recogniser copy stays true on the surface with no take', () => {
       expect(shown.startsWith(RECOGNISER_COPY[code].fault), code).toBe(true);
       expect(shown, `${code} still offers take-only advice with no take`).not.toMatch(TAKE_ONLY);
     }
+    // …including when the test puts its own sentence in front of the copy.
+    const prefixed = `The transcription test could not start. ${copyForErrorCode('STT_ENGINE_ERROR')}`;
+    expect(withoutTakeAdvice(prefixed)).not.toMatch(TAKE_ONLY);
+    expect(withoutTakeAdvice(prefixed)).toContain(RECOGNISER_COPY.STT_ENGINE_ERROR.fault);
     // Any other copy passes through untouched.
     expect(withoutTakeAdvice(copyForErrorCode('NETWORK_OFFLINE'))).toBe(
       copyForErrorCode('NETWORK_OFFLINE'),

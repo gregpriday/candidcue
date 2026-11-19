@@ -120,21 +120,21 @@ const flatSource = withoutComments.replace(/\s+/g, ' ');
  * is the one that sits at the indent of the pane switch.
  */
 function pane(name: string | null): string {
-  const opener =
-    name === null
-      ? /^( *)\{:else\}/m
-      : new RegExp(`^( *)\\{(?:#if|:else if) section === '${name}'\\}`, 'm');
-  const from =
-    name === null
-      ? withoutComments.indexOf(
-          '{:else}',
-          withoutComments.indexOf("{:else if section === 'following'}"),
-        )
-      : withoutComments.search(opener);
+  const opener = new RegExp(`^( *)\\{(?:#if|:else if) section === '${name}'\\}`, 'm');
+  let from: number;
+  if (name === null) {
+    const following = withoutComments.indexOf("{:else if section === 'following'}");
+    if (following === -1) return '';
+    from = withoutComments.indexOf('{:else}', following);
+  } else {
+    const match = opener.exec(withoutComments);
+    from = match === null ? -1 : match.index + (match[1] ?? '').length;
+  }
   if (from === -1) return '';
   const lineStart = withoutComments.lastIndexOf('\n', from) + 1;
   const indent = withoutComments.slice(lineStart, from);
-  const rest = withoutComments.slice(from + 1);
+  // After the branch's own `{…}` marker, so a pane holds only its body.
+  const rest = withoutComments.slice(withoutComments.indexOf('}', from) + 1);
   const close = rest.search(new RegExp(`\\n${indent}\\{(?::else|\\/if)\\b`));
   return (close === -1 ? rest : rest.slice(0, close)).replace(/\s+/g, ' ');
 }
@@ -171,6 +171,15 @@ describe('#180 the privacy section describes what the app actually does', () => 
       /data-testid="update-policy"/,
     );
     expect(audioDescriptions.length, 'the Audio pane has no Section description to read').toBeGreaterThan(0);
+    // A pane is one branch: one that runs on into the next would let a claim
+    // made in one pane satisfy a check about another.
+    for (const name of ['speech', 'audio'] as const) {
+      const text = pane(name);
+      expect(text, `the ${name} pane could not be located`).not.toBe('');
+      expect(text, `the ${name} pane runs on into the next one`).not.toMatch(/section === '/);
+      expect(text, `the ${name} pane runs on into Privacy`).not.toContain('data-testid="update-policy"');
+    }
+    expect(pane(null), 'the privacy pane runs on into another').not.toMatch(/section === '/);
   });
 
   it('describes the update check rather than hiding or overstating it', () => {
@@ -183,13 +192,15 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * "our servers", not a service nobody can look up.
      */
     expect(privacySection, 'the update host must be named').toMatch(HOST);
-    for (const mention of privacySection.matchAll(
+    // The host's own dots are not sentence ends.
+    const hostless = privacySection.split(UPDATE_HOST).join('UPDATE_HOST');
+    for (const mention of hostless.matchAll(
       /update (?:server|service|feed|channel|endpoint)[^.]{0,60}/gi,
     )) {
       expect(
         mention[0],
         `"${mention[0]}" names an update service without saying which host it is`,
-      ).toMatch(HOST);
+      ).toContain('UPDATE_HOST');
     }
 
     /*
@@ -217,8 +228,14 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * about the network would be its own overclaim. There are two uses: the
      * speech-model download and the update check.
      */
-    expect(privacySection, 'the model download is one use').toMatch(/\bdownload/i);
+    expect(privacySection, 'the speech-model download is one use').toMatch(
+      /\bdownload[^.]*\b(?:speech|model|language)|\b(?:speech|model|language)\b[^.]*\bdownload/i,
+    );
     expect(privacySection, 'the update check is the other').toMatch(HOST);
+    // And no sentence about the network may narrow it to one of them.
+    expect(privacySection, 'an exclusive claim about the network').not.toMatch(
+      /\b(?:only|solely|just)\b[^.]*\b(?:network|internet|online)\b|\b(?:network|internet|online)\b[^.]*\b(?:only|solely)\b/i,
+    );
   });
 
   it('does not claim the microphone is open only during a take or test', () => {
@@ -231,6 +248,10 @@ describe('#180 the privacy section describes what the app actually does', () => 
      */
     expect(flatSource).not.toMatch(/microphone is open only/i);
     expect(flatSource).not.toMatch(/uses your microphone only/i);
+    // However it is spelled: "the mic opens solely during a take or test".
+    expect(flatSource).not.toMatch(
+      /\b(?:mic|microphone)\b[^.<]*\b(?:only|solely|just)\b[^.<]*\b(?:take|test)\b/i,
+    );
     expect(privacySection, 'the privacy block must name the meter').toMatch(/\bmeter\b/i);
     expect(
       audioDescriptions.some((description) => /\bmeter\b/i.test(description)),
@@ -253,13 +274,16 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * automatic check. Any other toggle has to make the same case before it
      * relaxes this.
      */
-    expect(privacySection, 'no Select may return to this section').not.toMatch(/<Select\b/);
-    // Nor a hand-rolled control the component checks above would not see.
-    expect(privacySection, 'no raw form control in this section').not.toMatch(
+    // The whole pane, Diagnostics included: a dead switch there is the same
+    // defect one Section down.
+    const wholePane = pane(null);
+    expect(wholePane, 'no Select may return to this pane').not.toMatch(/<Select\b/);
+    // Nor a hand-rolled control the component checks would not see.
+    expect(wholePane, 'no raw form control in this pane').not.toMatch(
       /<(?:input|select|textarea)\b|role="(?:switch|checkbox|combobox|slider)"/i,
     );
-    const toggles = [...privacySection.matchAll(/<Toggle\b[\s\S]*?\/>/g)].map((match) => match[0]);
-    expect(toggles, 'the update switch is the only toggle in this section').toHaveLength(1);
+    const toggles = [...wholePane.matchAll(/<Toggle\b[\s\S]*?\/>/g)].map((match) => match[0]);
+    expect(toggles, 'the update switch is the only toggle in this pane').toHaveLength(1);
     expect(toggles[0], 'and it reads the Rust-owned field').toMatch(
       /checked=\{\$settings\.general\.checkForUpdates\}/,
     );
@@ -299,9 +323,9 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // stop making the old one.
     const speech = pane('speech');
     expect(speech, 'the Speech pane could not be located').not.toBe('');
-    expect(speech).toMatch(/\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i);
+    expect(speech).toMatch(/\b(?:(?:not|never|neither|nor|no)\b[^.]*\bwords\b[^.]*\b(?:saved?|stored?|kept)|words\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i);
     expect(speech, 'and audio is still never saved').toMatch(
-      /\baudio\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i,
+      /\b(?:(?:not|never|neither|nor|no)\b[^.]*\baudio\b[^.]*\b(?:saved?|stored?|kept)|audio\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i,
     );
   });
 
@@ -322,9 +346,9 @@ describe('#180 the privacy section describes what the app actually does', () => 
 
     // The claims, not one wording of them: each must be a negation in the
     // same sentence as the thing it is about.
-    expect(privacySection, 'audio is never saved').toMatch(/\baudio\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i);
+    expect(privacySection, 'audio is never saved').toMatch(/\b(?:(?:not|never|neither|nor|no)\b[^.]*\baudio\b[^.]*\b(?:saved?|stored?|kept)|audio\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i);
     expect(privacySection, 'nor are the recognised words').toMatch(
-      /\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i,
+      /\b(?:(?:not|never|neither|nor|no)\b[^.]*\bwords\b[^.]*\b(?:saved?|stored?|kept)|words\b[^.]*\b(?:not|never|neither|nor)\b[^.]*\b(?:saved?|stored?|kept))\b/i,
     );
   });
 
@@ -338,9 +362,10 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // The block that holds the policy line, found by that line rather than by
     // its heading.
     const policyAt = privacySection.indexOf('data-testid="update-policy"');
+    const blockEnd = privacySection.indexOf('</div>', policyAt);
     const updateBlock = privacySection.slice(
       privacySection.lastIndexOf('<div class="privacy"', policyAt),
-      policyAt,
+      blockEnd === -1 ? undefined : blockEnd,
     );
     expect(policyAt, 'the update policy line must be found, or the ban below is vacuous').toBeGreaterThan(-1);
     expect(updateBlock, 'the Updates block must be found, or the ban below is vacuous').toMatch(
@@ -355,8 +380,10 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * and it must be handed the switch's position, or the sentence under the
      * switch describes the wrong one.
      */
+    // The node shows the note itself, or a placeholder while it loads — not a
+    // value chosen beside it.
     expect(privacySection.slice(policyAt), 'the visible node must render the policy state').toMatch(
-      /^data-testid="update-policy"[^>]*>\s*\{updateNote/,
+      /^data-testid="update-policy"[^>]*>\s*\{updateNote\s*(?:\|\||\?\?)\s*'[^'{}]*'\s*\}\s*<\/p>/,
     );
     expect(withoutComments, 'the policy state must come from the pure function').toMatch(
       /settingsService\.describeUpdatePolicy\(runningVersion, \$settings\.general\.checkForUpdates\)/,
@@ -409,6 +436,15 @@ describe('the update policy is stated truthfully', () => {
     expect(sentence, 'the running version must be quotable from this line').toContain('9.9.9-test');
     expect(sentence, 'which host').toMatch(HOST);
     expect(sentence, 'and how to ask by hand').toContain(COMMANDS['help.check-for-updates'].label);
+    // How often, as the scheduler actually runs it, in figures or in words.
+    const { CHECK_INTERVAL_MS } = await import('../../../src/control/stores/updates');
+    const hours = CHECK_INTERVAL_MS / 3_600_000;
+    expect(Number.isInteger(hours), 'the interval is no longer a whole number of hours').toBe(true);
+    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+      'ten', 'eleven', 'twelve'];
+    expect(sentence, `the line must say every ${hours} hours`).toMatch(
+      new RegExp(`\\b(?:${hours}|${WORDS[hours] ?? hours})\\s+hours?\\b`, 'i'),
+    );
     /*
      * What the request carries — the whole of it. The IP address is named
      * because leaving it out is the classic understatement; the version, OS
@@ -449,6 +485,9 @@ describe('the update policy is stated truthfully', () => {
     expect(off, 'by request').toContain(COMMANDS['help.check-for-updates'].label);
     expect(off, 'and it must not still describe a schedule').not.toMatch(
       /\bevery\b[^.]*\b(?:minutes?|hours?|days?)\b/i,
+    );
+    expect(off, 'nor a check of its own at launch').not.toMatch(
+      /\b(?:after|when|as) (?:it|Speaking Glass) (?:opens|starts|launches)\b/i,
     );
   });
 
