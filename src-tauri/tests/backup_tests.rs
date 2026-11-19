@@ -247,6 +247,152 @@ async fn an_export_is_never_visible_under_its_final_name_until_it_is_finished() 
     assert!(Path::new(&result.path).join("manifest.json").exists());
 }
 
+#[tokio::test]
+async fn an_export_missing_a_scripts_text_is_incomplete_and_names_it() {
+    /*
+     * #446. The exporter counted the folders it copied and checksummed the
+     * files that existed, so a script whose `script.md` was already gone
+     * exported as `complete: true` with no warning — and a restore then put
+     * back a library with a script in it that could not be opened.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening\n\nHello."))
+        .await
+        .expect("create");
+    let lost = repo::create_script(&h.pool, &h.paths, create_input("Keynote", "# Keynote\n\nGone."))
+        .await
+        .expect("create");
+    let lost_id = script_id(&lost.id);
+    fs::remove_file(h.paths.canonical_file(&lost_id)).expect("lose the text");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("an export with a missing script still returns");
+
+    assert!(!result.complete, "a script with no text is not backed up");
+    assert!(result.path.ends_with("-INCOMPLETE"), "{}", result.path);
+    let warning = result.warnings.join("\n");
+    assert!(warning.contains("Keynote"), "the warning names the script: {warning}");
+    assert!(warning.contains(&lost.id), "and its folder: {warning}");
+    assert!(!warning.contains("Opening"), "only the affected script is named: {warning}");
+
+    let manifest = manifest_of(Path::new(&result.path));
+    assert_eq!(manifest["complete"], serde_json::json!(false));
+    let scripts = manifest["sections"]
+        .as_array()
+        .expect("sections")
+        .iter()
+        .find(|s| s["name"] == "scripts")
+        .expect("a scripts section");
+    assert_eq!(scripts["complete"], serde_json::json!(false));
+    assert!(scripts["problem"].as_str().unwrap_or_default().contains("Keynote"));
+}
+
+#[tokio::test]
+async fn an_empty_library_still_exports_complete() {
+    let h = harness().await;
+    // With and without the scripts root: neither is a missing script.
+    for remove_root in [false, true] {
+        if remove_root && h.paths.scripts_dir().exists() {
+            fs::remove_dir_all(h.paths.scripts_dir()).expect("remove the scripts root");
+        }
+        let dest = tempfile::tempdir().expect("dest");
+        let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
+            .await
+            .expect("export");
+        assert!(result.complete, "an empty library is a whole one: {:?}", result.warnings);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+}
+
+#[tokio::test]
+async fn a_trashed_script_with_its_text_exports_complete() {
+    let h = harness().await;
+    let script = repo::create_script(&h.pool, &h.paths, create_input("Binned", "# Binned"))
+        .await
+        .expect("create");
+    sqlx::query("UPDATE scripts SET status = 'trash', trashed_at = '2026-11-19T00:00:00Z' WHERE id = ?")
+        .bind(&script.id)
+        .execute(&h.pool)
+        .await
+        .expect("trash it");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    assert!(result.complete, "{:?}", result.warnings);
+}
+
+#[tokio::test]
+async fn a_restore_refuses_an_export_whose_script_has_no_text() {
+    /*
+     * The other half of #446: an export written before the exporter checked
+     * says `complete: true`, lists only the files that existed, and verifies
+     * cleanly. Forged here from a healthy export by removing one script's text
+     * and its manifest entry — exactly what such an export holds.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening\n\nHello."))
+        .await
+        .expect("create");
+    let lost = repo::create_script(&h.pool, &h.paths, create_input("Keynote", "# Keynote\n\nGone."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    assert!(export.complete);
+    let export_root = Path::new(&export.path);
+    let body = format!("scripts/{}/script.md", lost.id);
+    fs::remove_file(export_root.join(&body)).expect("remove the text from the export");
+    let mut manifest = manifest_of(export_root);
+    let files = manifest["files"].as_array_mut().expect("files");
+    let before = files.len();
+    files.retain(|file| file["path"] != body.as_str());
+    assert_eq!(files.len(), before - 1, "the manifest listed the text");
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+    let files_before: Vec<String> = list_files(export_root);
+
+    let outcome = backup::restore_all_data(&h.paths, export_root).await;
+    let err = outcome.expect_err("an export missing a script's text must not restore");
+    let message = err.to_string();
+    assert!(message.contains("Keynote"), "the refusal names the script: {message}");
+    assert!(
+        !h.dir.path().join("restore-pending.json").exists(),
+        "nothing is scheduled"
+    );
+    assert_eq!(
+        list_files(export_root),
+        files_before,
+        "reading the export's database must not leave files beside it"
+    );
+}
+
+fn list_files(root: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).expect("read_dir").filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                found.push(path.strip_prefix(root).expect("inside").to_string_lossy().to_string());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /* ------------------------------------------------------------- restore */
 
 #[tokio::test]
