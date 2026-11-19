@@ -168,11 +168,18 @@ gh pr create --base main --head develop --title "Release 1.0.0-rc.2" --body "Spe
 gh pr merge <number> --merge   # once CI is green on the pull request
 ```
 
-Wait for CI to pass on the merge commit's own push run, then tag that commit:
+Wait for CI to pass on the merge commit's own push run. **If the release
+publishes Windows or Linux builds**, dry-run `release-windows.yml` and
+`release-linux.yml` on that commit now and take their files through the
+Windows and Linux drill in §7 before tagging: nothing after the tag waits for
+it. A wording fix that drill calls for changes the commit, so it goes through
+`develop` and a new release merge, and the dry run is repeated on the new one.
+Note the SHA the dry runs built, then tag that commit, and only that one:
 
 ```bash
 git fetch origin
 git switch -C main origin/main # the release merge, and nothing after it
+git rev-parse HEAD             # the SHA the dry runs built? if main moved, stop and dry-run the new tip
 pnpm version:tag v1.0.0-rc.2   # the tag must name the version the artifact reports
 pnpm notes:check v1.0.0-rc.2   # CHANGELOG.md must describe it
 git tag -s v1.0.0-rc.2 -m "Speaking Glass 1.0.0-rc.2"
@@ -328,6 +335,28 @@ environment variables, and no cached speech model.
 No terminal command may be required for any of this. If one is, that is a
 release defect, not a documentation gap.
 
+**Windows and Linux** have their own drill in place of the list above, which
+is written for the hosted macOS download: `docs/real-rig-test-protocol.md` §F
+is the procedure, on a machine that has never run Speaking Glass, with one sheet per
+installer format (`-setup.exe`, `.deb`, AppImage), naming the OS, its web view
+(WebView2 or WebKitGTK), the display session (X11 or Wayland on Linux) and what
+fed the take. SmartScreen's **More info › Run anyway** takes the place of the
+Gatekeeper row, as README tells Windows users to expect, and a Linux install
+may use the terminal as §F1 allows, recorded on the sheet.
+
+Nothing in the release workflows waits for this drill: their publish jobs need
+only the build, and a prerelease publishes without a reviewer. So run it
+**before tagging**, on a `workflow_dispatch` dry run of `release-windows.yml`
+and `release-linux.yml` on the commit you are about to tag (its
+`speaking-glass-release-<os>` artifact), and settle the wording then: the
+release notes are read from the tagged `CHANGELOG.md`, so a correction made
+after the tag misses that release. The release workflows' smoke tests only
+start each build headless (the Windows installer on Windows Server, the `.deb`
+installed through apt and the AppImage extracted, both under Xvfb) and see it
+stay up for 25 seconds; they are not this drill. **An
+installer format with no passing sheet is not advertised as tested**: README
+and the `CHANGELOG.md` section say what ran for it instead.
+
 ## 8. Long sessions, before a build goes wide
 
 Short takes prove the happy path and nothing about the third hour. Run these on
@@ -420,6 +449,7 @@ no sheet behind it**:
 
 | Dimension | Cells a 1.0 claim would need |
 |---|---|
+| OS | Each advertised OS: macOS, Windows 11, and Linux under X11 and Wayland, if those are advertised |
 | CPU | Apple Silicon; Intel, if Intel is advertised |
 | macOS | The oldest supported version; one in between; the current one |
 | Display | Laptop only; one external; two displays |

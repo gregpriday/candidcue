@@ -41,8 +41,10 @@ A case has three outcomes: **pass**, **fail** (file an issue, link it), and
 | | |
 |---|---|
 | Speaking Glass version | |
-| macOS version | |
-| Mac | |
+| Artifact (file name and SHA-256) | |
+| OS and version (macOS; Windows with its WebView2 version; Linux distribution with its WebKitGTK version) | |
+| Display session (macOS; Windows console; X11 or Wayland, and the desktop) | |
+| Machine | |
 | Microphone | |
 | Display(s) | |
 | Glass / beamsplitter | |
@@ -142,9 +144,39 @@ stops being true.
 | E5 | Present again | Starts immediately, with no stale state from the last take | |
 | E6 | Take details disclosure | All the original measurements are still there | |
 
-## F. What was not tested
+## F. Windows and Linux: the packaged journey
 
-List every section and case skipped, and why. **This section is not optional**
+Run for every release that publishes a Windows or Linux build, one sheet per
+installer format (`-setup.exe`, `.deb`, AppImage). Run it on the release
+workflow's own files: a `workflow_dispatch` dry run of `release-windows.yml` or
+`release-linux.yml` on the commit about to be tagged builds, inspects and
+smoke-tests everything and publishes nothing (its `speaking-glass-release-<os>`
+artifact). A tag rebuilds, so the tagged files are new bytes from that commit:
+record which file was tested. The release workflows' own smoke tests only
+start each build headless (the Windows installer on Windows Server, the `.deb`
+installed through apt and the AppImage extracted, both under Xvfb) and see it
+stay up for 25 seconds, with no microphone and no voice; this is the part they
+cannot reach.
+
+Fill the Rig rows with the exact artifact, the OS and its web view (WebView2 on
+Windows, WebKitGTK on Linux), the display session and the input. **The
+Microphone row says what fed the take**: a real microphone, or a WAV through a
+fake capture device. A fake device bypasses the OS microphone settings, so a
+take on one records F4 as not tested.
+
+| # | Step | Pass criteria | Result |
+|---|---|---|---|
+| F1 | Install through the advertised path | The `-setup.exe` downloaded in a browser and run through SmartScreen's **More info › Run anyway**, with no administrator prompt (it installs per user); the `.deb` through the desktop's software installer or `apt`; the AppImage marked executable and opened. Record every terminal command used: README gives none for Linux | |
+| F2 | Open a script | Create one and open one; it renders in the editor | |
+| F3 | Install the model | From the Welcome screen or Settings › Speech; the download verifies, and Present no longer brings up the readiness sheet for a missing model (A9) | |
+| F4 | Microphone access | Windows: there is no first-use prompt; with "Let apps access your microphone" and "Let desktop apps access your microphone" on in Windows Settings › Privacy & security › Microphone, the level meter responds to speech into the input under test. Turn one off once: the app says Windows is blocking the microphone and names both switches; turn it back on, choose **Try again** as the app asks, and the meter responds again. Linux: the app grants WebKitGTK's request itself; the meter responds from a PulseAudio or PipeWire source | |
+| F5 | Voice-followed take | Read at least a paragraph; the reading line follows the voice | |
+| F6 | End the take | Returns to the editor with the summary over it | |
+| F7 | Quit and reopen | Quit with File › Exit; relaunch from the Start menu (Windows), the desktop's launcher (`.deb`) or the same AppImage from the file manager; the library, the script and the model are still there | |
+
+## G. What was not tested
+
+List every section and case skipped, and why, §F included. **This section is not optional**
 — it is the part that makes the sheet honest, and a release note that says
 "tested on real glass" without it is claiming more than was done.
 
@@ -156,7 +188,12 @@ List every section and case skipped, and why. **This section is not optional**
 
 ## Known gaps this protocol cannot close
 
-- **Windows and Linux**: there is no build. Not applicable rather than untested.
+- **Windows and Linux beyond §F**: §F covers the packaged journey only.
+  Sections A–E were written on a Mac, and a case there that names a Mac
+  behaviour does not carry over to Windows or Linux without being re-run
+  there. Record each installer format (`-setup.exe`, `.deb`, AppImage) as its
+  own run; `docs/rig-runs/0.1.0-2026-11-19-windows-linux.md` is the first
+  attempt, and neither platform was exercised in it.
 - **Intel Macs**: the release ships a universal binary; if no Intel Mac was
   used, say so here rather than implying coverage.
 - **Delivery analysis of any kind**: there is none to test. Live coaching and
