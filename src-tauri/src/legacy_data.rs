@@ -578,41 +578,49 @@ mod tests {
         std::fs::read_to_string(path).unwrap()
     }
 
-    fn connect(path: &Path, create: bool) -> sqlx::SqlitePool {
+    /// One connection, not a pool: `Connection::close` returns only once
+    /// `sqlite3_close` has (which, for the last connection, checkpoints the WAL
+    /// and tries to delete it; a failed delete is not reported). sqlx 0.8's
+    /// `Pool::close` does not promise that: a connection on its way back to the
+    /// pool when it is called can be left idle, and closed later, on its worker
+    /// thread, when the pool is dropped.
+    fn connect(path: &Path, create: bool) -> sqlx::SqliteConnection {
+        use sqlx::ConnectOptions;
         tauri::async_runtime::block_on(async {
-            let options = sqlx::sqlite::SqliteConnectOptions::new()
+            sqlx::sqlite::SqliteConnectOptions::new()
                 .filename(path)
                 .create_if_missing(create)
-                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
-            sqlx::sqlite::SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .connect()
                 .await
                 .unwrap()
         })
     }
 
+    fn close(connection: sqlx::SqliteConnection) {
+        use sqlx::Connection;
+        tauri::async_runtime::block_on(connection.close()).unwrap();
+    }
+
     /// A real SQLite database, so the snapshot path is the one exercised.
     fn database(path: &Path, title: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let pool = connect(path, true);
+        let mut db = connect(path, true);
         tauri::async_runtime::block_on(async {
-            sqlx::query("CREATE TABLE scripts (title TEXT)").execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO scripts VALUES (?)").bind(title).execute(&pool).await.unwrap();
-            pool.close().await;
+            sqlx::query("CREATE TABLE scripts (title TEXT)").execute(&mut db).await.unwrap();
+            sqlx::query("INSERT INTO scripts VALUES (?)").bind(title).execute(&mut db).await.unwrap();
         });
+        close(db);
     }
 
     fn title_in(path: &Path) -> String {
-        let pool = connect(path, false);
-        tauri::async_runtime::block_on(async {
-            let title: String = sqlx::query_scalar("SELECT title FROM scripts")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            pool.close().await;
-            title
-        })
+        let mut db = connect(path, false);
+        let title: String = tauri::async_runtime::block_on(
+            sqlx::query_scalar("SELECT title FROM scripts").fetch_one(&mut db),
+        )
+        .unwrap();
+        close(db);
+        title
     }
 
     /// The old folder as the last CandidCue build left it.
@@ -687,11 +695,11 @@ mod tests {
         let data_dir = tempfile::tempdir().unwrap();
         let old = legacy_folder(data_dir.path());
         // An older checkout still has it open: its WAL holds an uncheckpointed row.
-        let live = connect(&old.join("candidcue.sqlite3"), false);
+        let mut live = connect(&old.join("candidcue.sqlite3"), false);
         tauri::async_runtime::block_on(async {
-            sqlx::query("PRAGMA wal_autocheckpoint = 0").execute(&live).await.unwrap();
+            sqlx::query("PRAGMA wal_autocheckpoint = 0").execute(&mut live).await.unwrap();
             sqlx::query("UPDATE scripts SET title = 'Edited while open'")
-                .execute(&live)
+                .execute(&mut live)
                 .await
                 .unwrap();
         });
@@ -702,14 +710,19 @@ mod tests {
         assert!(matches!(outcome, Outcome::Copied { raw_database: None, .. }), "{outcome:?}");
 
         let new = data_dir.path().join(IDENTIFIER);
+        // Checked before reading it back: `title_in` opens the snapshot in WAL
+        // mode, which makes a `-wal` of its own, and SQLite does not report a
+        // failed delete of that file on close (a scanner on Windows can cause one).
+        for sidecar in ["speaking-glass.sqlite3-wal", "speaking-glass.sqlite3-shm"] {
+            assert!(
+                !new.join(sidecar).exists(),
+                "a snapshot is one self-contained file, not a copy of the WAL: {sidecar}"
+            );
+        }
         assert_eq!(title_in(&new.join("speaking-glass.sqlite3")), "Edited while open");
-        assert!(
-            !new.join("speaking-glass.sqlite3-wal").exists(),
-            "a snapshot is one self-contained file, not a copy of the WAL"
-        );
         assert_eq!(std::fs::read(old.join("candidcue.sqlite3-wal")).unwrap(), wal);
         assert_eq!(std::fs::read(old.join("candidcue.sqlite3")).unwrap(), database);
-        tauri::async_runtime::block_on(live.close());
+        close(live);
     }
 
     #[test]
