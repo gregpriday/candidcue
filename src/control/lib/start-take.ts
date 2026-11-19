@@ -54,7 +54,7 @@ import {
 import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
 import { loadSettings, patchSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
-import { isPrompterGlass, withCameraAboveRig } from './camera-above-rig';
+import { isMirroredGlassRig, isPrompterGlass, withCameraAboveRig } from './camera-above-rig';
 import { getVoiceFacade } from '../services/voice-facade';
 import { preloadSpeechEngine } from '../services/stt/local';
 import { writable } from 'svelte/store';
@@ -314,29 +314,40 @@ function restoreFrameFor(saved: AppSettings, mode: PresentationMode): ReaderFram
 
 /**
  * The optical section a take under the camera above this screen is composed
- * from, stored first when the panel is known (#238).
+ * from (#238): the camera rig, stored for the panel the take landed on — or,
+ * when it cannot be stored, the section as it stands.
  *
- * Stored only against a panel Rust NAMED (`named`): the rig and the cleared
- * mirror belong to one physical screen, and writing them against a guess could
- * take a prompter's mirror away. A guess still gets the camera geometry for
- * this one take — it is the best layout anybody can offer — but nothing about
- * it is remembered.
+ * STORED OR NOT APPLIED. A mid-take recomposition (the appearance sheet, a
+ * Settings change the running take follows) reads the SAVED section, so a rig
+ * composed into the opening frame but never saved would be taken back at the
+ * first slider drag: the mirror returning, the reading line dropping away from
+ * the camera, in the middle of a take. So the take opens as a plain Present on
+ * that panel would whenever the rig cannot be kept:
  *
- * Recognised prompter glass is refused outright: a camera cannot be above a
- * screen it films through, so the window was on the wrong screen. The take
- * opens as the teleprompter it landed on, and a toast says why.
+ *  - the panel was not NAMED (`panel` is null): the rig and the cleared mirror
+ *    belong to one physical screen, and a guess could be the glass;
+ *  - the panel is glass — a recognised Elgato, or a panel whose chosen rig puts
+ *    the camera behind a mirrored image. A camera cannot be above a screen it
+ *    films through, so the window was on the wrong screen, and clearing that
+ *    mirror would take it away from the glass for good;
+ *  - the save failed. `patchSettings` has already rolled back and said so.
  *
- * A save that fails still composes the take from the rig: `patchSettings` has
- * already reported the failure, and refusing to lay the take out for the
- * camera the presenter just chose would be a second failure on top of it.
+ * The newest saved section is the base, so a rig saved since this take began
+ * is kept.
  */
 async function chooseCameraAboveRig(
   s: AppSettings,
   panel: DisplayDescriptor | null,
-  named: boolean,
 ): Promise<AppSettings['optical']> {
-  if (panel === null) return s.optical;
-  if (isPrompterGlass(panel)) {
+  const latest = get(settings)?.optical ?? s.optical;
+  if (panel === null) {
+    showToast(
+      'Speaking Glass could not tell which screen this is, so it was not set up for the camera above it. Present opened it as it would any other take.',
+      'info',
+    );
+    return s.optical;
+  }
+  if (isPrompterGlass(panel) || isMirroredGlassRig(latest, panel.fingerprint)) {
     showToast(
       'This screen is a teleprompter, so it was left as it is. Move the Speaking Glass window to the screen with the camera above it and choose Camera above this screen again.',
       'info',
@@ -345,11 +356,11 @@ async function chooseCameraAboveRig(
   }
   const t = s.teleprompter;
   const seed = { intensity: t.textIntensity, readingCue: t.readingCue, bias: t.sizeBias };
-  if (!named) return withCameraAboveRig(s.optical, panel, seed);
-  // The newest optical section, so a rig saved since this take began is kept.
-  const next = withCameraAboveRig(get(settings).optical ?? s.optical, panel, seed);
-  await patchSettings('optical', next).catch(() => {});
-  return next;
+  const next = withCameraAboveRig(latest, panel, seed);
+  return patchSettings('optical', next).then(
+    () => next,
+    () => s.optical,
+  );
 }
 
 export interface StartTakeOptions {
@@ -445,8 +456,10 @@ export interface StartTakeOptions {
    * Present finds it there whenever it falls back to this screen, and finds
    * the pinned prompter's own rig and mirror whenever it is plugged in.
    *
-   * Pass `presentationMode: 'prompter'` with it. Ignored for a practice, which
-   * always opens in a window.
+   * Always a teleprompter take, and the saved default is left as it is: this
+   * is an action, not a shape somebody chose to work in, so a reading-window
+   * default stays one. `presentationMode` is ignored alongside it. Ignored
+   * itself for a practice, which always opens in a window.
    */
   cameraAboveScreen?: boolean;
   /**
@@ -591,15 +604,19 @@ export async function startTake(
      * quietly stopped filling the display. So the mode is forced here, past the
      * resolver, and the saved default is left exactly where it was.
      */
-    const s = options.practice
-      ? await resolveLaunchSettings(loaded, undefined)
-      : await resolveLaunchSettings(loaded, options.presentationMode);
+    // A take under the camera is forced to the prompter the same way, and for
+    // the same reason leaves the saved default alone: it is an action, not a
+    // shape somebody chose to work in. See `cameraAboveScreen`.
+    const cameraAbove = options.cameraAboveScreen === true && !options.practice;
+    const s =
+      options.practice || cameraAbove
+        ? await resolveLaunchSettings(loaded, undefined)
+        : await resolveLaunchSettings(loaded, options.presentationMode);
     const presentationMode: PresentationMode = options.practice
       ? 'reader'
-      : s.stage.presentationMode;
-    // Only a teleprompter take goes under the camera; see `cameraAboveScreen`.
-    const cameraAbove =
-      options.cameraAboveScreen === true && !options.practice && presentationMode === 'prompter';
+      : cameraAbove
+        ? 'prompter'
+        : s.stage.presentationMode;
     /*
      * Start loading the recogniser now, while the rest of the take is built
      * (#257).
@@ -874,7 +891,7 @@ export async function startTake(
      * that the monitor Rust says the window is on now that it has moved. Its
      * last-resort guess is the primary display rather than the prompter rule,
      * which would aim at the pinned glass this take deliberately did not ask
-     * for — and a guess is only ever composed against, never stored.
+     * for — and a guess gets a plain take, never the camera rig.
      */
     const named =
       reported ?? (cameraAbove ? await stageService.currentWindowDisplay().catch(() => null) : null);
@@ -904,7 +921,7 @@ export async function startTake(
      */
     const composedFrom: AppSettings = {
       ...s,
-      ...(cameraAbove ? { optical: await chooseCameraAboveRig(s, landed, named !== null) } : {}),
+      ...(cameraAbove ? { optical: await chooseCameraAboveRig(s, named) } : {}),
       stage: { ...s.stage, presentationMode },
     };
     const stageSettings = stageSettingsFromSettings(composedFrom, landed);
@@ -953,6 +970,7 @@ export async function startTake(
       teleprompter: s.teleprompter,
       presentationMode,
       ...(options.practice ? { practice: true } : {}),
+      ...(cameraAbove ? { cameraAboveScreen: true } : {}),
       // The panel the take was measured against, so the mid-take appearance
       // sheet recomposes against the same one it opened with.
       stageDisplay: landed,

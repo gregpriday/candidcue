@@ -926,7 +926,7 @@ import type { PresentationMode } from '../services/settings-types';
     const id = scriptId;
     await checkThenStart(id, { mode: 'prompter', cameraAboveScreen: true }, async () => {
       await saveNow();
-      await startTake(id, { presentationMode: 'prompter', cameraAboveScreen: true });
+      await startTake(id, { cameraAboveScreen: true });
     });
   }
 

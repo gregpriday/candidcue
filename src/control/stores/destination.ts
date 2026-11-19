@@ -128,8 +128,14 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
      * is about to go without, and the warning should say so by name.
      */
     const pinned = context.pinnedFingerprint;
+    /*
+     * A camera-above rig is not named here either (#238): a webcam monitor that
+     * has been unplugged says nothing about how the screen the take falls back
+     * to should be sized, so it is no measured optics being gone without.
+     */
+    const pinnedProfile = pinned === null ? null : activeOpticalProfile(context.optical, pinned);
     const pinnedRigName =
-      pinned === null ? null : (activeOpticalProfile(context.optical, pinned)?.rigName ?? null);
+      pinnedProfile === null || isCameraOffPanelProfile(pinnedProfile) ? null : pinnedProfile.rigName;
 
     store.set(
       resolveTakeDestination({

@@ -274,9 +274,12 @@ export function checkThenStartTake(
   return checkThenStart(
     scriptId,
     {
-      ...(options.presentationMode === undefined ? {} : { mode: options.presentationMode }),
+      ...(options.cameraAboveScreen && !options.practice
+        ? { mode: 'prompter' as const, cameraAboveScreen: true }
+        : options.presentationMode === undefined
+          ? {}
+          : { mode: options.presentationMode }),
       ...(options.practice ? { practice: true } : {}),
-      ...(options.cameraAboveScreen && !options.practice ? { cameraAboveScreen: true } : {}),
     },
     () => startTake(scriptId, options),
   );

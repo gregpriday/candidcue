@@ -610,12 +610,11 @@ describe('a take under the camera above this screen (#238)', () => {
 
   it('does not hold the launch on the readout for plain Present, which it does not go to', async () => {
     editorWithMismatch();
-    await checkThenStartTake('script-1', { presentationMode: 'prompter', cameraAboveScreen: true });
+    // From a reading-window default: still checked as the prompter take it is.
+    settingsDoc.set({ ...defaultAppSettings(), stage: { ...defaultAppSettings().stage, presentationMode: 'reader' } });
+    await checkThenStartTake('script-1', { cameraAboveScreen: true });
     expect(get(takeReadinessPrompt)).toBeNull();
-    expect(h.startTake).toHaveBeenCalledWith('script-1', {
-      presentationMode: 'prompter',
-      cameraAboveScreen: true,
-    });
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { cameraAboveScreen: true });
   });
 
   it('still raises the readout for a plain prompter launch', async () => {
@@ -625,10 +624,22 @@ describe('a take under the camera above this screen (#238)', () => {
     expect(findingIds()).toContain('destination');
   });
 
-  it('keeps every other check: a missing model still holds it', async () => {
+  it('keeps every other check: a missing model still holds it, without the destination', async () => {
+    editorWithMismatch();
     model.set(MISSING);
-    await checkThenStart('script-1', { mode: 'prompter', cameraAboveScreen: true }, h.startTake);
+    await checkThenStartTake('script-1', { cameraAboveScreen: true });
     expect(h.startTake).not.toHaveBeenCalled();
-    expect(get(takeReadinessPrompt)?.verdict.show).toBe(true);
+    expect(findingIds()).toContain('model_missing');
+    expect(findingIds()).not.toContain('destination');
+  });
+
+  it('keeps the camera launch through a recheck from the sheet', async () => {
+    editorWithMismatch();
+    model.set(MISSING);
+    await checkThenStartTake('script-1', { cameraAboveScreen: true });
+    const held = get(takeReadinessPrompt)!;
+    model.set(INSTALLED);
+    await held.recheck({ microphoneRefused: false });
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { cameraAboveScreen: true });
   });
 });

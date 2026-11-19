@@ -13,6 +13,7 @@ import {
   CAMERA_ABOVE_RIG_NAME,
   cameraAboveProfile,
   isCameraOffPanelProfile,
+  isMirroredGlassRig,
   isPrompterGlass,
   withCameraAboveRig,
 } from '../../../src/control/lib/camera-above-rig';
@@ -71,10 +72,21 @@ describe('cameraAboveProfile', () => {
   });
 
   it('carries the presenter’s own intensity, cue and size bias', () => {
-    const profile = cameraAboveProfile(LAPTOP, { intensity: 'soft', readingCue: 'wash', bias: 7 });
+    const profile = cameraAboveProfile(LAPTOP, { intensity: 'soft', readingCue: 'wash', bias: 0.25 });
     expect(profile.intensity).toBe('soft');
     expect(profile.readingCue).toBe('wash');
-    expect(profile.bias).toBe(1);
+    expect(profile.bias).toBe(0.25);
+    const strong = cameraAboveProfile(LAPTOP, { intensity: 'strong', readingCue: 'ticks', bias: 7 });
+    expect(strong.intensity).toBe('strong');
+    expect(strong.readingCue).toBe('ticks');
+    expect(strong.bias).toBe(1);
+    // Nothing expressed leaves discovery's own value.
+    expect(cameraAboveProfile(LAPTOP, { bias: Number.NaN }).bias).toBe(cameraAboveProfile(LAPTOP).bias);
+  });
+
+  it('takes its scale from the panel, so a different panel sizes differently', () => {
+    const bigger = { ...LAPTOP, physicalSizeMm: { width: 604, height: 392 } };
+    expect(cameraAboveProfile(bigger).scale?.mmPerCssPx).toBeCloseTo(604 / 1512, 3);
   });
 
   it('is still a camera rig on a panel that cannot be sized', () => {
@@ -87,20 +99,23 @@ describe('cameraAboveProfile', () => {
 
 describe('withCameraAboveRig', () => {
   it('chooses the rig for this panel and clears only this panel’s mirror', () => {
+    const elgatoRig = { ...defaultOpticalProfile(), rigName: 'Elgato rig', viewingDistanceMm: 1200 };
     const optical: OpticalSettings = {
-      ...empty(),
+      profiles: { [opticalRigKey(ELGATO.fingerprint, elgatoRig.rigName)]: elgatoRig },
+      activeRig: { [ELGATO.fingerprint]: elgatoRig.rigName },
       panelMirror: {
         [LAPTOP.fingerprint]: { horizontal: true, vertical: true },
         [ELGATO.fingerprint]: { horizontal: true, vertical: false },
       },
     };
     const next = withCameraAboveRig(optical, LAPTOP);
+    // Every other panel's rig rides along untouched.
+    expect(activeOpticalProfile(next, ELGATO.fingerprint)?.viewingDistanceMm).toBe(1200);
     expect(activeOpticalProfile(next, LAPTOP.fingerprint)?.rigName).toBe(CAMERA_ABOVE_RIG_NAME);
     expect(panelMirrorFor(next, LAPTOP.fingerprint)).toEqual({ horizontal: false, vertical: false });
     expect(panelMirrorFor(next, ELGATO.fingerprint)).toEqual({ horizontal: true, vertical: false });
-    expect(activeOpticalProfile(next, ELGATO.fingerprint)).toBeNull();
     // Pure: the section it was given is untouched.
-    expect(optical.activeRig).toEqual({});
+    expect(optical.activeRig).toEqual({ [ELGATO.fingerprint]: elgatoRig.rigName });
   });
 
   it('chooses the same rig again, adjustments and all, rather than storing another', () => {
@@ -108,14 +123,20 @@ describe('withCameraAboveRig', () => {
     const key = opticalRigKey(LAPTOP.fingerprint, CAMERA_ABOVE_RIG_NAME);
     const adjusted: OpticalSettings = {
       ...first,
+      // Another rig in force since, which the choice must replace.
       profiles: {
         ...first.profiles,
         [key]: { ...first.profiles[key]!, overrides: { fontSizePx: 40 } },
+        [opticalRigKey(LAPTOP.fingerprint, 'Desk hood')]: {
+          ...defaultOpticalProfile(),
+          rigName: 'Desk hood',
+        },
       },
-      activeRig: { [LAPTOP.fingerprint]: 'Something else' },
+      activeRig: { [LAPTOP.fingerprint]: 'Desk hood' },
     };
     const again = withCameraAboveRig(adjusted, LAPTOP);
-    expect(Object.keys(again.profiles)).toEqual([key]);
+    expect(Object.keys(again.profiles)).toHaveLength(2);
+    expect(again.activeRig[LAPTOP.fingerprint]).toBe(CAMERA_ABOVE_RIG_NAME);
     expect(activeOpticalProfile(again, LAPTOP.fingerprint)?.overrides).toEqual({ fontSizePx: 40 });
   });
 
@@ -125,6 +146,8 @@ describe('withCameraAboveRig', () => {
       rigName: 'My desk webcam',
       lensPlacement: 'above' as const,
       viewingDistanceMm: 720,
+      scale: { mmPerCssPx: 0.2, source: 'ruler' as const },
+      completedSteps: ['distance' as const],
     };
     const optical: OpticalSettings = {
       profiles: { [opticalRigKey(LAPTOP.fingerprint, measured.rigName)]: measured },
@@ -132,9 +155,24 @@ describe('withCameraAboveRig', () => {
       panelMirror: { [LAPTOP.fingerprint]: { horizontal: true, vertical: false } },
     };
     const next = withCameraAboveRig(optical, LAPTOP);
-    expect(activeOpticalProfile(next, LAPTOP.fingerprint)?.viewingDistanceMm).toBe(720);
+    expect(activeOpticalProfile(next, LAPTOP.fingerprint)).toEqual(
+      expect.objectContaining({ viewingDistanceMm: 720, scale: measured.scale, completedSteps: ['distance'] }),
+    );
     expect(Object.keys(next.profiles)).toHaveLength(1);
     expect(panelMirrorFor(next, LAPTOP.fingerprint).horizontal).toBe(false);
+  });
+
+  it('replaces a chosen rig whose camera is BELOW the panel', () => {
+    const below = { ...defaultOpticalProfile(), rigName: 'Under the screen', lensPlacement: 'below' as const };
+    const optical: OpticalSettings = {
+      profiles: { [opticalRigKey(LAPTOP.fingerprint, below.rigName)]: below },
+      activeRig: { [LAPTOP.fingerprint]: below.rigName },
+      panelMirror: {},
+    };
+    const next = withCameraAboveRig(optical, LAPTOP);
+    expect(activeOpticalProfile(next, LAPTOP.fingerprint)?.lensPlacement).toBe('above');
+    // The other rig is kept, only no longer chosen.
+    expect(next.profiles[opticalRigKey(LAPTOP.fingerprint, below.rigName)]).toBeDefined();
   });
 
   it('never overwrites a rig of another shape that happens to have the name', () => {
@@ -144,14 +182,19 @@ describe('withCameraAboveRig', () => {
       lensPlacement: 'in-panel' as const,
       viewingDistanceMm: 1500,
     };
+    const second = { ...hood, rigName: `${CAMERA_ABOVE_RIG_NAME} 2` };
     const optical: OpticalSettings = {
       ...empty(),
-      profiles: { [opticalRigKey(LAPTOP.fingerprint, CAMERA_ABOVE_RIG_NAME)]: hood },
+      profiles: {
+        [opticalRigKey(LAPTOP.fingerprint, CAMERA_ABOVE_RIG_NAME)]: hood,
+        [opticalRigKey(LAPTOP.fingerprint, second.rigName)]: second,
+      },
     };
     const next = withCameraAboveRig(optical, LAPTOP);
     expect(activeOpticalProfile(next, LAPTOP.fingerprint)?.rigName).toBe(
-      `${CAMERA_ABOVE_RIG_NAME} 2`,
+      `${CAMERA_ABOVE_RIG_NAME} 3`,
     );
+    expect(activeOpticalProfile(next, LAPTOP.fingerprint)?.lensPlacement).toBe('above');
     expect(
       next.profiles[opticalRigKey(LAPTOP.fingerprint, CAMERA_ABOVE_RIG_NAME)]?.viewingDistanceMm,
     ).toBe(1500);
@@ -193,6 +236,24 @@ describe('isCameraOffPanelProfile and isPrompterGlass', () => {
     expect(isCameraOffPanelProfile(defaultOpticalProfile())).toBe(false);
     expect(isCameraOffPanelProfile({ ...defaultOpticalProfile(), lensPlacement: 'none' })).toBe(false);
     expect(isCameraOffPanelProfile(null)).toBe(false);
+  });
+
+  it('calls a panel glass only when its chosen rig is behind the picture AND it is mirrored', () => {
+    const hood = { ...defaultOpticalProfile(), rigName: 'Studio hood' };
+    const withHood = (mirrored: boolean): OpticalSettings => ({
+      profiles: { [opticalRigKey(LAPTOP.fingerprint, hood.rigName)]: hood },
+      activeRig: { [LAPTOP.fingerprint]: hood.rigName },
+      panelMirror: { [LAPTOP.fingerprint]: { horizontal: false, vertical: mirrored } },
+    });
+    expect(isMirroredGlassRig(withHood(true), LAPTOP.fingerprint)).toBe(true);
+    expect(isMirroredGlassRig(withHood(false), LAPTOP.fingerprint)).toBe(false);
+    // Mirrored with no rig chosen: the mistake this choice exists to put right.
+    expect(
+      isMirroredGlassRig(
+        { ...empty(), panelMirror: { [LAPTOP.fingerprint]: { horizontal: true, vertical: false } } },
+        LAPTOP.fingerprint,
+      ),
+    ).toBe(false);
   });
 
   it('recognises the Elgato by its grid, and not a laptop', () => {

@@ -34,6 +34,7 @@ import {
   activeOpticalProfile,
   normalizeOpticalProfile,
   opticalRigKey,
+  panelMirrorFor,
   withOpticalProfile,
   withPanelMirror,
   type OpticalSettings,
@@ -66,6 +67,24 @@ export function isCameraOffPanelProfile(profile: OpticalProfile | null | undefin
 export function isPrompterGlass(display: DisplayShape | null | undefined): boolean {
   const kind = discoverProfile(display, null).identification.kind;
   return kind === 'elgato-prompter' || kind === 'elgato-prompter-xl';
+}
+
+/**
+ * True when the panel's chosen rig puts the camera BEHIND the picture and the
+ * panel is mirrored — glass that discovery does not recognise by its grid,
+ * somebody's own beamsplitter on an ordinary monitor.
+ *
+ * Both, not either: a mirrored panel with no rig chosen is the laptop a global
+ * mirror switch once flipped by mistake (#206), which is exactly what this
+ * choice should put right; and an unmirrored panel with a glass rig has no
+ * mirror to lose.
+ */
+export function isMirroredGlassRig(optical: OpticalSettings, fingerprint: string): boolean {
+  const mirror = panelMirrorFor(optical, fingerprint);
+  return (
+    activeOpticalProfile(optical, fingerprint)?.lensPlacement === 'in-panel' &&
+    (mirror.horizontal || mirror.vertical)
+  );
 }
 
 /**
@@ -110,7 +129,9 @@ export function cameraAboveProfile(
  *  1. a camera-above rig already in force on the panel stays — including one
  *     somebody measured in the wizard, which beats anything this could build;
  *  2. otherwise a stored camera-above rig by this name is chosen again as it
- *     was saved;
+ *     was saved, adjustments included: a reading-line position somebody
+ *     pinned under This rig › Advanced is a stated preference, and the
+ *     resolver lets a stated position win;
  *  3. otherwise a fresh one is stored, under a name no other rig on this panel
  *     is using, because the store keys on (panel, name) and a same-named rig
  *     of another shape is somebody's measurements.
@@ -125,7 +146,9 @@ export function withCameraAboveRig(
 ): OpticalSettings {
   const fingerprint = display.fingerprint;
   const unmirrored = { horizontal: false, vertical: false };
-  if (isCameraOffPanelProfile(activeOpticalProfile(optical, fingerprint))) {
+  // Above only: a rig with its camera BELOW the panel puts the reading line at
+  // the bottom edge, away from the camera this choice names.
+  if (activeOpticalProfile(optical, fingerprint)?.lensPlacement === 'above') {
     return withPanelMirror(optical, fingerprint, unmirrored);
   }
   const storedAt = (name: string): OpticalProfile | null =>
