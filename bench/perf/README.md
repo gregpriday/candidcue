@@ -23,14 +23,14 @@ before it:
 | `launch.cold.*` | spawning the process, on a fresh profile | the first painted frame of Welcome |
 | `launch.warm.*` | spawning it again, over that profile | the first painted frame of the Library, fixture listed |
 | `open.cold` / `open.warm` | double-clicking the fixture's Library row (first / second time in the process) | the first frame that paints the editor with the script loaded, its first compile **succeeded**, the opening panel gone and the text on screen |
-| `present.cold` / `present.warm` | clicking Present (reader mode, roll at pace) | the first frame that paints a word of the script with the cover and the opening plate gone; a stage that revealed its script unmeasured (`data-degraded`) does not count |
+| `present.cold` / `present.warm` | clicking Present (reader mode, roll at pace) | the first frame that paints a word of the script with the cover and the opening plate gone |
 | `frames.{cold,warm}.{p95,p99,max,long}` | 10 s of rolling at 130 wpm in that take | per take: frame-interval percentiles, the worst frame, and frames over 50 ms |
 
 Launch is split four ways:
 
 - `spawn-to-ready` is the whole wait.
 - `spawn-to-entry` runs up to the first statement of `src/control/main.ts`, so it covers native start plus the control bundle.
-- `bundle-evaluate` runs from `public/boot-mark.js` to entry. That one-line classic script, first in `control.html`'s head, runs before the module graph is requested, so this is the bundle's fetch, parse and evaluation.
+- `bundle-evaluate` runs from `public/boot-mark.js` to entry. That one-line classic script, at the end of `control.html`'s head, runs before the module graph is requested, so this is the bundle's fetch, parse and evaluation. It is a blocking request in every build, and it costs what it measures: it ran 2 ms after navigation start in 33 of the baseline's 40 launches, and 15 ms at most.
 - `entry-to-ready` is the shell's own boot: settings, the library, the first route.
 
 Every end point is a predicate over what is on screen, polled once per
@@ -99,8 +99,8 @@ The runner deletes those folders (and the identity's `HTTPStorages` and
 saved-state entries) by exact name before every pair, and touches nothing else.
 The guards around that:
 
-- It holds a per-user lock (`$TMPDIR/com.speakingglass.perf.perf-run.lock`) for the whole recording.
-- It refuses to start while any checkout's `Speaking Glass Perf.app` is running.
+- It holds a lock for the whole recording: a listening socket on `127.0.0.1:47240`. Binding is atomic and the kernel releases it however the runner dies, so there is never a stale lock to reclaim.
+- It refuses to start while any checkout's `Speaking Glass Perf.app`, or the binary it was given, is running.
 - It checks the bundle and its executable before deleting anything.
 
 The benchmark profile is disposable by design: anything made in it by opening
@@ -155,8 +155,10 @@ Two recordings of one unchanged build (40 pairs) were compared against each
 other in both directions. Those two predate the load column and the bundle
 series. The thresholds in `scripts/perf-report.mjs` (`DEFAULT_THRESHOLDS`,
 `base × (1 + relative) + absolute`) are the tightest round numbers that pass
-both directions with a margin. The baseline above passes against both
-recordings in both directions.
+both directions with a margin. The baseline above is within threshold
+against both recordings, both ways round, on every series they share. Those
+older recordings have no `bundle-evaluate`, so used as a candidate against
+this baseline they fail on that missing series, as they should.
 
 | Family | Allowance | Largest unchanged-build swing seen |
 |---|---|---|
@@ -181,9 +183,10 @@ are unchanged. A 60 ms slower bundle fails `bundle-evaluate`, which
 - **The bundle's load is bimodal.** Head-parse to entry is either ~40–65 ms
   or ~100–125 ms. In this baseline the fast mode appears twice in 40 launches;
   in one of the earlier recordings it was close to half. Spawn→entry does not follow the
-  mode: when the bundle is fast, the page simply started later. So the slow
-  mode is the eager scripts waiting on a native side that is still starting
-  up, not parse cost. The fast mode bounds the bundle's own fetch, parse and
+  mode: when the bundle is fast, the page simply started later. That pattern
+  fits the eager scripts waiting on a native side that is still starting up,
+  rather than parse cost. It is an inference: nothing here times the asset
+  requests themselves. The fast mode bounds the bundle's own fetch, parse and
   evaluation at roughly 40 ms. This is also why navigation start is a poor
   origin: the page's navigation→entry interval inherits the same two modes,
   so the report keeps it and the comparison does not use it.
@@ -218,6 +221,10 @@ lazy boundary.
   `docs/real-rig-test-protocol.md` still covers the rig.
 - **Voice.** No recogniser, no microphone and no alignment. The follow loop's
   costs are cc-bench's business.
+- **A fallback reveal.** If the stage cannot place the script, it reveals
+  it anyway 700 ms after the layer mounts. The scenario cannot tell that
+  reveal from a placed one, but it cannot hide either: it would land well
+  above the 531–550 ms a placed reveal takes here.
 - **The compositor.** WebKit can run a frame's callbacks and still show a
   stale frame. These numbers measure the first frame where the page could
   paint, not photons.

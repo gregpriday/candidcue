@@ -186,14 +186,24 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt, fixtureSha25
   const env = envs[0] ?? null;
   // The fixture the BUILD embeds, against the one the runner hashed: an old
   // bundle run from a newer checkout would otherwise claim the new fixture.
-  if (fixtureSha256 !== null && typeof env?.fixtureSha256 === 'string' && env.fixtureSha256 !== fixtureSha256) {
-    problems.push('the app embeds a different fixture from the checkout');
+  if (fixtureSha256 !== null && env !== null) {
+    if (typeof env.fixtureSha256 !== 'string') problems.push('the app did not report its fixture');
+    else if (env.fixtureSha256 !== fixtureSha256) problems.push('the app embeds a different fixture from the checkout');
   }
   // Before `valid` is read: each of these adds its own problems.
   const launches = {
     cold: launch(firstUse, 'first-use', spawnedAt.firstUse),
     warm: launch(relaunch, 'relaunch', spawnedAt.relaunch),
   };
+  // Where each process got to, so a hang says which step it hung in.
+  for (const [phase, records] of [
+    ['first-use', firstUse],
+    ['relaunch', relaunch],
+  ]) {
+    const steps = only(records, 'step');
+    const lastStep = steps[steps.length - 1]?.step;
+    if (problems.length > 0 && typeof lastStep === 'string') problems.push(`${phase}: last step "${lastStep}"`);
+  }
   return {
     pair,
     valid: problems.length === 0,
@@ -308,12 +318,32 @@ export function incompatibilities(base, candidate) {
     ['baseline', base],
     ['candidate', candidate],
   ]) {
-    if (r === null || typeof r !== 'object' || !Array.isArray(r.pairs)) {
+    const pairsOk =
+      r !== null &&
+      typeof r === 'object' &&
+      Array.isArray(r.pairs) &&
+      r.pairs.every(
+        (p) =>
+          p !== null &&
+          typeof p === 'object' &&
+          typeof p.valid === 'boolean' &&
+          p.launches !== null &&
+          typeof p.launches === 'object' &&
+          Array.isArray(p.opens) &&
+          Array.isArray(p.presents) &&
+          Array.isArray(p.takes),
+      );
+    if (!pairsOk) {
       reasons.push(`the ${name} is not a perf report`);
       return reasons;
     }
   }
   if (!base.pairs.some((p) => p.valid)) reasons.push('the baseline has no valid pairs');
+  else if (Object.keys(seriesOf(base)).length === 0) reasons.push('the baseline has no measurements');
+  if (base.thresholds !== undefined && (base.thresholds === null || typeof base.thresholds !== 'object')) {
+    reasons.push("the baseline's thresholds are not an object");
+    return reasons;
+  }
   for (const [family, t] of Object.entries(base.thresholds ?? {})) {
     if (!finite(t?.relative) || !finite(t?.absolute) || t.relative < 0 || t.absolute < 0) {
       reasons.push(`the baseline's ${family} threshold is not two non-negative numbers`);
@@ -367,7 +397,12 @@ export function compareReports(base, candidate) {
   }
   // A series the baseline measures and the candidate does not is a FAILURE,
   // not a skipped row: a candidate with no pairs at all would otherwise pass.
-  const missing = Object.keys(a).filter((n) => !(n in b));
+  // And one sample per valid candidate pair: a series measured in one pair
+  // of twenty is not a distribution, and would pass on that one value.
+  const validCandidatePairs = candidate.pairs.filter((p) => p.valid).length;
+  const missing = Object.keys(a)
+    .filter((n) => !(n in b) || b[n].length < validCandidatePairs)
+    .map((n) => (n in b ? `${n} (${b[n].length} of ${validCandidatePairs} pairs)` : n));
   const invalidPairs = candidate.pairs.filter((p) => !p.valid).map((p) => ({ pair: p.pair, problems: p.problems }));
   const regressions = rows.filter((r) => r.crossed.length > 0).map((r) => r.name);
   return {
@@ -430,13 +465,16 @@ export function serialiseReport(report) {
   // tokens before stringifying and back after, so a string that happens to
   // contain "[1, 2]" is never rewritten.
   const arrays = [];
+  // A per-call nonce, so no string a report could contain matches a token.
+  const nonce = Math.random().toString(36).slice(2);
   const text = JSON.stringify(
     report,
     (_key, value) =>
       Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'number')
-        ? `\u0000numbers:${arrays.push(JSON.stringify(value)) - 1}`
+        ? `\u0000${nonce}:${arrays.push(JSON.stringify(value)) - 1}`
         : value,
     1,
   );
-  return `${text.replace(/"\\u0000numbers:(\d+)"/g, (_, i) => arrays[Number(i)])}\n`;
+  const token = new RegExp(`"\\\\u0000${nonce}:(\\d+)"`, 'g');
+  return `${text.replace(token, (_, i) => arrays[Number(i)])}\n`;
 }

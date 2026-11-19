@@ -1,6 +1,7 @@
 /*
- * When the control page began to parse (issue #240). A classic script, first
- * in <head>, so it runs before the module graph is even requested: the time
+ * When the control page began to parse (issue #240). A classic script in
+ * <head>, ahead of the module tags Vite adds there, so it runs before the
+ * module graph is even requested: the time
  * from here to the first statement of src/control/main.ts is fetching,
  * parsing and evaluating the control bundle, measured from a point that does
  * not depend on when WebKit stamps navigation start (bench/perf/README.md).

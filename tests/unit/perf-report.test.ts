@@ -68,6 +68,7 @@ describe('parsing the client trace', () => {
       '2026-11-19T00:00:00Z [realtime] #1 +3ms begin',
       '2026-11-19T00:00:00Z [realtime] {"kind":"launch","phase":"first-use"}',
       '2026-11-19T00:00:00Z [perf] {"kind": nope}',
+      '2026-11-19T00:00:00Z [perf] {"v":1,"phase":"first-use"}',
       '2026-11-19T00:00:01Z [perf] {"v":1,"kind":"launch","phase":"first-use"}',
       '2026-11-19T00:00:02Z [perf] {"v":1,"kind":"frames","ordinal":1,"deltas":[16.',
       '2026-11-19T00:00:03Z [perf] {"v":1,"kind":"done","phase":"first-use"}',
@@ -292,11 +293,42 @@ describe('what a pair refuses', () => {
 
   it('a relaunch with no environment record', () => {
     expect(broken(relaunch().filter((r) => r.kind !== 'env')).problems).toContain('relaunch: 0 env records');
+    expect(broken(relaunch({ extra: [{ kind: 'env', fixtureSha256: 'abc' }] })).problems).toContain('relaunch: 2 env records');
+  });
+
+  it('a build that does not say which fixture it embeds, or differs only after the first character', () => {
+    const without = relaunch().map((r) => (r.kind === 'env' ? { kind: 'env' } : r));
+    expect(broken(without).problems).toContain('the app did not report its fixture');
+    const near = relaunch().map((r) => (r.kind === 'env' ? { ...r, fixtureSha256: 'abz' } : r));
+    expect(broken(near).problems).toContain('the app embeds a different fixture from the checkout');
+  });
+
+  it('a mount before the entry, and a done record for the other process', () => {
+    const first = firstUse().map((r) => (r.kind === 'launch' ? { ...r, mountedMs: 10 } : r));
+    expect(broken(relaunch(), first).problems).toContain('first-use: launch marks missing or out of order');
+    const misfiled = firstUse().map((r) => (r.kind === 'done' ? { ...r, phase: 'relaunch' } : r));
+    expect(broken(relaunch(), misfiled).problems).toContain('first-use: no done record');
+  });
+
+  it('a non-finite frame interval', () => {
+    const records = relaunch().map((r) =>
+      r.kind === 'frames' && r.ordinal === 2 ? { ...r, deltas: [16.7, null] } : r,
+    );
+    expect(broken(records).problems).toContain('take 2: a frame chunk is not a list of intervals');
+  });
+
+  it('keeps the last step a broken process reached', () => {
+    const records = relaunch()
+      .filter((r) => !(r.kind === 'take' && r.ordinal === 2) && r.kind !== 'done')
+      .concat([{ kind: 'step', step: 'take 2: sample' }]);
+    expect(broken(records).problems).toContain('relaunch: last step "take 2: sample"');
   });
 
   it('a take that stopped moving', () => {
-    const records = relaunch().map((r) => (r.kind === 'take' && r.ordinal === 1 ? { ...r, outcome: 'stopped moving' } : r));
-    expect(broken(records).problems).toContain('take 1: stopped moving');
+    for (const outcome of ['stopped moving', 'stalled (frames stopped; hidden)', 'hidden']) {
+      const records = relaunch().map((r) => (r.kind === 'take' && r.ordinal === 1 ? { ...r, outcome } : r));
+      expect(broken(records).problems).toContain(`take 1: ${outcome}`);
+    }
   });
 });
 
@@ -308,6 +340,12 @@ describe('the bundle interval', () => {
     expect(series['launch.cold.bundle-evaluate']).toBeUndefined();
   });
 
+  it('is absent when the head mark comes after the entry', () => {
+    const late = relaunch().map((r) => (r.kind === 'launch' ? { ...r, headParsedMs: 31 } : r));
+    const pair = assemblePair({ pair: 1, firstUse: firstUse(), relaunch: late, spawnedAt });
+    expect(pair.launches.warm?.bundleEvaluateMs).toBeNull();
+  });
+
   it('catches a bundle that got slower to evaluate, which spawn-to-entry absorbs', () => {
     const slower = pairs(5);
     for (const p of slower) {
@@ -316,6 +354,17 @@ describe('the bundle interval', () => {
       p.launches.warm = { ...warm, bundleEvaluateMs: (warm.bundleEvaluateMs ?? 0) + 60 };
     }
     expect(compareReports(report(pairs(5)), report(slower)).regressions).toContain('launch.warm.bundle-evaluate');
+  });
+
+  it('gives the bundle its relative allowance as well as its absolute one', () => {
+    // 18 ms → 40 ms: past 18 + 20 = 38, inside 18 × 1.2 + 20 = 41.6.
+    const slower = pairs(5);
+    for (const p of slower) {
+      const warm = p.launches.warm;
+      if (warm === null) throw new Error('fixture');
+      p.launches.warm = { ...warm, bundleEvaluateMs: 40 };
+    }
+    expect(compareReports(report(pairs(5)), report(slower)).regressions).not.toContain('launch.warm.bundle-evaluate');
   });
 
   it('holds the bundle to its own allowance, tighter than the launch family', () => {
@@ -363,6 +412,20 @@ describe('verdicts the first tests did not pin down', () => {
     for (const p of candidate) p.opens[0] = { ms: 400.6, words: 5073 };
     const thresholds = { open: { relative: 0.2, absolute: 40 } };
     expect(compareReports(report(base, { thresholds }), report(candidate)).regressions).not.toContain('open.cold');
+    for (const p of candidate) p.opens[0] = { ms: 400.7, words: 5073 };
+    expect(compareReports(report(base, { thresholds }), report(candidate)).regressions).toContain('open.cold');
+  });
+
+  it('fails a series measured in only some of the valid pairs', () => {
+    const partial = pairs(4);
+    for (const p of partial.slice(1)) {
+      const warm = p.launches.warm;
+      if (warm === null) throw new Error('fixture');
+      p.launches.warm = { ...warm, bundleEvaluateMs: null };
+    }
+    const result = compareReports(report(pairs(4)), report(partial));
+    expect(result.passed).toBe(false);
+    expect(result.missing).toContain('launch.warm.bundle-evaluate (1 of 4 pairs)');
   });
 
   it('fails a candidate with no measurements at all', () => {
@@ -379,6 +442,12 @@ describe('verdicts the first tests did not pin down', () => {
     expect(compareReports(report(pairs(2), { thresholds }), report(pairs(2))).reasons).toContain(
       "the baseline's open threshold is not two non-negative numbers",
     );
+    const negative = { open: { relative: -1, absolute: 0 } };
+    expect(compareReports(report(pairs(2), { thresholds: negative }), report(pairs(2))).comparable).toBe(false);
+    // Pairs that are present but hollow, or not objects at all.
+    const hollow = { pair: 1, valid: true, problems: [], launches: {}, opens: [], presents: [], takes: [], env: null };
+    expect(compareReports(report([hollow as unknown as Pair]), report([])).reasons).toContain('the baseline has no measurements');
+    expect(compareReports(report(pairs(2)), report([null as unknown as Pair])).comparable).toBe(false);
   });
 
   it('refuses another machine on the model alone and on the chip alone', () => {
@@ -415,8 +484,9 @@ describe('the comparison CLI', () => {
 
 describe('machine load', () => {
   it('is shown beside the verdict when the recordings carry it', () => {
-    const loaded = pairs(3).map((p, i) => ({ ...p, load: [2 + i, 3] as [number, number] }));
+    const loaded = pairs(3).map((p, i) => ({ ...p, load: [2 + i, 9] as [number, number] }));
     const result = compareReports(report(pairs(3)), report(loaded));
+    // The load at each pair's START, not after it.
     expect(result.load).toEqual({ base: null, candidate: 3 });
     expect(formatComparison(result)).toContain('candidate 3');
   });

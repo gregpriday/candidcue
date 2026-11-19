@@ -25,8 +25,9 @@
  */
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, loadavg, tmpdir } from 'node:os';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { homedir, loadavg } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -60,11 +61,16 @@ const PROFILE_DIRS = [
 const TRACE = join(LIBRARY, 'Application Support', IDENTIFIER, 'logs', 'client-trace.log');
 
 /**
- * One recording per user at a time. The identity, not the checkout, owns the
- * profile: a second runner from another worktree would otherwise delete the
- * first one's profile mid-pair, or read its trace.
+ * One recording per machine at a time. The identity, not the checkout, owns
+ * the profile: a second runner from another worktree would otherwise delete
+ * the first one's profile mid-pair, or read its trace.
+ *
+ * The lock is a listening loopback socket, not a file. Binding is atomic and
+ * the kernel lets go when the process dies, however it dies — so there is no
+ * stale lock to reclaim, which is the step a lock file cannot do without a
+ * race between two runners that both see the same dead pid.
  */
-const LOCK = join(tmpdir(), `${IDENTIFIER}.perf-run.lock`);
+const LOCK_PORT = 47240;
 
 /** Any checkout's benchmark build, running: the bundle name is the same everywhere. */
 const RUNNING_PATTERN = 'Speaking Glass Perf\\.app/Contents/MacOS/';
@@ -162,40 +168,40 @@ function binaryOf(app) {
   return binary;
 }
 
-/** Is any benchmark build running, from any checkout? A failed probe is a refusal. */
-function benchmarkRunning() {
-  const probe = spawnSync('pgrep', ['-f', RUNNING_PATTERN], { encoding: 'utf8' });
-  if (probe.status === 1) return false;
-  if (probe.status === 0) return true;
-  throw new Error(`could not check for a running benchmark app (pgrep exited ${probe.status ?? probe.signal})`);
+/**
+ * Is a benchmark build running — any checkout's, or this exact binary under
+ * whatever name `--app` gave it? A failed probe is a refusal.
+ */
+function benchmarkRunning(binary) {
+  const escaped = binary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const pattern of [RUNNING_PATTERN, escaped]) {
+    const probe = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' });
+    if (probe.status === 0) return true;
+    if (probe.status !== 1) {
+      throw new Error(`could not check for a running benchmark app (pgrep exited ${probe.status ?? probe.signal})`);
+    }
+  }
+  return false;
 }
 
 function takeLock() {
-  try {
-    const fd = openSync(LOCK, 'wx');
-    writeFileSync(fd, `${process.pid}\n`);
-    closeSync(fd);
-  } catch {
-    const holder = Number(readFileSync(LOCK, 'utf8').trim());
-    let alive = false;
-    try {
-      process.kill(holder, 0);
-      alive = true;
-    } catch {
-      alive = false;
-    }
-    if (alive) throw new Error(`another recording (pid ${holder}) holds ${LOCK}`);
-    rmSync(LOCK, { force: true });
-    return takeLock();
-  }
-  const release = () => rmSync(LOCK, { force: true });
-  process.on('exit', release);
-  for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-      release();
-      process.exit(130);
+  return new Promise((resolveLock, rejectLock) => {
+    const server = createServer();
+    server.once('error', (err) =>
+      rejectLock(
+        new Error(
+          err.code === 'EADDRINUSE'
+            ? `another recording holds the benchmark lock (127.0.0.1:${LOCK_PORT}), or something else is using that port`
+            : `could not take the benchmark lock: ${err.message}`,
+        ),
+      ),
+    );
+    // Held for the life of the process; `unref` so it never keeps node alive.
+    server.listen(LOCK_PORT, '127.0.0.1', () => {
+      server.unref();
+      resolveLock();
     });
-  }
+  });
 }
 
 function clearProfile() {
@@ -226,7 +232,10 @@ async function launch(binary) {
       clearTimeout(timer);
       resolveExit(timedOut ? 'timeout' : (signal ?? code));
     });
+    // `error` is also how a failed kill() is reported. Only a child that
+    // never started settles here; a live one is waited for until it exits.
     child.on('error', (err) => {
+      if (child.pid !== undefined) return;
       clearTimeout(timer);
       resolveExit(`a spawn error (${err.message})`);
     });
@@ -240,8 +249,8 @@ async function main() {
   if (process.platform !== 'darwin') throw new Error('the recording is defined for a Mac (WKWebView)');
   const opts = args(process.argv.slice(2));
   const binary = binaryOf(resolve(ROOT, opts.app));
-  takeLock();
-  if (benchmarkRunning()) throw new Error('a benchmark app is already running; quit it first');
+  await takeLock();
+  if (benchmarkRunning(binary)) throw new Error('a benchmark app is already running; quit it first');
 
   const fixture = readFileSync(join(ROOT, FIXTURE));
   const report = {

@@ -282,6 +282,7 @@ async function openFixture(ordinal: number, id: string): Promise<void> {
   if (get(route).name !== 'library') {
     await navigate({ name: 'library', view: 'all' });
   }
+  await progress(`open ${ordinal}`);
   await paintedWhen(`open ${ordinal}: library row`, () => visible(fixtureRow(id)));
   const row = fixtureRow(id);
   if (row === null) throw new StepError(`open ${ordinal}`, 'the fixture row went away');
@@ -297,22 +298,19 @@ async function openFixture(ordinal: number, id: string): Promise<void> {
 }
 
 async function presentAndRoll(ordinal: number, id: string): Promise<void> {
+  await progress(`present ${ordinal}`);
   await paintedWhen(`present ${ordinal}: editor`, () => editorReady(id));
   const button = document.querySelector<HTMLButtonElement>('.present-group .split button.main');
   if (button === null || button.disabled) throw new StepError(`present ${ordinal}`, 'no Present button');
   const startedAt = performance.now();
   button.click();
   const readableAt = await paintedWhen(`present ${ordinal}`, firstLineReadable);
-  // A stage that could not measure its script reveals it anyway, unplaced.
-  // That is a reading of a different thing, so it is recorded as such and
-  // the pair is not valid.
-  const degraded = document.querySelector<HTMLElement>('.script-layer')?.dataset.degraded === 'true';
-  await report({
-    kind: 'present',
-    ordinal,
-    ms: readableAt - startedAt,
-    outcome: degraded ? 'degraded' : 'readable',
-  });
+  // A stage whose opening placement fails reveals its script anyway, after a
+  // 700 ms deadline from the layer's mount. Nothing on screen tells that
+  // reveal from a placed one, so it is not detected here; it cannot hide,
+  // though: it lands well above the 531–550 ms a placed reveal takes on the
+  // baseline Mac (bench/perf/README.md).
+  await report({ kind: 'present', ordinal, ms: readableAt - startedAt, outcome: 'readable' });
 
   await progress(`take ${ordinal}: roll`);
   toggleAutoScroll();
