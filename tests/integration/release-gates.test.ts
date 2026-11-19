@@ -2295,7 +2295,7 @@ describe('the notes this tree would actually publish', () => {
     // The delivery analysis (choppy-delivery detection, the variety score) was
     // removed with the coaching era. Notes that still list it as a limitation
     // describe a product that no longer exists.
-    expect(extracted.output).not.toMatch(/choppy[\s-]+delivery/i);
+    expect(extracted.output).not.toMatch(/choppy/i);
     expect(extracted.output).not.toMatch(/variety score/i);
   });
 

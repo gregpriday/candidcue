@@ -135,10 +135,11 @@ you what to watch for.
 Speaking Glass was called CandidCue until October 2026. A build from before the
 rename kept its data in a `com.candidcue.app` folder. The first launch of
 Speaking Glass copies that folder to `com.speakingglass.app` and leaves the
-original alone. If `com.speakingglass.app` already holds scripts, or a restore
-is under way there, nothing is copied and the original keeps the only copy of
-the old data, so check that your scripts came across before you delete the
-original.
+original alone. It copies only once: anything an older build writes to the
+original afterwards stays there, and if `com.speakingglass.app` already holds
+scripts, or a restore is under way there, nothing is copied at all. Keep the
+original until no older checkout uses it and you have checked that your data
+came across.
 
 ## Development
 
