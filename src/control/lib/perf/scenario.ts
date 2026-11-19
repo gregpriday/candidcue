@@ -220,26 +220,18 @@ async function recordLaunch(phase: 'first-use' | 'relaunch'): Promise<void> {
     entryMs,
     mountedMs,
     readyMs,
-    scriptsFetchedMs: scriptsFetchedBefore(entryMs),
+    headParsedMs: headParsedMs(),
   });
 }
 
 /**
- * When the last script the entry waited for had arrived, from Resource
- * Timing: the latest `responseEnd` of a script that finished before `entry`.
- * From there to `entry` is evaluating the control bundle, measured from a
- * milestone that does not depend on when WebKit stamps navigation start
- * (bench/perf/README.md). Null when the engine reports no script resources,
- * and the series is then simply absent.
+ * When the page began to parse, from `public/boot-mark.js`: the first script
+ * in `<head>`, run before the module graph is requested. Resource Timing was
+ * the first choice and WKWebView reports no entries for `tauri://` scripts.
  */
-function scriptsFetchedBefore(entryMs: number): number | null {
-  let latest: number | null = null;
-  for (const entry of performance.getEntriesByType('resource') as PerformanceResourceTiming[]) {
-    if (entry.initiatorType !== 'script' && entry.initiatorType !== 'link') continue;
-    if (!/\.js(?:$|\?)/.test(entry.name) || entry.responseEnd <= 0 || entry.responseEnd > entryMs) continue;
-    latest = latest === null ? entry.responseEnd : Math.max(latest, entry.responseEnd);
-  }
-  return latest;
+function headParsedMs(): number | null {
+  const at = (window as { __SPEAKING_GLASS_BOOT__?: unknown }).__SPEAKING_GLASS_BOOT__;
+  return typeof at === 'number' && Number.isFinite(at) ? at : null;
 }
 
 /** Hex SHA-256 of the fixture this build embeds, so a stale bundle is caught. */

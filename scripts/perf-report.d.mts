@@ -33,7 +33,7 @@ export interface FrameTail {
 
 export interface LaunchTimes {
   spawnToReadyMs: number | null;
-  /** Last eager script's arrival → the entry's first statement; null without Resource Timing. */
+  /** The head's first script (public/boot-mark.js) → the entry's first statement; null in older recordings. */
   bundleEvaluateMs: number | null;
   spawnToNavigationMs: number | null;
   navigationToEntryMs: number | null;

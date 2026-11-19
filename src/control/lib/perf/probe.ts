@@ -65,8 +65,17 @@ export function perfShellReady(): void {
   if (!perfArmed()) return;
   void (async () => {
     await tick();
-    await nextFrame();
-    await nextFrame();
+    // A window nobody can see gets no animation frames on WKWebView, so this
+    // wait is bounded: a launch that never paints is reported as one rather
+    // than left for the runner's kill to find.
+    const painted = await Promise.race([
+      nextFrame().then(() => nextFrame()).then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), FIRST_PAINT_TIMEOUT_MS)),
+    ]);
+    if (!painted) {
+      await fail('first paint', `no frame within ${FIRST_PAINT_TIMEOUT_MS} ms (${document.visibilityState})`);
+      return;
+    }
     perfMark('ready');
     try {
       const { runScenario } = await import('./scenario');
@@ -75,12 +84,18 @@ export function perfShellReady(): void {
       // The scenario reports its own failures; this is the one it cannot:
       // its chunk did not load. Said in the trace, then the same orderly
       // exit, so the runner records a broken pair rather than a hang.
-      const message = err instanceof Error ? err.message : String(err);
-      const line = JSON.stringify({ v: 1, kind: 'error', step: 'load scenario', message: message.slice(0, 500) });
-      await ipcInvoke('log_client_diagnostic', { scope: 'perf', line }).catch(() => {});
-      await emit('perf://finished').catch(() => {});
+      await fail('load scenario', err instanceof Error ? err.message : String(err));
     }
   })();
+}
+
+const FIRST_PAINT_TIMEOUT_MS = 20_000;
+
+/** Say what stopped the run, then take the same orderly exit the scenario does. */
+async function fail(step: string, message: string): Promise<void> {
+  const line = JSON.stringify({ v: 1, kind: 'error', step, message: message.slice(0, 500) });
+  await ipcInvoke('log_client_diagnostic', { scope: 'perf', line }).catch(() => {});
+  await emit('perf://finished').catch(() => {});
 }
 
 function nextFrame(): Promise<number> {

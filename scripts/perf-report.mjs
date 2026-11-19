@@ -122,10 +122,12 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt, fixtureSha25
       problems.push(`${phase}: launch marks missing or out of order`);
       return null;
     }
-    const fetched = finite(r.scriptsFetchedMs) && r.scriptsFetchedMs <= r.entryMs ? r.scriptsFetchedMs : null;
+    // The head's first script (public/boot-mark.js) to entry: the control
+    // bundle's fetch, parse and evaluation. Absent from older recordings.
+    const parsed = finite(r.headParsedMs) && r.headParsedMs <= r.entryMs ? r.headParsedMs : null;
     return {
       spawnToReadyMs: round(r.timeOrigin + r.readyMs - spawned),
-      bundleEvaluateMs: fetched === null ? null : round(r.entryMs - fetched),
+      bundleEvaluateMs: parsed === null ? null : round(r.entryMs - parsed),
       spawnToNavigationMs: round(r.timeOrigin - spawned),
       navigationToEntryMs: round(r.entryMs),
       entryToMountedMs: round(r.mountedMs - r.entryMs),
@@ -241,7 +243,7 @@ export function seriesOf(report) {
       push(`launch.${temp}.spawn-to-ready`, l?.spawnToReadyMs);
       push(`launch.${temp}.spawn-to-entry`, sum(l?.spawnToNavigationMs, l?.navigationToEntryMs));
       push(`launch.${temp}.entry-to-ready`, diff(l?.navigationToReadyMs, l?.navigationToEntryMs));
-      // The bundle alone: last eager script arrived → entry's first statement.
+      // The bundle alone: the head began to parse → entry's first statement.
       push(`launch.${temp}.bundle-evaluate`, l?.bundleEvaluateMs);
     }
     ['cold', 'warm'].forEach((temp, i) => {

@@ -94,7 +94,7 @@ function relaunch(overrides: { frames?: number[]; presentOutcome?: string; extra
       entryMs: 30,
       mountedMs: 50,
       readyMs: 150,
-      scriptsFetchedMs: 12,
+      headParsedMs: 12,
     },
     { kind: 'env', fixtureSha256: 'abc' },
     { kind: 'open', ordinal: 1, ms: 420, words: 5073 },
@@ -301,10 +301,10 @@ describe('what a pair refuses', () => {
 });
 
 describe('the bundle interval', () => {
-  it('is entry minus the last eager script arriving, when the engine reports one', () => {
+  it('is entry minus the moment the head began to parse, when the page reports it', () => {
     const series = seriesOf(report(pairs(2)));
     expect(series['launch.warm.bundle-evaluate']).toEqual([18, 18]);
-    // The first-use launch reported no script resources: absent, not zero.
+    // The first-use fixture reports no head mark: absent, not zero.
     expect(series['launch.cold.bundle-evaluate']).toBeUndefined();
   });
 
