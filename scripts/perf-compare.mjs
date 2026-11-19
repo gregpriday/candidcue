@@ -32,14 +32,16 @@ try {
 }
 
 let result;
+let text;
 try {
   result = compareReports(base, candidate);
+  text = formatComparison(result);
 } catch (err) {
   // Anything the shape checks did not anticipate is still "cannot compare".
   process.stderr.write(`Not comparable: ${err.message}\n`);
   process.exit(2);
 }
-process.stdout.write(formatComparison(result));
+process.stdout.write(text);
 if (!result.comparable) process.exit(2);
 if (!result.passed) {
   process.stdout.write(

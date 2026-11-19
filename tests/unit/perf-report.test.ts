@@ -294,13 +294,17 @@ describe('what a pair refuses', () => {
   it('a relaunch with no environment record', () => {
     expect(broken(relaunch().filter((r) => r.kind !== 'env')).problems).toContain('relaunch: 0 env records');
     expect(broken(relaunch({ extra: [{ kind: 'env', fixtureSha256: 'abc' }] })).problems).toContain('relaunch: 2 env records');
+    const three = [{ kind: 'env', fixtureSha256: 'abc' }, { kind: 'env', fixtureSha256: 'abc' }];
+    expect(broken(relaunch({ extra: three })).problems).toContain('relaunch: 3 env records');
   });
 
   it('a build that does not say which fixture it embeds, or differs only after the first character', () => {
     const without = relaunch().map((r) => (r.kind === 'env' ? { kind: 'env' } : r));
     expect(broken(without).problems).toContain('the app did not report its fixture');
-    const near = relaunch().map((r) => (r.kind === 'env' ? { ...r, fixtureSha256: 'abz' } : r));
-    expect(broken(near).problems).toContain('the app embeds a different fixture from the checkout');
+    for (const digest of ['abz', 'xbc']) {
+      const near = relaunch().map((r) => (r.kind === 'env' ? { ...r, fixtureSha256: digest } : r));
+      expect(broken(near).problems).toContain('the app embeds a different fixture from the checkout');
+    }
   });
 
   it('a mount before the entry, and a done record for the other process', () => {
@@ -308,19 +312,25 @@ describe('what a pair refuses', () => {
     expect(broken(relaunch(), first).problems).toContain('first-use: launch marks missing or out of order');
     const misfiled = firstUse().map((r) => (r.kind === 'done' ? { ...r, phase: 'relaunch' } : r));
     expect(broken(relaunch(), misfiled).problems).toContain('first-use: no done record');
+    // A stray done beside the right one is refused too, not ignored.
+    const stray = [...firstUse(), { kind: 'done', phase: 'relaunch' }];
+    expect(broken(relaunch(), stray).problems).toContain('first-use: 1 done record(s) for the other process');
   });
 
   it('a non-finite frame interval', () => {
-    const records = relaunch().map((r) =>
-      r.kind === 'frames' && r.ordinal === 2 ? { ...r, deltas: [16.7, null] } : r,
-    );
-    expect(broken(records).problems).toContain('take 2: a frame chunk is not a list of intervals');
+    for (const deltas of [[16.7, null], [16.7, Number.NaN], [16.7, -3]]) {
+      const records = relaunch().map((r) => (r.kind === 'frames' && r.ordinal === 2 ? { ...r, deltas } : r));
+      expect(broken(records).problems).toContain('take 2: a frame chunk is not a list of intervals');
+    }
   });
 
   it('keeps the last step a broken process reached', () => {
     const records = relaunch()
       .filter((r) => !(r.kind === 'take' && r.ordinal === 2) && r.kind !== 'done')
-      .concat([{ kind: 'step', step: 'take 2: sample' }]);
+      .concat([
+        { kind: 'step', step: 'take 2: roll' },
+        { kind: 'step', step: 'take 2: sample' },
+      ]);
     expect(broken(records).problems).toContain('relaunch: last step "take 2: sample"');
   });
 
@@ -340,10 +350,15 @@ describe('the bundle interval', () => {
     expect(series['launch.cold.bundle-evaluate']).toBeUndefined();
   });
 
-  it('is absent when the head mark comes after the entry', () => {
-    const late = relaunch().map((r) => (r.kind === 'launch' ? { ...r, headParsedMs: 31 } : r));
-    const pair = assemblePair({ pair: 1, firstUse: firstUse(), relaunch: late, spawnedAt });
-    expect(pair.launches.warm?.bundleEvaluateMs).toBeNull();
+  it('is absent when the head mark comes after the entry or before navigation', () => {
+    for (const headParsedMs of [31, -5]) {
+      const odd = relaunch().map((r) => (r.kind === 'launch' ? { ...r, headParsedMs } : r));
+      const pair = assemblePair({ pair: 1, firstUse: firstUse(), relaunch: odd, spawnedAt });
+      expect(pair.launches.warm?.bundleEvaluateMs).toBeNull();
+    }
+    // At the entry exactly is a (zero) measurement, not an absence.
+    const same = relaunch().map((r) => (r.kind === 'launch' ? { ...r, headParsedMs: 30 } : r));
+    expect(assemblePair({ pair: 1, firstUse: firstUse(), relaunch: same, spawnedAt }).launches.warm?.bundleEvaluateMs).toBe(0);
   });
 
   it('catches a bundle that got slower to evaluate, which spawn-to-entry absorbs', () => {
@@ -442,12 +457,32 @@ describe('verdicts the first tests did not pin down', () => {
     expect(compareReports(report(pairs(2), { thresholds }), report(pairs(2))).reasons).toContain(
       "the baseline's open threshold is not two non-negative numbers",
     );
-    const negative = { open: { relative: -1, absolute: 0 } };
-    expect(compareReports(report(pairs(2), { thresholds: negative }), report(pairs(2))).comparable).toBe(false);
+    for (const bad of [{ relative: -1, absolute: 0 }, { relative: 0.2, absolute: -1 }]) {
+      expect(compareReports(report(pairs(2), { thresholds: { open: bad } }), report(pairs(2))).comparable).toBe(false);
+    }
     // Pairs that are present but hollow, or not objects at all.
     const hollow = { pair: 1, valid: true, problems: [], launches: {}, opens: [], presents: [], takes: [], env: null };
     expect(compareReports(report([hollow as unknown as Pair]), report([])).reasons).toContain('the baseline has no measurements');
     expect(compareReports(report(pairs(2)), report([null as unknown as Pair])).comparable).toBe(false);
+  });
+
+  it('refuses a baseline that measures only part of the scenario', () => {
+    const partial = pairs(3).map((p) => ({ ...p, opens: [], presents: [], takes: [] }));
+    const reasons = compareReports(report(partial), report(pairs(3))).reasons;
+    expect(reasons[0]).toMatch(/^the baseline does not measure .*open\.cold/);
+  });
+
+  it('refuses reports without their metadata, rather than matching on nothing', () => {
+    const bare = { pairs: pairs(2) } as unknown as Report;
+    expect(compareReports(bare, bare).reasons).toEqual(['the baseline lacks its schema, scenario, fixture or machine']);
+  });
+
+  it('drops a negative sample from a series rather than counting it as fast', () => {
+    const odd = pairs(2);
+    const first = odd[0];
+    if (first === undefined) throw new Error('fixture');
+    first.opens[0] = { ms: -50, words: 5073 };
+    expect(seriesOf(report(odd))['open.cold']).toEqual([420]);
   });
 
   it('refuses another machine on the model alone and on the chip alone', () => {
@@ -479,14 +514,17 @@ describe('the comparison CLI', () => {
     expect(run(report(pairs(3)), report([...pairs(3), broken]))).toBe(1);
     expect(run(report(pairs(3)), report(pairs(3), { scenario: { id: 'other', fixtureSha256: 'abc' } }))).toBe(2);
     expect(run(report(pairs(3)), { pairs: null })).toBe(2);
+    // A pair whose problems are not a list is not a report: 2, not a crash's 1.
+    const odd = { ...report(pairs(3)), pairs: [{ ...pairs(1)[0], valid: false, problems: null }] };
+    expect(run(report(pairs(3)), odd)).toBe(2);
   });
 });
 
 describe('machine load', () => {
   it('is shown beside the verdict when the recordings carry it', () => {
-    const loaded = pairs(3).map((p, i) => ({ ...p, load: [2 + i, 9] as [number, number] }));
+    const loaded = pairs(3).map((p, i) => ({ ...p, load: [[2, 3, 10][i] ?? 0, 9] as [number, number] }));
     const result = compareReports(report(pairs(3)), report(loaded));
-    // The load at each pair's START, not after it.
+    // The MEDIAN load at each pair's START: not after it (9), not the mean (5).
     expect(result.load).toEqual({ base: null, candidate: 3 });
     expect(formatComparison(result)).toContain('candidate 3');
   });

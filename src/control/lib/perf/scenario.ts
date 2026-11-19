@@ -48,6 +48,7 @@ import { autoScrollLive, session, toggleAutoScroll } from '../../stores/session'
 import { patchSettings, settings } from '../../stores/settings';
 import { emitShortcut } from '../shortcuts';
 import { perfMarkTime } from './probe';
+import { stillTracker } from './stillness';
 
 /** The fixture's title in the benchmark profile's library. */
 export const FIXTURE_TITLE = 'Perf fixture (bench/scripts/huge.md)';
@@ -305,12 +306,17 @@ async function presentAndRoll(ordinal: number, id: string): Promise<void> {
   const startedAt = performance.now();
   button.click();
   const readableAt = await paintedWhen(`present ${ordinal}`, firstLineReadable);
-  // A stage whose opening placement fails reveals its script anyway, after a
-  // 700 ms deadline from the layer's mount. Nothing on screen tells that
-  // reveal from a placed one, so it is not detected here; it cannot hide,
-  // though: it lands well above the 531–550 ms a placed reveal takes on the
-  // baseline Mac (bench/perf/README.md).
-  await report({ kind: 'present', ordinal, ms: readableAt - startedAt, outcome: 'readable' });
+  // A stage that cannot place its script shows it anyway, unplaced, and that
+  // looks the same on screen. The layer says which it was (`data-reveal`), and
+  // only a placed reveal is the first readable line; any other invalidates the
+  // pair rather than passing as a fast or slow Present.
+  const reveal = document.querySelector<HTMLElement>('.script-layer')?.dataset.reveal;
+  await report({
+    kind: 'present',
+    ordinal,
+    ms: readableAt - startedAt,
+    outcome: reveal === 'placed' ? 'readable' : `revealed ${reveal ?? 'without a reason'}`,
+  });
 
   await progress(`take ${ordinal}: roll`);
   toggleAutoScroll();
@@ -396,9 +402,7 @@ function sampleFrames(
     // loop died a second in would leave positive displacement and perfect
     // frame intervals from this loop, and pass. At 130 wpm it moves about
     // 11 px a second, so any still stretch over a second is a stall.
-    let lastOffset = startOffset;
-    let lastMovedAt: number | null = null;
-    let longestStillMs = 0;
+    const still = stillTracker();
     let first: number | null = null;
     let last: number | null = null;
     let finished = false;
@@ -414,7 +418,7 @@ function sampleFrames(
         durationMs: first === null ? 0 : endedAt - first,
         displacementPx: startOffset === null || endOffset === null ? 0 : Math.abs(endOffset - startOffset),
         outcome,
-        longestStillMs: Math.round(longestStillMs),
+        longestStillMs: Math.round(still.longestStillMs),
       });
     };
     const watchdog = setTimeout(() => {
@@ -425,18 +429,12 @@ function sampleFrames(
       if (first === null) first = now;
       else if (last !== null) deltas.push(Math.round((now - last) * 100) / 100);
       last = now;
-      const offset = scrollOffset();
-      if (lastMovedAt === null || offset !== lastOffset) {
-        lastMovedAt = now;
-        lastOffset = offset;
-      } else {
-        longestStillMs = Math.max(longestStillMs, now - lastMovedAt);
-      }
+      still.observe(now, scrollOffset());
       if (now - first < durationMs && !hidden) {
         rafId = requestAnimationFrame(frame);
         return;
       }
-      finish(now, hidden ? 'hidden' : longestStillMs > STILL_LIMIT_MS ? 'stopped moving' : 'ok');
+      finish(now, hidden ? 'hidden' : still.longestStillMs > STILL_LIMIT_MS ? 'stopped moving' : 'ok');
     };
     rafId = requestAnimationFrame(frame);
   });

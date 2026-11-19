@@ -9,6 +9,7 @@
 export declare const REPORT_SCHEMA: number;
 export declare const SCENARIO_ID: string;
 export declare const LONG_FRAME_MS: number;
+export declare const REQUIRED_SERIES: string[];
 
 export interface PerfRecord {
   kind: string;

@@ -28,6 +28,24 @@ export const SCENARIO_ID = 'huge-two-takes-v1';
 /** What the control page prefixes its JSON with in the client trace. */
 const TRACE_LINE = /^\S+ \[perf\] (\{.*\})\s*$/;
 
+/**
+ * The series every baseline must carry. A baseline is the yardstick; one that
+ * measured only part of the scenario would quietly stop gating the rest.
+ */
+export const REQUIRED_SERIES = [
+  ...['cold', 'warm'].flatMap((t) => [
+    `launch.${t}.spawn-to-ready`,
+    `launch.${t}.spawn-to-entry`,
+    `launch.${t}.entry-to-ready`,
+    `open.${t}`,
+    `present.${t}`,
+    `frames.${t}.p95`,
+    `frames.${t}.p99`,
+    `frames.${t}.max`,
+    `frames.${t}.long`,
+  ]),
+];
+
 /** A frame longer than this is counted as long: three missed 60 Hz frames. */
 export const LONG_FRAME_MS = 50;
 
@@ -110,6 +128,8 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt, fixtureSha25
     const found = only(records, 'launch', (r) => r.phase === phase);
     const done = only(records, 'done', (d) => d.phase === phase).length;
     if (done !== 1) problems.push(`${phase}: ${done === 0 ? 'no done record' : `${done} done records`}`);
+    const strays = only(records, 'done', (d) => d.phase !== phase).length;
+    if (strays > 0) problems.push(`${phase}: ${strays} done record(s) for the other process`);
     if (found.length !== 1) {
       problems.push(`${phase}: ${found.length} launch records`);
       return null;
@@ -124,7 +144,7 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt, fixtureSha25
     }
     // The head's first script (public/boot-mark.js) to entry: the control
     // bundle's fetch, parse and evaluation. Absent from older recordings.
-    const parsed = finite(r.headParsedMs) && r.headParsedMs <= r.entryMs ? r.headParsedMs : null;
+    const parsed = finite(r.headParsedMs) && r.headParsedMs >= 0 && r.headParsedMs <= r.entryMs ? r.headParsedMs : null;
     return {
       spawnToReadyMs: round(r.timeOrigin + r.readyMs - spawned),
       bundleEvaluateMs: parsed === null ? null : round(r.entryMs - parsed),
@@ -164,7 +184,7 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt, fixtureSha25
     if (chunks.length !== parts || chunks.some((c, i) => c.part !== i + 1 || c.parts !== parts)) {
       problems.push(`take ${r.ordinal}: frame chunks incomplete (${chunks.length} of ${parts})`);
     }
-    if (chunks.some((c) => !Array.isArray(c.deltas) || !c.deltas.every(finite))) {
+    if (chunks.some((c) => !Array.isArray(c.deltas) || !c.deltas.every((d) => finite(d) && d >= 0))) {
       problems.push(`take ${r.ordinal}: a frame chunk is not a list of intervals`);
     }
     const deltas = chunks.flatMap((c) => (Array.isArray(c.deltas) ? c.deltas.filter(finite) : []));
@@ -236,7 +256,8 @@ function round(ms) {
 export function seriesOf(report) {
   const series = {};
   const push = (name, value) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+    // A duration below zero is not a fast sample, it is a broken one.
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return;
     (series[name] ??= []).push(value);
   };
   for (const pair of report.pairs.filter((p) => p.valid)) {
@@ -329,6 +350,7 @@ export function incompatibilities(base, candidate) {
           typeof p.valid === 'boolean' &&
           p.launches !== null &&
           typeof p.launches === 'object' &&
+          Array.isArray(p.problems) &&
           Array.isArray(p.opens) &&
           Array.isArray(p.presents) &&
           Array.isArray(p.takes),
@@ -337,9 +359,25 @@ export function incompatibilities(base, candidate) {
       reasons.push(`the ${name} is not a perf report`);
       return reasons;
     }
+    // Without these, two reports from anywhere would "match" on undefined.
+    const metadataOk =
+      r.schema === REPORT_SCHEMA &&
+      typeof r.scenario?.id === 'string' &&
+      typeof r.scenario?.fixtureSha256 === 'string' &&
+      typeof r.machine?.model === 'string' &&
+      typeof r.machine?.chip === 'string';
+    if (!metadataOk) {
+      reasons.push(`the ${name} lacks its schema, scenario, fixture or machine`);
+      return reasons;
+    }
   }
   if (!base.pairs.some((p) => p.valid)) reasons.push('the baseline has no valid pairs');
-  else if (Object.keys(seriesOf(base)).length === 0) reasons.push('the baseline has no measurements');
+  else {
+    const have = seriesOf(base);
+    const absent = REQUIRED_SERIES.filter((n) => !(n in have));
+    if (absent.length === REQUIRED_SERIES.length) reasons.push('the baseline has no measurements');
+    else if (absent.length > 0) reasons.push(`the baseline does not measure ${absent.join(', ')}`);
+  }
   if (base.thresholds !== undefined && (base.thresholds === null || typeof base.thresholds !== 'object')) {
     reasons.push("the baseline's thresholds are not an object");
     return reasons;

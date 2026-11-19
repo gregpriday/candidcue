@@ -23,14 +23,14 @@ before it:
 | `launch.cold.*` | spawning the process, on a fresh profile | the first painted frame of Welcome |
 | `launch.warm.*` | spawning it again, over that profile | the first painted frame of the Library, fixture listed |
 | `open.cold` / `open.warm` | double-clicking the fixture's Library row (first / second time in the process) | the first frame that paints the editor with the script loaded, its first compile **succeeded**, the opening panel gone and the text on screen |
-| `present.cold` / `present.warm` | clicking Present (reader mode, roll at pace) | the first frame that paints a word of the script with the cover and the opening plate gone |
+| `present.cold` / `present.warm` | clicking Present (reader mode, roll at pace) | the first frame that paints a word of the script with the cover and the opening plate gone, revealed **placed**: a stage that could not place its script shows it anyway, and says so on `.script-layer[data-reveal]`, and any reveal but `placed` invalidates the pair |
 | `frames.{cold,warm}.{p95,p99,max,long}` | 10 s of rolling at 130 wpm in that take | per take: frame-interval percentiles, the worst frame, and frames over 50 ms |
 
 Launch is split four ways:
 
 - `spawn-to-ready` is the whole wait.
 - `spawn-to-entry` runs up to the first statement of `src/control/main.ts`, so it covers native start plus the control bundle.
-- `bundle-evaluate` runs from `public/boot-mark.js` to entry. That one-line classic script, at the end of `control.html`'s head, runs before the module graph is requested, so this is the bundle's fetch, parse and evaluation. It is a blocking request in every build, and it costs what it measures: it ran 2 ms after navigation start in 33 of the baseline's 40 launches, and 15 ms at most.
+- `bundle-evaluate` runs from `public/boot-mark.js` to entry. That one-line classic script, at the end of `control.html`'s head, runs before the module graph is evaluated, so this is the bundle's parse and evaluation plus whatever of its fetch is left. WebKit's preload scanner can start fetching the entry while the parser waits on the mark, so a slower fetch can partly escape this interval; `spawn-to-entry` still sees it. It is a blocking request in every build, and it costs what it measures: it ran 2 ms after navigation start in 33 of the baseline's 40 launches, and 15 ms at most.
 - `entry-to-ready` is the shell's own boot: settings, the library, the first route.
 
 Every end point is a predicate over what is on screen, polled once per
@@ -44,8 +44,9 @@ the way a person reads the screen (`src/control/lib/perf/scenario.ts`).
 Frame intervals come from an rAF loop beside the stage's own loop. All
 callbacks in a frame share its timestamp, so the loop sees the cadence the
 follower runs at, stalls included. The same loop requires the script to keep
-moving: a still stretch of more than a second means a stalled renderer, and
-the take is invalid even if the frames were perfect. WKWebView has no
+moving: more than a second between two frames that show different scroll
+offsets means a stalled renderer, and the take is invalid even if the frames
+were perfect (`src/control/lib/perf/stillness.ts`). WKWebView has no
 `longtask` entry type (the `env` record lists `supportedEntryTypes`), so rAF
 intervals are the tail measure. WebKit coarsens these timestamps to whole
 milliseconds.
@@ -105,7 +106,8 @@ saved-state entries) by exact name before every pair, and touches nothing else.
 The guards around that:
 
 - It holds a lock for the whole recording: a listening socket on `127.0.0.1:47240`. Binding is atomic and the kernel releases it however the runner dies, so there is never a stale lock to reclaim.
-- It refuses to start while any checkout's `Speaking Glass Perf.app`, or the binary it was given, is running.
+- It refuses to start while any checkout's `Speaking Glass Perf.app`, or the binary it was given, is running, and before every pair it refuses to delete a profile that any process has files open in (`lsof`), whatever that process is called.
+- It never writes over an existing `--out` file. A baseline is replaced by copying a recording over it and committing that.
 - It checks the bundle and its executable before deleting anything.
 
 The benchmark profile is disposable by design: anything made in it by opening
@@ -191,7 +193,7 @@ are unchanged. A 60 ms slower bundle fails `bundle-evaluate`, which
   mode: when the bundle is fast, the page simply started later. That pattern
   fits the eager scripts waiting on a native side that is still starting up,
   rather than parse cost. It is an inference: nothing here times the asset
-  requests themselves. The fast mode bounds the bundle's own fetch, parse and
+  requests themselves, and the preload scanner (above) blurs the line. The fast mode bounds the bundle's own fetch, parse and
   evaluation at roughly 40 ms. This is also why navigation start is a poor
   origin: the page's navigation→entry interval inherits the same two modes,
   so the report keeps it and the comparison does not use it.
@@ -210,8 +212,9 @@ are unchanged. A 60 ms slower bundle fails `bundle-evaluate`, which
 The eager graph `dist/control.html` loads is 1.39 MB of JavaScript (474 kB
 gzipped), and the entry chunk alone is 889 kB (303 kB gzipped). Loading,
 parsing and evaluating all of it fits inside the bundle interval's fast mode:
-**about 40 ms of a ~410 ms launch**. The slow mode's extra ~60 ms is waiting
-on native start, and so is the ~300 ms before the page runs at all. A split
+**about 40 ms of a ~410 ms launch**. The slow mode's extra ~60 ms looks like
+waiting on native start (the inference above), and the ~300 ms before the
+page runs at all certainly is. A split
 could at best save part of those 40 ms, and it would move the cost onto the
 first open or the first Present, which are waits too. Splitting is not worth
 doing on these numbers. If launch ever needs to get faster, the place to look
@@ -226,10 +229,6 @@ lazy boundary.
   `docs/real-rig-test-protocol.md` still covers the rig.
 - **Voice.** No recogniser, no microphone and no alignment. The follow loop's
   costs are cc-bench's business.
-- **A fallback reveal.** If the stage cannot place the script, it reveals
-  it anyway 700 ms after the layer mounts. The scenario cannot tell that
-  reveal from a placed one, but it cannot hide either: it would land well
-  above the 531–550 ms a placed reveal takes here.
 - **The compositor.** WebKit can run a frame's callbacks and still show a
   stale frame. These numbers measure the first frame where the page could
   paint, not photons.

@@ -80,7 +80,7 @@ function args(argv) {
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error(`${key} needs a value`);
+    if (value === undefined || value === '' || value.startsWith('--')) throw new Error(`${key} needs a value`);
     if (key === '--pairs') out.pairs = Number(value);
     else if (key === '--label') out.label = value;
     else if (key === '--app') out.app = value;
@@ -186,7 +186,9 @@ function benchmarkRunning(binary) {
 
 function takeLock() {
   return new Promise((resolveLock, rejectLock) => {
-    const server = createServer();
+    // A connection to the lock is never a conversation: close it at once, so
+    // a stray client cannot hold the runner (and the lock) open after it ends.
+    const server = createServer((socket) => socket.destroy());
     server.once('error', (err) =>
       rejectLock(
         new Error(
@@ -202,6 +204,21 @@ function takeLock() {
       resolveLock();
     });
   });
+}
+
+/**
+ * Is anything holding files in the benchmark profile? Whatever its name or
+ * however it was started — a renamed bundle, one run from its own folder —
+ * a live app has its database open there. Checked before every pair, not
+ * once, so an app opened by hand mid-recording stops the run instead of
+ * having its profile deleted under it.
+ */
+function profileInUse() {
+  const profile = join(LIBRARY, 'Application Support', IDENTIFIER);
+  if (!existsSync(profile)) return false;
+  const probe = spawnSync('lsof', ['-t', '+D', profile], { encoding: 'utf8' });
+  if (probe.error) throw new Error(`could not check the benchmark profile: ${probe.error.message}`);
+  return probe.stdout.trim() !== '';
 }
 
 function clearProfile() {
@@ -251,6 +268,10 @@ async function main() {
   const binary = binaryOf(resolve(ROOT, opts.app));
   await takeLock();
   if (benchmarkRunning(binary)) throw new Error('a benchmark app is already running; quit it first');
+  // Never over an existing file: a recording is evidence, and a baseline is
+  // replaced by copying a recording over it on purpose, not by a reused --out.
+  const out = resolve(ROOT, opts.out);
+  if (existsSync(out)) throw new Error(`${opts.out} exists; record to a new file`);
 
   const fixture = readFileSync(join(ROOT, FIXTURE));
   const report = {
@@ -273,6 +294,7 @@ async function main() {
   };
 
   for (let pair = 1; pair <= opts.pairs; pair++) {
+    if (profileInUse()) throw new Error('something has the benchmark profile open; quit it and run again');
     clearProfile();
     // The machine's 1-minute load either side of the pair. Everything here is
     // wall-clock, and this Mac is shared: a recording made while something
@@ -301,9 +323,10 @@ async function main() {
   }
   clearProfile();
 
-  const out = resolve(ROOT, opts.out);
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, serialiseReport(report));
+  // `wx` as well as the check above: nothing may have appeared there since,
+  // and a symlink at the path is refused rather than followed.
+  writeFileSync(out, serialiseReport(report), { flag: 'wx' });
   process.stdout.write(`\n${opts.out}\n`);
   for (const [name, values] of Object.entries(seriesOf(report))) {
     const s = summarise(values);
