@@ -50,6 +50,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::provenance::{primary_subtag, CaptureRecord, Provenance, Source, WeightCatalogue};
 use crate::suite::{ScoringTable, SuiteResult};
 use crate::tierc::TierCResult;
 
@@ -438,20 +439,66 @@ pub fn metrics_of(result: &SuiteResult) -> BTreeMap<String, f64> {
 /// without a scoring table — saved before it existed, or from a synthetic
 /// corpus — is refused rather than read the old way.
 ///
+/// `language` is the CLAIM — the tag the operator says the results are for —
+/// and the results' recorded provenance has to agree with it: the language
+/// every scoring fixture was captured in, the language the engine compiled the
+/// scripts as, and a recogniser that transcribes it, whose recorded weights
+/// are the bytes `catalogue` lists for that model.
+///
 /// Errors mean the files are not the evidence the gate reads; a report with
 /// corpus problems means they are, but of the wrong corpus.
 pub fn evaluate_saved(
     language: &str,
     tier_b: &SuiteResult,
     tier_c: &TierCResult,
+    catalogue: &WeightCatalogue,
 ) -> anyhow::Result<LanguageGateReport> {
+    // Provenance before anything else, so a file saved before it existed is
+    // reported as what it is — lacking provenance — and not as whatever else
+    // happens to be wrong with it.
+    let lacking = |tier: &str, command: &str| {
+        anyhow::anyhow!(
+            "the {tier} result lacks provenance: it was saved before results \
+             recorded the language, recogniser and build that produced them, so \
+             it cannot say it is evidence for {language}. Re-run `cc-bench \
+             {command} --out FILE` on a corpus captured with `capture-local`"
+        )
+    };
+    let prov_b = tier_b
+        .provenance
+        .as_ref()
+        .ok_or_else(|| lacking("Tier B", "tier-b --runs DIR"))?;
+    let prov_c = tier_c
+        .provenance
+        .as_ref()
+        .ok_or_else(|| lacking("Tier C", "tier-c --runs DIR --layouts 60hz --focus-lead 0"))?;
+    let captured = |tier: &str, p: &'_ Provenance| -> anyhow::Result<()> {
+        match p.source {
+            Source::Captured { .. } => Ok(()),
+            Source::Synthetic => anyhow::bail!(
+                "the {tier} result was replayed from synthetic events, not from a \
+                 recogniser; a language's evidence is a captured corpus (--runs DIR)"
+            ),
+        }
+    };
+    captured("Tier B", prov_b)?;
+    captured("Tier C", prov_c)?;
+
     // The bar's Tier C numbers were measured on the as-shipped rig, and the
     // evidence has to be that rig alone: a sweep is a different run, made for
-    // a different question, even though its headline rows are 60 Hz.
-    //
-    // This catches the wrong LAYOUT set. It cannot catch a 60 Hz run made with
-    // a non-zero `focus_lead_atoms`, because `Layout` is not serialised into
-    // the result — see bench/README.md, "Known gaps".
+    // a different question, even though its headline rows are 60 Hz. The
+    // recorded layout is compared field for field, because a 60 Hz run made
+    // with a non-zero `focus_lead_atoms` has the same NAME and scores a
+    // reading corridor the product does not have.
+    let shipped = crate::tierc::shipped_headline_layout();
+    if prov_c.layouts != [shipped.clone()] {
+        anyhow::bail!(
+            "Tier C evidence must be rendered at the as-shipped rig alone \
+             (--layouts 60hz --focus-lead 0, i.e. {shipped:?}); this result \
+             was rendered at {:?}",
+            prov_c.layouts
+        );
+    }
     let mut layouts: std::collections::BTreeSet<&str> =
         tier_c.by_layout.keys().map(|l| l.as_str()).collect();
     layouts.extend(tier_c.runs.iter().map(|r| r.layout.as_str()));
@@ -544,8 +591,7 @@ pub fn evaluate_saved(
 
     // Nor may they come from two engine configurations: a verdict whose Tier B
     // half was replayed under one config and its Tier C half under another is
-    // not a measurement of anything that exists. (Which recogniser produced
-    // the events is not recorded in either result; see #227.)
+    // not a measurement of anything that exists.
     if serde_json::to_value(&tier_b.config).ok() != serde_json::to_value(&tier_c.config).ok() {
         report.corpus_problems.push(
             "Tier B and Tier C were replayed under different alignment configs, \
@@ -553,7 +599,157 @@ pub fn evaluate_saved(
                 .to_string(),
         );
     }
+
+    let scoring = [("Tier B", prov_b, &b.runs), ("Tier C", prov_c, &c.runs)];
+    report
+        .corpus_problems
+        .extend(provenance_problems(language, &scoring, catalogue));
     Ok(report)
+}
+
+/// Every way the recorded conditions disagree with the claim or each other.
+///
+/// Only the scoring fixtures are held to the claim: diagnostics may sit in a
+/// corpus captured some other way, exactly as they may differ between the two
+/// tiers' directories.
+fn provenance_problems(
+    language: &str,
+    tiers: &[(&str, &Provenance, &Vec<String>)],
+    catalogue: &WeightCatalogue,
+) -> Vec<String> {
+    let claim = primary_subtag(language);
+    let mut problems: Vec<String> = Vec::new();
+    let mut note = |p: String| {
+        if !problems.contains(&p) {
+            problems.push(p);
+        }
+    };
+    if claim.is_empty() {
+        note("no language was claimed (--label is empty)".to_string());
+    }
+
+    for (tier, prov, _) in tiers {
+        if prov.revision.commit.is_none() {
+            note(format!(
+                "{tier} was replayed by a cc-bench build with no recorded revision, \
+                 so nobody can say which code produced it"
+            ));
+        }
+        if prov.alignment_language != claim {
+            note(format!(
+                "{tier} compiled its scripts as {}, not {claim}",
+                prov.alignment_language
+            ));
+        }
+    }
+    let (_, first, _) = tiers[0];
+    for (tier, prov, _) in &tiers[1..] {
+        if prov.revision != first.revision {
+            note(format!(
+                "Tier B and {tier} were replayed by different cc-bench builds ({} and {})",
+                first.revision.describe(),
+                prov.revision.describe()
+            ));
+        }
+        if prov.app_tokens != first.app_tokens {
+            note(format!(
+                "Tier B and {tier} compiled scripts differently (CC_BENCH_APP_TOKENS)"
+            ));
+        }
+    }
+
+    // One record per scoring fixture per tier, the same record in both.
+    let mut seen: BTreeMap<&str, (&str, &CaptureRecord)> = BTreeMap::new();
+    for (tier, prov, runs) in tiers {
+        let Source::Captured { runs: records } = &prov.source else {
+            continue;
+        };
+        let mut conditions: Option<(&str, CaptureRecord)> = None;
+        for run in runs.iter() {
+            let record = match records.get(run) {
+                Some(Some(record)) => record,
+                Some(None) => {
+                    note(format!(
+                        "{tier}: {run} has no capture record (captured before \
+                         capture.json existed), so nothing says what heard it; \
+                         re-capture the corpus"
+                    ));
+                    continue;
+                }
+                None => {
+                    note(format!(
+                        "{tier}: the result's provenance does not cover {run}, \
+                         which it scored"
+                    ));
+                    continue;
+                }
+            };
+            if let Some((other_tier, other)) = seen.get(run.as_str()) {
+                if *other != record {
+                    note(format!(
+                        "{other_tier} and {tier} scored different captures of {run}"
+                    ));
+                }
+            } else {
+                seen.insert(run, (tier, record));
+            }
+            match &conditions {
+                None => conditions = Some((run, record.conditions())),
+                Some((first_run, c)) if *c != record.conditions() => note(format!(
+                    "{tier}: {first_run} and {run} were captured under different \
+                     conditions (language, model, weights, recogniser settings, \
+                     pace or build), so the corpus is not one measurement"
+                )),
+                Some(_) => {}
+            }
+            check_record(&claim, record, catalogue, &mut note);
+        }
+    }
+    problems
+}
+
+/// One capture record against the claim and the catalogue.
+fn check_record(
+    claim: &str,
+    record: &CaptureRecord,
+    catalogue: &WeightCatalogue,
+    note: &mut impl FnMut(String),
+) {
+    if primary_subtag(&record.language) != claim {
+        note(format!(
+            "the corpus was captured as {}, not {claim}",
+            record.language
+        ));
+    }
+    match cc_stt::model_by_id(&record.model) {
+        None => note(format!(
+            "the corpus was captured with {}, which this build does not ship",
+            record.model
+        )),
+        Some(model) if !model.serves_language(claim) => note(format!(
+            "{} does not transcribe {claim} (it serves {:?})",
+            model.id, model.languages
+        )),
+        Some(_) => {}
+    }
+    if let Some(why) = catalogue.mismatch(&record.model, &record.weights) {
+        note(format!(
+            "the recogniser that captured the corpus was not {}'s weights: {why}",
+            record.model
+        ));
+    }
+    if record.pace != 1.0 {
+        note(format!(
+            "the corpus was captured at {}x pace; the bar was measured in real time",
+            record.pace
+        ));
+    }
+    if record.revision.commit.is_none() {
+        note(
+            "the corpus was captured by a cc-bench build with no recorded revision"
+                .to_string(),
+        );
+    }
 }
 
 /// `Some(description)` when a scoring list names a fixture more than once.
@@ -1059,6 +1255,72 @@ mod tests {
         }
     }
 
+    const WEIGHTS_SHA: &str = "00ff";
+
+    /// A catalogue in which the shipped model's one file is `WEIGHTS_SHA`.
+    fn catalogue() -> WeightCatalogue {
+        let mut catalogue = WeightCatalogue::default();
+        catalogue.models.insert(
+            cc_stt::default_model().id.to_string(),
+            [("tokens.txt".to_string(), WEIGHTS_SHA.to_string())]
+                .into_iter()
+                .collect(),
+        );
+        catalogue
+    }
+
+    fn revision() -> crate::provenance::Revision {
+        crate::provenance::Revision {
+            commit: Some("0123456789abcdef".into()),
+            dirty: false,
+        }
+    }
+
+    /// What `capture-local` records for an English run of the shipped model.
+    fn capture_record(run: &str) -> CaptureRecord {
+        let model = cc_stt::default_model();
+        CaptureRecord {
+            run: run.to_string(),
+            language: "en-US".into(),
+            model: model.id.into(),
+            weights: vec![crate::provenance::WeightFile {
+                name: "tokens.txt".into(),
+                bytes: 1,
+                sha256: WEIGHTS_SHA.into(),
+            }],
+            recogniser: cc_stt::LocalSttConfig::for_model(model, format!("/models/{run}")),
+            pace: 1.0,
+            revision: revision(),
+            fixture_sha256: format!("digest of {run}"),
+        }
+    }
+
+    fn provenance(source: Source, layouts: Vec<crate::stage::Layout>) -> Provenance {
+        Provenance {
+            revision: revision(),
+            alignment_language: "en".into(),
+            app_tokens: false,
+            source,
+            layouts,
+        }
+    }
+
+    /// Every scoring run's record in both tiers, changed the same way.
+    fn edit_records(
+        b: &mut SuiteResult,
+        c: &mut TierCResult,
+        edit: impl Fn(&str, &mut CaptureRecord),
+    ) {
+        for prov in [b.provenance.as_mut().unwrap(), c.provenance.as_mut().unwrap()] {
+            let Source::Captured { runs } = &mut prov.source else {
+                unreachable!()
+            };
+            for (run, record) in runs.iter_mut() {
+                edit(run, record.as_mut().unwrap());
+            }
+        }
+    }
+
     /// Saved results as captured Tier B and Tier C write them: ordinary tables
     /// over every fixture, scoring tables over the core alone.
     fn saved(
@@ -1085,6 +1347,12 @@ mod tests {
                 .collect()
         };
         let core: Vec<String> = corpus.iter().filter(|r| is_scoring_run(r)).cloned().collect();
+        let source = Source::Captured {
+            runs: corpus
+                .iter()
+                .map(|r| (r.clone(), Some(capture_record(r))))
+                .collect(),
+        };
         let tier_b = SuiteResult {
             label: "t".into(),
             config: cc_align::AlignmentConfig::default(),
@@ -1100,6 +1368,7 @@ mod tests {
                 runs: core.clone(),
                 table: rows(Tier::B, scoring),
             }),
+            provenance: Some(provenance(source.clone(), Vec::new())),
         };
         let tier_c = TierCResult {
             label: "t".into(),
@@ -1118,6 +1387,10 @@ mod tests {
                 runs: core,
                 table: rows(Tier::C, scoring),
             }),
+            provenance: Some(provenance(
+                source,
+                vec![crate::tierc::shipped_headline_layout()],
+            )),
         };
         (tier_b, tier_c)
     }
@@ -1132,12 +1405,12 @@ mod tests {
         bad.insert("live.within5".into(), 80.0);
 
         let (b, c) = saved(&english_corpus(), &good, &bad);
-        let report = evaluate_saved("en", &b, &c).unwrap();
+        let report = evaluate_saved("en", &b, &c, &catalogue()).unwrap();
         let failed: Vec<&str> = report.failures().map(|r| r.threshold.metric).collect();
         assert_eq!(failed, vec!["live.within5", "gate.unread_never_spoken"]);
 
         let (b, c) = saved(&english_corpus(), &bad, &good);
-        assert!(evaluate_saved("en", &b, &c).unwrap().passed());
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
     }
 
     /// A file saved before scoring tables existed holds only the diluted
@@ -1147,12 +1420,12 @@ mod tests {
         let m = english_baseline_metrics();
         let (mut b, c) = saved(&english_corpus(), &m, &m);
         b.scoring = None;
-        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
         assert!(err.contains("Tier B") && err.contains("tier-b"), "{err}");
 
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.scoring = None;
-        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
         assert!(err.contains("Tier C") && err.contains("tier-c"), "{err}");
     }
 
@@ -1161,7 +1434,7 @@ mod tests {
         let m = english_baseline_metrics();
 
         let refused_by = |b: &SuiteResult, c: &TierCResult| -> String {
-            evaluate_saved("en", b, c).unwrap_err().to_string()
+            evaluate_saved("en", b, c, &catalogue()).unwrap_err().to_string()
         };
 
         // A diagnostic counted into the scoring set.
@@ -1194,7 +1467,7 @@ mod tests {
         let mut doubled = english_corpus();
         doubled.push("refrain__exact__gemini".into());
         let (_, c) = saved(&doubled, &m, &m);
-        let report = evaluate_saved("en", &b, &c).unwrap();
+        let report = evaluate_saved("en", &b, &c, &catalogue()).unwrap();
         assert!(!report.passed());
         assert!(
             report.corpus_problems.iter().any(|p| p.starts_with("Tier C") && p.contains("distinct")),
@@ -1208,7 +1481,7 @@ mod tests {
         let m = english_baseline_metrics();
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.config.lead_margin_atoms += 1.0;
-        let report = evaluate_saved("en", &b, &c).unwrap();
+        let report = evaluate_saved("en", &b, &c, &catalogue()).unwrap();
         assert!(!report.passed());
         assert!(report.corpus_problems.iter().any(|p| p.contains("config")));
     }
@@ -1227,7 +1500,7 @@ mod tests {
         other[swapped] = "starter__exact__qwen".into();
         let (_, c) = saved(&other, &m, &m);
 
-        let report = evaluate_saved("en", &b, &c).unwrap();
+        let report = evaluate_saved("en", &b, &c, &catalogue()).unwrap();
         assert!(!report.passed());
         let problem = report.corpus_problems.join("\n");
         assert!(
@@ -1241,7 +1514,7 @@ mod tests {
             .filter(|r| is_scoring_run(r))
             .collect();
         let (_, c) = saved(&core_only, &m, &m);
-        assert!(evaluate_saved("en", &b, &c).unwrap().passed());
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
     }
 
     #[test]
@@ -1261,7 +1534,7 @@ mod tests {
         let m = english_baseline_metrics();
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.by_layout.insert("30hz".into(), Vec::new());
-        assert!(evaluate_saved("en", &b, &c).is_err(), "an extra layout");
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err(), "an extra layout");
 
         // One layout, but the wrong one.
         let (b, mut c) = saved(&english_corpus(), &m, &m);
@@ -1269,14 +1542,191 @@ mod tests {
         for r in &mut c.runs {
             r.layout = "30hz".into();
         }
-        assert!(evaluate_saved("en", &b, &c).is_err(), "a lone 30hz rig");
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err(), "a lone 30hz rig");
 
         // A sweep with its other layouts trimmed from the summary only.
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         let mut extra = c.runs[0].clone();
         extra.layout = "120hz".into();
         c.runs.push(extra);
-        assert!(evaluate_saved("en", &b, &c).is_err(), "runs at another layout");
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err(), "runs at another layout");
+    }
+
+    /// The hole the layout NAME left: a 60 Hz run with the harness's reading
+    /// corridor switched on is called `60hz` too, and moves a gated row.
+    #[test]
+    fn tier_c_must_be_rendered_without_focus_lead() {
+        let m = english_baseline_metrics();
+        let (b, c) = saved(&english_corpus(), &m, &m);
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
+
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance.as_mut().unwrap().layouts[0].focus_lead_atoms = 3.0;
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
+        assert!(err.contains("focus-lead 0"), "{err}");
+
+        // Lead 0, but some other geometry under the same name.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance.as_mut().unwrap().layouts[0].atoms_per_line = 4.0;
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err());
+
+        // A sweep: the right layout and others beside it.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance.as_mut().unwrap().layouts.push(crate::tierc::layouts_for(None)[0].clone());
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).is_err());
+    }
+
+    /// The defect in the issue: English results labelled `fr` passed as French.
+    #[test]
+    fn english_evidence_is_not_evidence_for_another_language() {
+        let m = english_baseline_metrics();
+        let (b, c) = saved(&english_corpus(), &m, &m);
+        let report = evaluate_saved("fr", &b, &c, &catalogue()).unwrap();
+        assert!(!report.passed());
+        let problems = report.corpus_problems.join("\n");
+        assert!(problems.contains("captured as en-US, not fr"), "{problems}");
+        assert!(problems.contains("compiled its scripts as en, not fr"), "{problems}");
+        assert!(problems.contains("does not transcribe fr"), "{problems}");
+
+        // A region is not a different language.
+        assert!(evaluate_saved("en-GB", &b, &c, &catalogue()).unwrap().passed());
+        assert!(evaluate_saved("EN", &b, &c, &catalogue()).unwrap().passed());
+    }
+
+    /// A corpus declared as a language the model serves is still refused when
+    /// the engine compiled the scripts as something else.
+    #[test]
+    fn a_served_language_the_engine_did_not_compile_is_refused() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |_, r| r.language = "zh".into());
+        let report = evaluate_saved("zh", &b, &c, &catalogue()).unwrap();
+        let problems = report.corpus_problems.join("\n");
+        assert!(problems.contains("compiled its scripts as en, not zh"), "{problems}");
+        assert!(!problems.contains("captured as"), "{problems}");
+    }
+
+    #[test]
+    fn results_saved_before_provenance_load_and_are_refused_as_lacking_it() {
+        let m = english_baseline_metrics();
+        let (b, c) = saved(&english_corpus(), &m, &m);
+        // What a pre-provenance file looks like: the same JSON, no key.
+        let strip = |v: serde_json::Value| {
+            let mut v = v;
+            v.as_object_mut().unwrap().remove("provenance").unwrap();
+            serde_json::to_string(&v).unwrap()
+        };
+        let old_b: SuiteResult =
+            serde_json::from_str(&strip(serde_json::to_value(&b).unwrap())).unwrap();
+        let old_c: TierCResult =
+            serde_json::from_str(&strip(serde_json::to_value(&c).unwrap())).unwrap();
+        assert!(old_b.provenance.is_none() && old_c.provenance.is_none());
+
+        let err = evaluate_saved("en", &old_b, &c, &catalogue()).unwrap_err().to_string();
+        assert!(err.contains("Tier B result lacks provenance"), "{err}");
+        let err = evaluate_saved("en", &b, &old_c, &catalogue()).unwrap_err().to_string();
+        assert!(err.contains("Tier C result lacks provenance"), "{err}");
+    }
+
+    #[test]
+    fn synthetic_evidence_is_refused() {
+        let m = english_baseline_metrics();
+        let (mut b, c) = saved(&english_corpus(), &m, &m);
+        b.provenance.as_mut().unwrap().source = Source::Synthetic;
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
+        assert!(err.contains("synthetic"), "{err}");
+    }
+
+    #[test]
+    fn a_scoring_run_without_a_capture_record_is_refused() {
+        let m = english_baseline_metrics();
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        let Source::Captured { runs } = &mut c.provenance.as_mut().unwrap().source else {
+            unreachable!()
+        };
+        *runs.get_mut("starter__exact__gemini").unwrap() = None;
+        let report = evaluate_saved("en", &b, &c, &catalogue()).unwrap();
+        let problems = report.corpus_problems.join("\n");
+        assert!(
+            problems.contains("Tier C: starter__exact__gemini has no capture record"),
+            "{problems}"
+        );
+
+        // A diagnostic without one is not the claim's business.
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        let Source::Captured { runs } = &mut c.provenance.as_mut().unwrap().source else {
+            unreachable!()
+        };
+        *runs.get_mut("fuzzy-follow__fuzzy_voice__xai").unwrap() = None;
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
+    }
+
+    #[test]
+    fn the_recorded_weights_must_be_the_catalogued_model() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |_, r| r.weights[0].sha256 = "beef".into());
+        let report = evaluate_saved("en", &b, &c, &catalogue()).unwrap();
+        assert!(
+            report.corpus_problems.iter().any(|p| p.contains("digest differs")),
+            "{:?}",
+            report.corpus_problems
+        );
+
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |_, r| r.model = "some-other-model".into());
+        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
+        assert!(problems.contains("does not ship"), "{problems}");
+    }
+
+    /// One fixture captured another way is enough to make the corpus two
+    /// measurements; the machine-local model path is not such a difference.
+    #[test]
+    fn a_corpus_captured_under_mixed_conditions_is_refused() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |run, r| {
+            if run == "names__exact__xai" {
+                r.recogniser.blank_penalty = 0.0;
+            }
+        });
+        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
+        assert!(problems.contains("names__exact__xai") && problems.contains("different conditions"), "{problems}");
+
+        // The helper already gives every run a different model_dir.
+        let (b, c) = saved(&english_corpus(), &m, &m);
+        assert!(evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
+    }
+
+    #[test]
+    fn both_tiers_must_score_the_same_capture_from_the_same_build() {
+        let m = english_baseline_metrics();
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        let Source::Captured { runs } = &mut c.provenance.as_mut().unwrap().source else {
+            unreachable!()
+        };
+        runs.get_mut("refrain__exact__gemini").unwrap().as_mut().unwrap().fixture_sha256 =
+            "another capture".into();
+        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
+        assert!(problems.contains("different captures of refrain__exact__gemini"), "{problems}");
+
+        let (b, mut c) = saved(&english_corpus(), &m, &m);
+        c.provenance.as_mut().unwrap().revision.commit = Some("fedcba".into());
+        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
+        assert!(problems.contains("different cc-bench builds"), "{problems}");
+
+        let (mut b, c) = saved(&english_corpus(), &m, &m);
+        b.provenance.as_mut().unwrap().revision.commit = None;
+        let problems = evaluate_saved("en", &b, &c, &catalogue()).unwrap().corpus_problems.join("\n");
+        assert!(problems.contains("no recorded revision"), "{problems}");
+    }
+
+    #[test]
+    fn a_corpus_not_captured_in_real_time_is_refused() {
+        let m = english_baseline_metrics();
+        let (mut b, mut c) = saved(&english_corpus(), &m, &m);
+        edit_records(&mut b, &mut c, |_, r| r.pace = 4.0);
+        assert!(!evaluate_saved("en", &b, &c, &catalogue()).unwrap().passed());
     }
 
     /// A row is judged only from the tier its threshold names, and only once.
@@ -1289,13 +1739,13 @@ mod tests {
         let (mut b, mut c) = saved(&english_corpus(), &m, &m);
         let moved = std::mem::take(&mut c.scoring.as_mut().unwrap().table);
         b.scoring.as_mut().unwrap().table.extend(moved);
-        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
         assert!(err.contains("Tier B scoring table carries gate."), "{err}");
 
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         let again = c.scoring.as_ref().unwrap().table[0].clone();
         c.scoring.as_mut().unwrap().table.push(again);
-        let err = evaluate_saved("en", &b, &c).unwrap_err().to_string();
+        let err = evaluate_saved("en", &b, &c, &catalogue()).unwrap_err().to_string();
         assert!(err.contains("twice"), "{err}");
     }
 

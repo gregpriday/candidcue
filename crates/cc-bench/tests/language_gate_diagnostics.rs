@@ -21,6 +21,7 @@ use cc_align::AlignmentConfig;
 use cc_bench::capture_local::write_events_jsonl;
 use cc_bench::language_gate::{evaluate_saved, is_scoring_run, LanguageGateReport, SHIP_BAR};
 use cc_bench::plan::{expand, synthetic_timing};
+use cc_bench::provenance::{seal_capture, CaptureConditions, WeightCatalogue, WeightFile, CAPTURE_FILE};
 use cc_bench::scenarios::{build_suite, tier_b_selection};
 use cc_bench::suite::{run_tier_b, RunManifest, SuiteResult};
 use cc_bench::synthetic::generate_events;
@@ -90,7 +91,58 @@ fn write_corpus(dir: &Path, include: impl Fn(&str) -> bool) {
         let spoken: Vec<&str> = performance.words.iter().map(|w| w.text.as_str()).collect();
         std::fs::write(run_dir.join("performance.txt"), spoken.join(" ")).unwrap();
         write_events_jsonl(&run_dir.join("events.jsonl"), &events).unwrap();
+        // What `capture-local` writes last, after every fixture file.
+        seal_capture(&run_dir, &conditions()).unwrap();
     }
+}
+
+const WEIGHTS_SHA: &str = "00ff";
+
+/// The conditions an English capture of the shipped model records — with a
+/// stand-in for its weights, which this machine need not have.
+fn conditions() -> CaptureConditions {
+    let model = cc_stt::default_model();
+    CaptureConditions {
+        language: "en-US".into(),
+        model: model.id.into(),
+        weights: vec![WeightFile {
+            name: "tokens.txt".into(),
+            bytes: 1,
+            sha256: WEIGHTS_SHA.into(),
+        }],
+        recogniser: cc_stt::LocalSttConfig::for_model(model, "/models/x-asr-480ms"),
+        pace: 1.0,
+    }
+}
+
+/// A catalogue in which those stand-in weights are the shipped model's.
+fn catalogue() -> WeightCatalogue {
+    let mut catalogue = WeightCatalogue::default();
+    catalogue.models.insert(
+        cc_stt::default_model().id.to_string(),
+        [("tokens.txt".to_string(), WEIGHTS_SHA.to_string())].into_iter().collect(),
+    );
+    catalogue
+}
+
+fn as_shipped() -> Vec<cc_bench::stage::Layout> {
+    let mut layouts = layouts_for(Some(&["60hz".to_string()]));
+    for layout in &mut layouts {
+        layout.focus_lead_atoms = 0.0;
+    }
+    layouts
+}
+
+/// Both tiers over a directory, through JSON as `--out` writes them.
+fn replay(runs: &Path, layouts: &[cc_bench::stage::Layout]) -> (SuiteResult, TierCResult) {
+    let config = AlignmentConfig::default();
+    let tier_b = run_tier_b(runs, &scripts_dir(), &config, "t").expect("tier-b");
+    let tier_c =
+        run_tier_c_captured(runs, &scripts_dir(), &config, "t", layouts).expect("tier-c");
+    (
+        serde_json::from_str(&serde_json::to_string(&tier_b).unwrap()).unwrap(),
+        serde_json::from_str(&serde_json::to_string(&tier_c).unwrap()).unwrap(),
+    )
 }
 
 struct Measured {
@@ -101,21 +153,9 @@ struct Measured {
 
 /// Tier B, Tier C at the as-shipped rig, a JSON round trip, then the gate.
 fn measure(runs: &Path) -> Measured {
-    let config = AlignmentConfig::default();
-    let tier_b = run_tier_b(runs, &scripts_dir(), &config, "t").expect("tier-b");
-    let mut layouts = layouts_for(Some(&["60hz".to_string()]));
-    for layout in &mut layouts {
-        layout.focus_lead_atoms = 0.0;
-    }
-    let tier_c =
-        run_tier_c_captured(runs, &scripts_dir(), &config, "t", &layouts).expect("tier-c");
-
     // The gate reads saved files, so read what a saved file would carry.
-    let tier_b: SuiteResult =
-        serde_json::from_str(&serde_json::to_string(&tier_b).unwrap()).unwrap();
-    let tier_c: TierCResult =
-        serde_json::from_str(&serde_json::to_string(&tier_c).unwrap()).unwrap();
-    let report = evaluate_saved("en", &tier_b, &tier_c).expect("valid evidence");
+    let (tier_b, tier_c) = replay(runs, &as_shipped());
+    let report = evaluate_saved("en", &tier_b, &tier_c, &catalogue()).expect("valid evidence");
     Measured {
         tier_b,
         tier_c,
@@ -226,6 +266,77 @@ fn gate_values_and_verdict_are_invariant_to_diagnostics() {
 
     // Pairing the two directories is the same corpus: diagnostics may differ
     // between the tiers' inputs, the scoring fixtures may not.
-    let mixed = evaluate_saved("en", &core.tier_b, &with.tier_c).expect("valid evidence");
+    let mixed =
+        evaluate_saved("en", &core.tier_b, &with.tier_c, &catalogue()).expect("valid evidence");
     assert!(mixed.corpus_problems.is_empty(), "{}", mixed.render());
+}
+
+/// The real path, end to end: what a capture records reaches both saved
+/// results, and the gate holds the claim, the layout and every scoring
+/// fixture's record to it.
+#[test]
+fn saved_results_carry_their_provenance_to_the_gate() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = root.path().join("runs");
+    write_corpus(&runs, is_scoring_run);
+
+    let (tier_b, tier_c) = replay(&runs, &as_shipped());
+    for prov in [tier_b.provenance.as_ref(), tier_c.provenance.as_ref()] {
+        let prov = prov.expect("a captured tier records provenance");
+        assert_eq!(prov.alignment_language, "en");
+        let cc_bench::provenance::Source::Captured { runs: records } = &prov.source else {
+            panic!("captured tiers record a captured source");
+        };
+        assert_eq!(records.len(), 18);
+        for (run, record) in records {
+            let record = record.as_ref().unwrap_or_else(|| panic!("{run} has no record"));
+            assert_eq!(&record.run, run);
+            assert_eq!(record.language, "en-US");
+            assert_eq!(
+                record.recogniser.blank_penalty,
+                cc_stt::default_model().tuning.blank_penalty
+            );
+        }
+    }
+    assert_eq!(tier_c.provenance.as_ref().unwrap().layouts, as_shipped());
+
+    // English evidence, claimed as French.
+    let report = evaluate_saved("fr", &tier_b, &tier_c, &catalogue()).expect("valid evidence");
+    assert!(!report.passed());
+    assert!(
+        report.corpus_problems.iter().any(|p| p.contains("captured as en-US, not fr")),
+        "{}",
+        report.render()
+    );
+
+    // The 60 Hz preset as the sweep has it: same name, focus lead 3.
+    let (_, swept) = replay(&runs, &layouts_for(Some(&["60hz".to_string()])));
+    let err = evaluate_saved("en", &tier_b, &swept, &catalogue()).unwrap_err().to_string();
+    assert!(err.contains("focus-lead 0"), "{err}");
+
+    // A run whose record is missing — an interrupted capture, or one made
+    // before records existed — leaves the corpus without provenance for it.
+    std::fs::remove_file(runs.join("names__exact__xai").join(CAPTURE_FILE)).unwrap();
+    let (tier_b, tier_c) = replay(&runs, &as_shipped());
+    let report = evaluate_saved("en", &tier_b, &tier_c, &catalogue()).expect("valid evidence");
+    assert!(
+        report
+            .corpus_problems
+            .iter()
+            .any(|p| p.contains("names__exact__xai has no capture record")),
+        "{}",
+        report.render()
+    );
+
+    // A record copied from another run is not missing provenance but wrong
+    // provenance, and the tier refuses to replay it at all.
+    std::fs::copy(
+        runs.join("starter__exact__gemini").join(CAPTURE_FILE),
+        runs.join("names__exact__xai").join(CAPTURE_FILE),
+    )
+    .unwrap();
+    let err = run_tier_b(&runs, &scripts_dir(), &AlignmentConfig::default(), "t")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("copied here"), "{err}");
 }

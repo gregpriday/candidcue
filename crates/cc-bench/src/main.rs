@@ -3,7 +3,7 @@
 //! ```text
 //! cc-bench tier-a  --label L [--config cfg.json] [--out results.json]
 //! cc-bench synth-audio [--runs DIR]              # fal.ai TTS → fixture audio
-//! cc-bench capture-local --model DIR --runs DIR [--pace 1.0]
+//! cc-bench capture-local --model DIR --runs DIR [--pace 1.0] [--language TAG]
 //! cc-bench vocab [SCRIPT ...]                   # show extracted bias terms
 //! cc-bench tier-b  --label L [--config C] [--out F]
 //! cc-bench compare baseline.json candidate.json
@@ -20,6 +20,9 @@ use cc_bench::suite::{
 };
 use cc_bench::tierc::TierCResult;
 use cc_bench::tts::{shared_rendered_dir, synthesize, wav_bytes, Synthesizer};
+
+/// The model catalogue, relative to the repository root.
+const MODEL_CATALOGUE: &str = "src-tauri/models/catalogue.json";
 
 /// Scripts `vocab` reports on when none are named: the three written to
 /// exercise term extraction — proper names, brand spellings, and figures.
@@ -113,6 +116,9 @@ struct Flags {
     blank_penalty: Option<f32>,
     /// `capture-local`: `greedy_search` | `modified_beam_search`.
     decoding: Option<String>,
+    /// `capture-local`: the BCP-47 tag the corpus is spoken in, recorded in
+    /// every run's `capture.json`. `None` means the model's default language.
+    language: Option<String>,
     /// `tier-c`: which rendered layouts to score. None means the whole sweep.
     layouts: Option<Vec<String>>,
     /// `robustness`: perturbations to evaluate per scenario.
@@ -143,6 +149,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         prime_ms: None,
         blank_penalty: None,
         decoding: None,
+        language: None,
         layouts: None,
         budget: 240,
         focus_lead: None,
@@ -168,6 +175,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--prime-ms" => flags.prime_ms = Some(take()?.parse()?),
             "--blank-penalty" => flags.blank_penalty = Some(take()?.parse()?),
             "--decoding" => flags.decoding = Some(take()?),
+            "--language" => flags.language = Some(take()?),
             "--budget" => flags.budget = take()?.parse()?,
             "--focus-lead" => flags.focus_lead = Some(take()?.parse()?),
             "--verbose" => flags.verbose = true,
@@ -640,12 +648,14 @@ fn main() -> anyhow::Result<()> {
                 .runs
                 .ok_or_else(|| anyhow::anyhow!("--runs <dir> required (do not overwrite bench/runs)"))?;
             capture_all_local(
+                &root,
                 &out_runs,
                 &model_dir,
                 flags.pace,
                 flags.prime_ms,
                 flags.blank_penalty,
                 flags.decoding.clone(),
+                flags.language.clone(),
             )?;
         }
         Some("vocab") => {
@@ -1078,7 +1088,12 @@ fn main() -> anyhow::Result<()> {
 
             // Reads each tier's scoring table — the gate's rows aggregated
             // over the core fixtures alone — and refuses a result without one.
-            let report = language_gate::evaluate_saved(&language, &tier_b, &tier_c)?;
+            // The weights a capture recorded are checked against the same
+            // catalogue the app's downloader verifies an install against.
+            let catalogue = cc_bench::provenance::WeightCatalogue::from_json(
+                &std::fs::read_to_string(root.join(MODEL_CATALOGUE))?,
+            )?;
+            let report = language_gate::evaluate_saved(&language, &tier_b, &tier_c, &catalogue)?;
             print!("{}", report.render());
             if !report.passed() {
                 anyhow::bail!(
@@ -1089,7 +1104,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => {
             eprintln!(
-                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio [--runs DIR]\n       cc-bench capture-local --model DIR --runs DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
+                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio [--runs DIR]\n       cc-bench capture-local --model DIR --runs DIR [--pace P] [--language TAG]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
             );
         }
     }
@@ -1174,12 +1189,14 @@ async fn synth_audio(
 /// ~200 ms and belongs nowhere near the start of a take.
 #[allow(clippy::too_many_arguments)]
 fn capture_all_local(
+    root: &std::path::Path,
     runs_dir: &std::path::Path,
     model_dir: &std::path::Path,
     pace: f64,
     prime_ms: Option<u32>,
     blank_penalty: Option<f32>,
     decoding: Option<String>,
+    language: Option<String>,
 ) -> anyhow::Result<()> {
     // The profile's tuning first, overrides on top. A capture that started
     // from anything else would be measuring a recogniser the app does not
@@ -1190,8 +1207,29 @@ fn capture_all_local(
     // tuning it is rather than claiming the weights are that model's. Pointing
     // this at another bundle gives it x-asr's `blank_penalty`, which is a
     // reasonable thing to want when sweeping and a corpus-poisoning mistake
-    // when not noticed. Naming the profile is what makes it noticeable.
+    // when not noticed. Naming the profile is what makes it noticeable, and
+    // every run's `capture.json` records the digests of the weights actually
+    // loaded, which `gate-language` checks against the catalogue.
     let model = cc_stt::default_model();
+    // The language is a statement about the AUDIO — sherpa has no language
+    // switch — so it is checked against both things that have to agree with
+    // it: the model must transcribe it, and the alignment engine must have a
+    // profile for it. Today that second check means English, because the
+    // replay compiles every script under the default profile.
+    let language = language.unwrap_or_else(|| model.default_language.to_string());
+    anyhow::ensure!(
+        model.serves_language(&language),
+        "{} does not transcribe {language} (it serves {:?})",
+        model.id,
+        model.languages
+    );
+    let compiled = cc_align::CompileOptions::default().language;
+    anyhow::ensure!(
+        cc_bench::provenance::primary_subtag(&language) == compiled.primary_subtag(),
+        "the benchmark compiles scripts as {}, so a {language} corpus would be scored \
+         against the wrong language",
+        compiled.primary_subtag()
+    );
     let mut config = cc_stt::LocalSttConfig::for_model(model, model_dir);
     if let Some(ms) = prime_ms {
         config.prime_ms = ms;
@@ -1203,13 +1241,38 @@ fn capture_all_local(
         config.decoding_method = method;
     }
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
+    let weights = cc_bench::provenance::weights_of(model_dir)?;
+    match std::fs::read_to_string(root.join(MODEL_CATALOGUE))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| cc_bench::provenance::WeightCatalogue::from_json(&t))
+    {
+        Ok(catalogue) => {
+            if let Some(why) = catalogue.mismatch(model.id, &weights) {
+                println!(
+                    "WARNING: {} does not hold {}'s weights ({why}). The capture \
+                     records what it loaded, and gate-language will refuse it.",
+                    model_dir.display(),
+                    model.id
+                );
+            }
+        }
+        Err(e) => println!("WARNING: could not read {MODEL_CATALOGUE}: {e}"),
+    }
+    let conditions = cc_bench::provenance::CaptureConditions {
+        language: language.clone(),
+        model: model.id.to_string(),
+        weights,
+        recogniser: config.clone(),
+        pace,
+    };
     let loading = std::time::Instant::now();
     let recognizer = cc_stt::LocalRecognizer::load(&config).map_err(|e| anyhow::anyhow!(e))?;
     println!(
-        "loaded {} in {:.0}ms with {} tuning ({} threads, {}, prime {}ms, blank_penalty {})",
+        "loaded {} in {:.0}ms with {} tuning for {language}, cc-bench {} ({} threads, {}, prime {}ms, blank_penalty {})",
         model_dir.display(),
         loading.elapsed().as_secs_f64() * 1000.0,
         model.id,
+        cc_bench::provenance::Revision::current().describe(),
         config.num_threads,
         config.decoding_method,
         config.prime_ms,
@@ -1279,6 +1342,9 @@ fn capture_all_local(
         for file in ["gold.json", "manifest.json", "performance.txt"] {
             std::fs::copy(dir.join(file), out_dir.join(file))?;
         }
+        // Last, so an interrupted capture leaves a run with no record — which
+        // the gate refuses — rather than a record for files never finished.
+        cc_bench::provenance::seal_capture(&out_dir, &conditions)?;
     }
     Ok(())
 }

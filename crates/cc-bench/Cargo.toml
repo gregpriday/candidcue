@@ -17,6 +17,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1"
 num2words = "1.2.0"
+# SHA-256 for capture provenance (model weights and fixture files). Already in
+# the lockfile through rustls, so it adds no crate.
+ring = "0.17"
 
 [dev-dependencies]
 tempfile = "3.27.0"
