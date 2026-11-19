@@ -1,15 +1,17 @@
 /**
- * Audio contracts (spec Appendix C.3) — device metadata, level snapshots, and
- * the state the Preflight/Live screens show for the transcription connection.
+ * Audio contracts — device metadata, level snapshots, and the state of the
+ * transcription session the control window shows.
  *
- * The WebRTC transport types that used to live here are gone with the provider
- * that needed them: `CommitReason`, `DisconnectReason`, `TransportDiagnostics`,
- * `CommitMeta`, `EphemeralCredential` and `RealtimeTranscriptionTransport` all
- * described a client that decided its own turn boundaries and minted its own
- * short-lived credentials. The recogniser endpoints itself and is held
- * in Rust, so none of that has a caller — and a transport abstraction with no
- * implementation is exactly the kind of thing that gets reimplemented against
- * by mistake.
+ * There is no transport type here, on purpose. The recogniser runs on-device,
+ * endpoints itself and is held in Rust; audio reaches it over IPC. A
+ * client-side transport abstraction would have no implementation, and one with
+ * no implementation is exactly the kind of thing that gets reimplemented
+ * against by mistake.
+ *
+ * `RealtimeState` still names `minting_credential` and `negotiating`, states of
+ * a hosted connection the app no longer makes. Nothing mints a credential: the
+ * transcription test reports `minting_credential` as its "starting" state
+ * while it opens the microphone and the recogniser.
  */
 export type Unsubscribe = () => void;
 
@@ -62,27 +64,20 @@ export interface AudioLevelSnapshot {
 }
 
 /**
- * What a take asks the recogniser for.
+ * The default recogniser's full model name — the catalogue's `modelName` in
+ * `src-tauri/models/catalogue.json`, not its short `id`. No installer carries
+ * the model itself: it is downloaded from Settings › Speech.
  *
- * Two fields, both of which the provider actually reads. The retired shape also
- * carried `delay` and `requestLogprobs`: the first was a latency knob the
- * chosen model rejected outright, and the second bought per-token confidences
- * that only fed the semantic filter. Neither has a consumer now.
- */
-/**
- * The recogniser this build ships.
- *
- * Mirrors `crate::speech::MODEL_NAME`, which is itself asserted equal to
- * `src-tauri/models/catalogue.json`. Rust re-derives the real value on every
- * settings read, so a stale copy here is corrected before a take — but this is
- * also what the browser mock and the offline fallback show, and nothing
- * corrects those. A Rust test `include_str!`s this file to keep the two
- * honest, so keep the literal grep-able.
+ * Rust re-derives the real value on every settings read, so a stale copy here
+ * is corrected before a take — but this is also what the browser mock and the
+ * offline fallback show, and nothing corrects those. A Rust test
+ * (`speech/catalogue.rs`) `include_str!`s this file to keep the two honest, so
+ * keep the literal grep-able.
  */
 export const BUNDLED_MODEL_NAME = 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05';
 
 export interface TranscriptionConfig {
-  /** The bundled recogniser's name — see {@link BUNDLED_MODEL_NAME}. */
+  /** The recogniser's model name — see {@link BUNDLED_MODEL_NAME}. */
   model: string;
   /** BCP-47 tag, e.g. `en-US`. */
   language?: string;

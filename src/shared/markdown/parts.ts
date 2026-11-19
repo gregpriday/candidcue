@@ -1,5 +1,5 @@
 /**
- * Dividing a script into presentable parts (§parts).
+ * Dividing a script into presentable parts.
  *
  * ---------------------------------------------------------------------------
  * ONE RULE, TWO SOURCES, IN THAT ORDER

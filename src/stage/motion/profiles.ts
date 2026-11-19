@@ -74,9 +74,10 @@ export interface MotionLimits {
    * in the same scroll-pixel space as `targetPx`.
    *
    * `Number.POSITIVE_INFINITY` means "no ceiling", which is the value for every
-   * state except catch-up. It is deliberately NOT one of the fields the §C1
-   * finite fuse checks: infinity is the legitimate resting value here, and every
-   * use site tests `Number.isFinite` before doing arithmetic with it.
+   * state except catch-up. It is deliberately NOT one of the fields the
+   * controller's finite-value fuse checks: infinity is the legitimate resting
+   * value here, and every use site tests `Number.isFinite` before doing
+   * arithmetic with it.
    */
   forwardPositionCeilingPx: number;
   /** False forbids any backward motion (ordinary following, retake pending). */
@@ -115,14 +116,10 @@ export function catchUpMultiplierFor(profile: SmoothFollowProfile, boost: number
 /**
  * Companion §30.1–30.5, over the alignment engine's four states plus `paused`.
  *
- * The state vocabulary is deliberately small. It used to carry thirteen
- * entries, most of which were the old TypeScript tracker's internal bookkeeping
- * leaking into motion — `coasting`, `retake_pending`, `reanchoring` and friends
- * described what the *tracker* was doing, not what the presenter needed to see.
- * The engine now reports the only four distinctions that change how the
- * document should move, and everything that used to be a state is either a
- * transition directive (a bounded discontinuity, handled below) or nothing at
- * all.
+ * The state vocabulary is deliberately small: the engine reports only the
+ * four distinctions that change how the document should move. What the engine
+ * is doing internally is not a motion state; a bounded discontinuity is a
+ * transition directive, handled below.
  *
  * Note what is NOT here: no multiplier tries to stop the document during a
  * hold. It stops because the engine zeroes `rateTokensPerSecond` in exactly
@@ -569,14 +566,16 @@ export function limitsForState(
      * document has to come back to the reader.
      *
      * Applied AFTER the state and transition shaping and as a `min`, never as a
-     * multiplier, for the reason the §32.3 fade threshold is combined the same
-     * way: this is a bound on a correction the presenter did not ask for, so a
-     * state that happens to be feeling energetic may not raise it. Large type
-     * can make the re-grab faster in pixels — that is what keeps it four LINES
-     * a second on every rig — and nothing can make it faster in lines.
+     * multiplier, for the reason the fade-skip threshold
+     * (`fadeSkipThresholdPx`) is combined the same way: this is a bound on a
+     * correction the presenter did not ask for, so a state that happens to be
+     * feeling energetic may not raise it. Large type can make the re-grab
+     * faster in pixels — that is what keeps it four LINES a second on every rig
+     * — and nothing can make it faster in lines.
      *
      * Reduced motion is exempt and goes back to `snap`: somebody who has asked
-     * their system not to animate is not asking for a gentler animation (§32.4).
+     * their system not to animate is not asking for a gentler animation
+     * (primary §32.4).
      */
     const ceilingPxS = resolveLineLimitPx(
       REACQUIRE_LINES_PER_SECOND,
@@ -629,10 +628,11 @@ export function limitsForState(
      * hand is on the script, and `Math.min` with zero is zero. A rewind that
      * arrives mid-drag still cannot move until the grace runs out.
      *
-     * Reduced motion is exempt and keeps `snap` (§32.4): somebody who has asked
-     * their system not to animate is not asking for a gentler animation. That
-     * exception is confined to this branch — ordinary motion mode never inherits
-     * it — and is the ONE case where a retake repositions without travelling.
+     * Reduced motion is exempt and keeps `snap` (primary §32.4): somebody who
+     * has asked their system not to animate is not asking for a gentler
+     * animation. That exception is confined to this branch — ordinary motion
+     * mode never inherits it — and is the ONE case where a retake repositions
+     * without travelling.
      */
     const ceilingPxS = guidedRewindVelocityLimitPx(
       options.linePitchPx,

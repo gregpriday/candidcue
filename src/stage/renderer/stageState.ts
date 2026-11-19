@@ -55,7 +55,7 @@ export interface StageAppState {
   frozenReason: FrozenReason | null;
   blanked: boolean;
   /**
-   * §48. Voice following is switched off; the presenter is driving the script.
+   * Voice following is switched off; the presenter is driving the script.
    *
    * Off by default and for every take that never touches the control, because
    * following is what a take IS — the switch exists for the presenter who wants
@@ -149,8 +149,8 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
         /*
-         * §48. A new take follows the presenter's voice — that is what a take
-         * IS — so the switch goes back on with it.
+         * A new stage generation clears this reducer's own `followPaused`; the
+         * embedded stage reads the host's pause state instead.
          *
          * The standalone stage window outlives a session, and control sends no
          * `follow` directive at the start of one: it has nothing to say, the

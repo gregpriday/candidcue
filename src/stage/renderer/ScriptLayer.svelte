@@ -2,6 +2,10 @@
   Compiled-document renderer and the stage's single rAF loop
   (companion §26.2, §31, §32, §33; spec §16.2–16.5).
 
+  Bare § numbers in this file are the Smooth Following specification
+  (`docs/archive/`, "companion"); `spec` and `primary` mark the Product
+  specification.
+
   Motion is NOT a per-event animation. One persistent `StageMotionEngine` owns
   position, velocity, acceleration and authority for the life of the session;
   this component only:
@@ -13,8 +17,7 @@
 
   A plain pixel target is still honoured, but only as the fallback used when no
   alignment snapshot is current — it drives the same jerk-limited controller
-  rather than a spring of its own (companion §32.1–5, which replaces primary
-  §32).
+  rather than a spring of its own (companion §26.2, §29).
 -->
 <script module lang="ts">
   import type { FontMetrics } from '../../shared/optics';
@@ -203,7 +206,7 @@
     alignment?: AlignmentSnapshot | null;
     frozen?: boolean;
     /**
-     * §48. Voice following is switched off: the presenter is driving the script
+     * Voice following is switched off: the presenter is driving the script
      * themselves, by wheel or by key.
      *
      * Distinct from `frozen`, which stops the frame loop outright — the loop
@@ -221,11 +224,12 @@
      * §47.1/§55. The versioned motion profile this session runs on — the user's
      * Follow feel, resolved by control and validated by the
      * mount site (`stageFollowProfile`). Given to the engine at construction
-     * AND on every change, because the stage window outlives a session.
+     * AND on every change, in case the mounted renderer is handed a new
+     * session generation.
      */
     followProfile?: SmoothFollowProfile;
     /**
-     * §7.1. Extra bottom inset the mount site reserves below the script.
+     * Extra bottom inset the mount site reserves below the script.
      * Applied before the take begins and held for the whole take; it is folded
      * into the bottom padding, so document height and scroll bounds account for
      * it. Nothing reserves a band today, so the stage passes `0`.
@@ -243,7 +247,7 @@
      */
     cueHollow?: boolean;
     /**
-     * This reading is a rehearsal, so show the whole document (§practice).
+     * This reading is a rehearsal, so show the whole document.
      *
      * The performance projection replaces a table, an image, a diagram and a
      * code fence with four words apiece, which is right in front of a camera
@@ -263,11 +267,11 @@
      * both are ordinary: the second is a paused transport that still remembers
      * its pace, which is what the operator gets back when they resume.
      *
-     * This never competes with voice following. The engine prefers an accepted
-     * alignment frame over any fallback target, so on the frames where
-     * recognition is working the pace set here is simply not consulted, and the
-     * one place the two could actually collide — the alignment path's own
-     * fallback corrections — stands down below while this is running.
+     * While it runs it owns the document. Starting it pauses voice following,
+     * and an accepted snapshot releases the alignment lock rather than taking
+     * the document back (see `pushAlignmentSnapshot`). The one other place the
+     * two could collide — the alignment path's own fallback corrections —
+     * stands down below while this is running.
      */
     autoScroll?: StageAutoScrollPayload | null;
     /**
@@ -552,7 +556,10 @@
    * shared home would invite new code to build on the geometry being replaced.
    * ------------------------------------------------------------------- */
 
-  /** The old §16.8 breakpoint: a display around 1024x600 got the compact table. */
+  /**
+   * The old primary §16.8 breakpoint: a display around 1024x600 got the compact
+   * table.
+   */
   function legacyIsCompact(widthPx: number, heightPx: number): boolean {
     return heightPx > 0 && heightPx <= 700 && widthPx <= 1280;
   }
@@ -903,7 +910,7 @@
       ? stagePaddingPx(bandGeometry).topPx
       : reachableTopPx(legacyPad.topPx, bandCenterPx - linePx / 2)) + lineEntryPx,
   );
-  // §7.1: any inset the mount site reserves is folded into the bottom padding,
+  // Any inset the mount site reserves is folded into the bottom padding,
   // so document height and scroll bounds account for it with no separate
   // bookkeeping.
   const padBottomPx = $derived(
@@ -1227,10 +1234,9 @@
    * Both halves are load-bearing, for different orderings. The constructor read
    * covers the normal case, where the envelope arrives before this component
    * mounts (the mount site gates on `doc`, which comes from the envelope), so
-   * the very first frame already runs the chosen feel. The effect covers the
-   * stage window outliving a session: a second take republishes an envelope into
-   * this same component instance, and a construction-only read would silently
-   * run take two on take one's feel.
+   * the very first frame already runs the chosen feel. The effect covers a
+   * mounted renderer handed a new session generation: with a construction-only
+   * read it would run session two on session one's feel.
    */
   const engine = createStageMotionEngine(
     untrack(() => (followProfile ? { profile: followProfile } : {})),
@@ -1238,7 +1244,7 @@
   $effect(() => {
     if (followProfile) engine.setProfile(followProfile);
   });
-  // §48. The engine holds the document while following is off, and arms the
+  // The engine holds the document while following is off, and arms the
   // §30.6 re-grab on the way back on — see `setPaused`.
   $effect(() => {
     engine.setPaused(followPaused, performance.now());
@@ -1416,12 +1422,12 @@
     /*
      * Scoped to the SESSION, not just to the token.
      *
-     * A stage outlives a take. Latching on the token alone meant a second take
-     * that opened at the same place — the obvious case, "Retry last section"
-     * twice — was suppressed, and `openingHandedOver` is plain state that a new
-     * session resets without waking this effect. Reading the generation makes
-     * the effect re-run when a take begins and gives the latch something that
-     * actually changes between takes.
+     * A mounted stage can be handed a new take. Latching on the token alone
+     * meant a second take that opened at the same place — the obvious case,
+     * "Retry last section" twice — was suppressed, and `openingHandedOver` is
+     * plain state that a new session resets without waking this effect. Reading
+     * the generation makes the effect re-run when a take begins and gives the
+     * latch something that actually changes between takes.
      */
     const session = sessionGeneration;
     if (session !== seededForSession) {
@@ -1580,7 +1586,7 @@
     void renderWindowKey;
     if (!planeEl || vh === 0) return;
     const raf = requestAnimationFrame(() => measureBlocks());
-    // Hidden windows can throttle rAF (§43.3 publishes while hidden); a
+    // Hidden windows can throttle rAF (primary §43.3 publishes while hidden); a
     // timer fallback keeps the layout-ready handshake from stalling.
     const fallback = window.setTimeout(() => measureBlocks(), 350);
     return () => {
@@ -1646,13 +1652,16 @@
     /*
      * A document with nothing to measure IS measured.
      *
-     * `els.length > 0` was standing in for "the blocks have rendered", which
-     * it is — right up until there are no blocks. An empty source compiles to
-     * a valid script with zero blocks and preflight lets it start, so the
-     * stage hydrated, mounted this layer, and then waited for an element that
-     * was never coming: the handshake could not complete and the take died on
-     * `waitForStageReady`'s timeout. Asking the document how many blocks it
-     * has separates "not rendered yet" from "nothing to render".
+     * `els.length > 0` was standing in for "the blocks have rendered", which it
+     * is — right up until there are no blocks. An empty source compiles to a
+     * valid script with zero blocks, and when a stage was handed one it
+     * hydrated, mounted this layer, and then waited for an element that was
+     * never coming: the handshake could not complete and the take died on
+     * `waitForStageReady`'s timeout. (A take now refuses a script with no
+     * spoken words before presenting.) A zero-block document reports
+     * layout-ready right after the measurement pass; a nonempty one waits for
+     * its blocks. Asking the document how many
+     * blocks it has separates "not rendered yet" from "nothing to render".
      */
     const rendered = els.length > 0 || performanceBlocks.length === 0;
     if (!layoutReadySent && rendered) {
@@ -1963,7 +1972,7 @@
       plane: planeEl,
       blocks: performanceBlocks,
       fallbackLineHeightPx: linePx,
-      // §16.7: the script sits inside the mirror plane, and
+      // Primary §16.7: the script sits inside the mirror plane, and
       // getBoundingClientRect() reports post-transform viewport space.
       mirrorX: settings.mirrorX,
       mirrorY: settings.mirrorY,
@@ -2013,8 +2022,8 @@
      *
      * `measureStageLayout` falls back to the typographic line box when it found
      * no token rows to take a median from, so "there were tokens" is the only
-     * honest test for a measured pitch — and everything that consumes it
-     * (the §16.4 provisional cap, the smooth-jump threshold, the calibration
+     * honest test for a measured pitch — and everything that consumes it (the
+     * primary §16.3 provisional cap, the smooth-jump threshold, the calibration
      * readout) has a defined behaviour for not knowing.
      */
     measuredLinePitchPx = measurement.tokens.length > 0 ? measurement.lineHeightPx : null;
@@ -2601,8 +2610,8 @@
    * The reveal's deadline, and the only thing in this file that is allowed to
    * show the script without knowing where it is.
    *
-   * Keyed on the session so a second take on a stage window that outlived the
-   * first gets its own opening rather than inheriting a reveal from a script
+   * Keyed on the session so a second session handed to a mounted stage gets
+   * its own opening rather than inheriting a reveal from a script
    * that is no longer on the glass.
    */
   $effect(() => {
@@ -2631,8 +2640,8 @@
      * The three flags above have just declared the position unknown, and
      * nothing else would ever contradict them: the build effect keys on the
      * document, the layout inputs and the render window, none of which a
-     * session bump changes. So a second take on a stage window that outlived
-     * the first would sit behind the plate for the whole ceiling and then
+     * session bump changes. So a second session handed to a mounted stage
+     * would sit behind the plate for the whole ceiling and then
      * reveal wherever the LAST take had left the script — the new take never
      * opening at the top being the older half of that bug.
      *
@@ -2942,12 +2951,13 @@
      * frame loop's own limits cannot reach.
      *
      * This path can RE-ANCHOR — `disposition: 'instant'` and `'reanchor'` write
-     * the plant directly (§62, §32.4) — so the zeroed velocities that enforce
+     * the plant directly (§62; primary §32.4 for `instant`, §20.4 for
+     * `reanchor`) — so the zeroed velocities that enforce
      * manual authority inside `limitsForState` do not bind here. Anything that
      * holds the document has to be repeated at this door or it is not a hold.
      *
      * §30.6, both halves: the grace interval, and the engine's own "they have
-     * not spoken since". §48: following switched off. This is the path that
+     * not spoken since". Following switched off. This is the path that
      * runs at exactly the moments the line map is unresolved, which is when a
      * correction the presenter did not ask for is least defensible of all.
      *
@@ -2978,9 +2988,9 @@
     let disposition: FallbackTarget['disposition'] = 'follow';
     if (snap.state !== 'following') {
       /*
-       * Weak or contested evidence never triggers large movement (§16.4). The
-       * engine has already stopped advancing the position; this bounds what
-       * the fallback may do with the position it is holding.
+       * Weak or contested evidence never triggers large movement (primary
+       * §16.4). The engine has already stopped advancing the position; this
+       * bounds what the fallback may do with the position it is holding.
        *
        * The bound is two RENDERED LINES wherever a pitch has been measured,
        * because "a correction the presenter can absorb without losing their
@@ -3026,8 +3036,9 @@
 
   /**
    * Document-space top of a viewport rect, undoing the mirror plane's flip
-   * (§16.7). `getBoundingClientRect()` is post-transform, so under `scaleY(-1)`
-   * an element's measured `top` is its distance from the plane's bottom.
+   * (primary §16.7). `getBoundingClientRect()` is post-transform, so under
+   * `scaleY(-1)` an element's measured `top` is its distance from the plane's
+   * bottom.
    */
   function docTopOf(rect: DOMRect, planeRect: DOMRect): number {
     return settings.mirrorY ? planeRect.bottom - rect.bottom : rect.top - planeRect.top;
@@ -3415,7 +3426,7 @@
 
   /* ---- public surface ---- */
 
-  /** Feed one accepted-or-rejected semantic frame to the receiver (§26.1). */
+  /** Submit one alignment snapshot to the motion receiver. */
   export function pushAlignmentSnapshot(snapshot: AlignmentSnapshot): boolean {
     const accepted = engine.receiveSnapshot(snapshot, performance.now());
     /*
@@ -3542,7 +3553,7 @@
     }
     /*
      * Off the end of what was MEASURED is not the same as off the end of the
-     * script, and on a virtualized document (§51.3) it usually is not.
+     * script, and on a virtualized document (primary §51.3) it usually is not.
      *
      * `map.lines` covers the rendered window plus overscan, and the map is
      * rebuilt on a 250 ms throttle while a wheel gesture settles in 200 ms — so
@@ -3748,7 +3759,7 @@
   export function motionDiagnostics() {
     return {
       // Which §55 profile the engine is ACTUALLY running: the resolved feel, or
-      // `default-v1` if the envelope carried nothing this build could interpret.
+      // the build's default if the envelope carried nothing it could interpret.
       profileId: engine.profile.id,
       profileVersion: engine.profile.version,
       layoutGeneration,
@@ -4042,7 +4053,7 @@
     flex: none;
   }
 
-  /* Subtle low-contrast rounded underlay — not a karaoke marker (§16.2). */
+  /* A subtle low-contrast underlay, not a karaoke marker (primary §16.2). */
   .phrase-underlay {
     position: absolute;
     border-radius: 0.35em;
