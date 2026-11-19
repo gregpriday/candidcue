@@ -35,6 +35,8 @@ declare global {
       directivesOfKind(kind: string): Array<{ kind: string; payload: Record<string, unknown> }>;
       /** Deliver a Rust → control event; returns the listener count reached. */
       emit(event: string, payload: unknown): number;
+      /** Change a script's saved source behind the editor's back (#448). */
+      setScriptSource(id: string, source: string): void;
       reset(): void;
     };
     /**

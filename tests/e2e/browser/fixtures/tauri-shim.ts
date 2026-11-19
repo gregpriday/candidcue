@@ -39,6 +39,12 @@ export interface ShimConfig {
   /** Mark the welcome screen as already seen so boot lands on the Library. */
   welcomed?: boolean;
   seedScripts?: ShimScriptSeed[];
+  /**
+   * Session rows `list_sessions` answers with, newest first, as Rust lists
+   * them. Filtered by the requested script and capped at `limit`, so a spec
+   * cannot pass while the Editor asks for the wrong script's history.
+   */
+  sessionHistory?: Array<{ scriptId: string } & Record<string, unknown>>;
   /** Speech-engine status returned by get_speech_engine_status. */
   engineStatus?: Record<string, unknown>;
   /**
@@ -514,6 +520,16 @@ function shimBody(config: ShimConfig): void {
         }
       }
       return delivered;
+    },
+    /**
+     * Test seam: change a script's saved source behind the editor's back, as
+     * an edit from another app would. The editor keeps the text it loaded.
+     */
+    setScriptSource(id: string, source: string) {
+      const doc = store.get(id);
+      if (!doc) throw new Error(`setScriptSource: no script ${id}`);
+      doc.source = source;
+      doc.scriptRevision += 1;
     },
     reset() {
       this.calls = [];
@@ -1148,8 +1164,14 @@ function shimBody(config: ShimConfig): void {
       case 'list_revisions':
         return [];
 
-      case 'list_sessions':
-        return [];
+      case 'list_sessions': {
+        const scriptId = args?.['scriptId'] as string | null | undefined;
+        const limit = args?.['limit'] as number | null | undefined;
+        const rows = (config.sessionHistory ?? []).filter(
+          (row) => scriptId === null || scriptId === undefined || row.scriptId === scriptId,
+        );
+        return typeof limit === 'number' ? rows.slice(0, limit) : rows;
+      }
 
       /*
        * §29 alignment. Rust owns the engine and publishes its snapshots on

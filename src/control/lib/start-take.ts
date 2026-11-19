@@ -352,6 +352,18 @@ export interface StartTakeOptions {
    */
   startTokenIndex?: number;
   /**
+   * The source `startTokenIndex` was counted in, when it came from somewhere
+   * other than this compile (#448).
+   *
+   * "From last ending" is a previous take's token offset, valid only against
+   * the source that take was read from. The menu offers it only while the
+   * editor's compile matches, but the script can still change between choosing
+   * the row and this compile — a held launch waiting on the readiness sheet is
+   * the long version of that. A mismatch here refuses the take rather than
+   * open it on whichever sentence now sits at that offset.
+   */
+  expectedSourceHash?: string;
+  /**
    * This is a rehearsal, not a take.
    *
    * -------------------------------------------------------------------------
@@ -549,6 +561,17 @@ export async function startTake(
      */
     if (s.general.defaultSessionMode === 'voice') void preloadSpeechEngine().catch(() => {});
     const compiled = await compileForTake(scriptId, doc.source, s.general.readHeadings);
+
+    if (
+      options.expectedSourceHash !== undefined &&
+      compiled.script.sourceHash !== options.expectedSourceHash
+    ) {
+      showToast(
+        'The script has changed since that take ended, so where it stopped is no longer known. Choose where to start again.',
+        'info',
+      );
+      return false;
+    }
 
     /*
      * A script with no words in it is not a take.

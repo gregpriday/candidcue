@@ -50,7 +50,13 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import { voiceModelFinding } from '../lib/take-readiness';
   import { openSettingsWindow } from '../lib/open-settings';
   import { speechModelReadiness } from '../stores/speech-model-readiness';
-  import { continueFrom, snapToStart, type StartPoint } from '../lib/take-start-point';
+  import {
+    lastEndingFor,
+    newestEnding,
+    snapToStart,
+    type RecordedEnding,
+    type StartPoint,
+  } from '../lib/take-start-point';
   import { partAt } from '../../shared/markdown/parts';
   import { listSessionRecords } from '../services/session-records';
   import { session } from '../stores/session';
@@ -895,6 +901,7 @@ import type { PresentationMode } from '../services/settings-types';
     startTokenIndex?: number,
     practice?: boolean,
     part?: TakePartRequest,
+    expectedSourceHash?: string,
   ): Promise<void> {
     // Captured: the held launch must start the script it was asked for, not
     // whatever `scriptId` names by the time somebody presses Start anyway.
@@ -905,7 +912,7 @@ import type { PresentationMode } from '../services/settings-types';
         ...(mode === undefined ? {} : { mode }),
         ...(practice ? { practice: true } : {}),
       },
-      () => present(id, mode, startTokenIndex, practice, part),
+      () => present(id, mode, startTokenIndex, practice, part, expectedSourceHash),
     );
   }
 
@@ -925,6 +932,7 @@ import type { PresentationMode } from '../services/settings-types';
     startTokenIndex?: number,
     practice?: boolean,
     part?: TakePartRequest,
+    expectedSourceHash?: string,
   ): Promise<void> {
     await saveNow();
     await startTake(id, {
@@ -932,6 +940,8 @@ import type { PresentationMode } from '../services/settings-types';
       // be handing `startTake` a preference it is about to overrule anyway.
       ...(practice ? { practice: true } : mode === undefined ? {} : { presentationMode: mode }),
       ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
+      // #448: a previous take's ending is only valid against its own source.
+      ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }),
       /*
        * §parts. A practice is deliberately never bounded to a part: nothing is
        * reported at the end of one, so "you reached the end of part three" and
@@ -979,12 +989,15 @@ import type { PresentationMode } from '../services/settings-types';
   });
 
   /**
-   * Where the last take of this script stopped.
+   * Where the last take of this script stopped, and the source it stopped in.
    *
    * Loaded once per script rather than kept live: it changes only when a take
-   * ends, and a take ending navigates through this route anyway.
+   * ends, and a take ending navigates through this route anyway. The record is
+   * kept whole rather than as its number because the number is an offset into
+   * the source the take was read from, and means nothing against any other
+   * (#448) — see `lastEndingFor`.
    */
-  let lastEndTokenIndex = $state<number | undefined>(undefined);
+  let lastEndingRecord = $state<RecordedEnding | null>(null);
 
   $effect(() => {
     const id = scriptId;
@@ -998,22 +1011,46 @@ import type { PresentationMode } from '../services/settings-types';
      * dialog's arrival the trigger.
      */
     void $session.summary;
-    lastEndTokenIndex = undefined;
+    lastEndingRecord = null;
+    // Overlapping reads (two summaries, or A → B → A) must not land out of
+    // order, which a script-id check alone cannot tell apart.
+    let current = true;
     void listSessionRecords(id, 20)
       .then((records) => {
-        if (scriptId !== id) return;
-        // Newest first is what Rust returns; the first one with an ending is
-        // the one to resume from. A take abandoned before it recorded an end
-        // has nothing to offer and is skipped rather than treated as zero.
-        lastEndTokenIndex = records.find((r) => (r.endTokenIndex ?? 0) > 0)?.endTokenIndex;
+        if (!current || scriptId !== id) return;
+        lastEndingRecord = newestEnding(records);
       })
       .catch(() => {
         // A history that will not load costs one menu row. It must never stop
         // somebody presenting.
       });
+    return () => {
+      current = false;
+    };
   });
 
-  const lastEndingPoint = $derived(continueFrom(lastEndTokenIndex, snapInput));
+  /*
+   * Only from a compile of the text on screen, compared as text.
+   *
+   * The compile trails typing by a debounce, and in that window a compile of
+   * the old text still matches the record — the row would quote a sentence the
+   * presenter has just deleted. Revisions cannot stand in for this: a take's
+   * own compile supersedes a pending editor one, which then never lands, so an
+   * edit undone before it caught up would hide the row on unchanged text. Nor
+   * can the hash, which ignores a run of leading byte-order marks the parser
+   * does not.
+   */
+  const compileIsOfTextOnScreen = $derived(
+    $editor.scriptId === scriptId &&
+      !$editor.loading &&
+      $compiled.scriptId === scriptId &&
+      typeof $compiled.source === 'string' &&
+      $compiled.source === $editor.source,
+  );
+
+  const lastEndingPoint = $derived(
+    compileIsOfTextOnScreen ? lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput) : null,
+  );
 
   const presentStartItems = $derived(
     startMenuItems(
@@ -1033,11 +1070,18 @@ import type { PresentationMode } from '../services/settings-types';
          * were exactly the ones the feature stopped working for.
          */
         herePart: caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
-        lastEndingTokenIndex: lastEndingPoint?.tokenIndex ?? null,
-        lastEndingLabel: startPlace(lastEndingPoint),
+        lastEnding:
+          lastEndingPoint === null
+            ? null
+            : {
+                tokenIndex: lastEndingPoint.tokenIndex,
+                label: startPlace(lastEndingPoint),
+                sourceHash: lastEndingPoint.sourceHash,
+              },
         parts,
       },
-      (tokenIndex, part) => void checkThenPresent(undefined, tokenIndex, false, part),
+      (tokenIndex, part, expectedSourceHash) =>
+        void checkThenPresent(undefined, tokenIndex, false, part, expectedSourceHash),
     ),
   );
 

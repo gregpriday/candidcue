@@ -828,6 +828,37 @@ describe('starting somewhere other than the top', () => {
     expect(input.stageEnvelope.initialTokenIndex).toBe(0);
   });
 
+  /*
+   * #448: "From last ending" hands over a previous take's offset together with
+   * the source it was counted in. The script can change after the menu was
+   * drawn, so the check is repeated against the compile the stage is built from.
+   */
+  it('starts at a previous ending while the source it was counted in is unchanged', async () => {
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 34, expectedSourceHash: 'hash' }),
+    ).resolves.toBe(true);
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ startTokenIndex: 30 }),
+    );
+    const input = calls.startLiveSession.mock.calls[0]![0] as {
+      stageEnvelope: { initialTokenIndex: number };
+    };
+    expect(input.stageEnvelope.initialTokenIndex).toBe(30);
+  });
+
+  it('refuses a previous ending once the source has changed under it', async () => {
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 34, expectedSourceHash: 'an-older-source' }),
+    ).resolves.toBe(false);
+    // Refused before anything was opened: no session row, no stage, no microphone.
+    expect(calls.startSessionRecord).not.toHaveBeenCalled();
+    expect(calls.startLiveSession).not.toHaveBeenCalled();
+    expect(calls.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('The script has changed since that take ended'),
+      'info',
+    );
+  });
+
   it('refuses to start past the end of the script', async () => {
     // An index from a stale outline or a previous, longer revision must not
     // anchor the aligner outside the token array it was handed.
