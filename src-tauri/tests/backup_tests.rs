@@ -376,6 +376,77 @@ async fn a_restore_refuses_an_export_whose_script_has_no_text() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restore_refuses_a_script_folder_that_is_a_link() {
+    /*
+     * A script folder that is a symbolic link to a folder holding a real
+     * `script.md` resolves inside the export and checksums cleanly — and the
+     * restore's copy skips links, so the script would arrive with no text.
+     */
+    let h = harness().await;
+    let script = repo::create_script(&h.pool, &h.paths, create_input("Linked", "# Linked"))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = Path::new(&export.path);
+    let folder = export_root.join("scripts").join(&script.id);
+    let elsewhere = export_root.join("scripts").join("elsewhere");
+    fs::rename(&folder, &elsewhere).expect("move the folder");
+    std::os::unix::fs::symlink(&elsewhere, &folder).expect("link it back");
+    let mut manifest = manifest_of(export_root);
+    for file in manifest["files"].as_array_mut().expect("files") {
+        let path = file["path"].as_str().expect("path").to_string();
+        let prefix = format!("scripts/{}/", script.id);
+        if let Some(rest) = path.strip_prefix(&prefix) {
+            file["path"] = serde_json::json!(format!("scripts/elsewhere/{rest}"));
+        }
+    }
+    // The text is listed under its linked path too, as a manifest would that
+    // was written by walking through the link.
+    let body = manifest["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .find(|f| f["path"] == "scripts/elsewhere/script.md")
+        .cloned()
+        .expect("the text is listed");
+    let mut linked = body.clone();
+    linked["path"] = serde_json::json!(format!("scripts/{}/script.md", script.id));
+    manifest["files"].as_array_mut().expect("files").push(linked);
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    let err = backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect_err("a linked script folder must not restore");
+    assert!(err.to_string().contains("Linked"), "{err}");
+}
+
+#[tokio::test]
+async fn a_restore_preview_counts_the_scripts_the_database_indexes() {
+    let h = harness().await;
+    for title in ["One", "Two"] {
+        repo::create_script(&h.pool, &h.paths, create_input(title, &format!("# {title}")))
+            .await
+            .expect("create");
+    }
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let preview = backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    assert_eq!(preview.scripts_in_export, 2);
+}
+
 fn list_files(root: &Path) -> Vec<String> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -3367,8 +3438,31 @@ async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
      * the failure lands where nothing else can reach: after the evacuation and
      * after the copy, in `verify_database_file`. Every earlier gate checks the
      * manifest, so the manifest has to agree with the damage.
+     *
+     * And only a table the restore never reads: validation queries the
+     * scripts table to check every script has its text (#446), so a database
+     * that cannot be read at all is refused before anything moves. The root
+     * page of `sessions` gets an invalid page type, which `quick_check` walks
+     * into and the scripts query does not.
      */
-    let garbage = vec![0u8; 4096];
+    let database = export_root.join("speaking-glass.sqlite3");
+    let root_page: i64 = {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        let options = SqliteConnectOptions::new().filename(&database).read_only(true).immutable(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(options).await.expect("open");
+        let root = sqlx::query_scalar("SELECT rootpage FROM sqlite_schema WHERE name = 'sessions'")
+            .fetch_one(&pool)
+            .await
+            .expect("the sessions table");
+        pool.close().await;
+        root
+    };
+    let mut garbage = fs::read(&database).expect("the snapshot");
+    let page_size = match u16::from_be_bytes([garbage[16], garbage[17]]) {
+        1 => 65_536,
+        size => usize::from(size),
+    };
+    garbage[(root_page as usize - 1) * page_size] = 0x00;
     fs::write(export_root.join("speaking-glass.sqlite3"), &garbage).expect("damage the database");
     let digest = {
         use sha2::{Digest, Sha256};
