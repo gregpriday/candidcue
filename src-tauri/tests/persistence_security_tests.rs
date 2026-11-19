@@ -2077,7 +2077,8 @@ async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
              ![Escaped](assets/{second_stem}&period;png)\n\n\
              ![Angled](<./assets/{first_stem}\\.png> \"Title\")\n\n\
              ![Remote](https://example.com/assets/remote.png)\n\n\
-             ![Hand](assets/photo.png)\n\n[hero]:\n  assets/{first_name}\n\nNext paragraph.\n"
+             ![Hand](assets/photo.png)\n\n![Defined][p]\n\n[p]:assets/defined.png\n\n\
+             [hero]:\n  assets/{first_name}\n\nNext paragraph.\n"
         ),
     )
     .unwrap();
@@ -2094,8 +2095,9 @@ async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
     assert_eq!(
         imported.warnings,
         vec![format!(
-            "2 image(s) could not be imported from the assets folder beside this file: \
-             assets/{first_stem}.jpg, assets/photo.png. Export the original script as a \
+            "3 image(s) could not be imported from the assets folder beside this file: \
+             assets/{first_stem}.jpg, assets/photo.png, assets/defined.png. Export the \
+             original script as a \
              .speakingglass bundle to keep its images with it."
         )]
     );
