@@ -76,7 +76,7 @@ export declare const UNCACHED_CACHE_CONTROL: string;
 export declare const CONFLICTING: unique symbol;
 export declare function cacheDirectives(
   header: string | null | undefined,
-): Map<string, string | true | typeof CONFLICTING>;
+): Map<string, string | true | typeof CONFLICTING> | null;
 export declare function immutableCacheProblem(header: string | null | undefined): string | null;
 export declare function uncachedProblem(header: string | null | undefined): string | null;
 export declare function verifyFiles(stageDir: string, options?: NetworkOptions): Promise<void>;

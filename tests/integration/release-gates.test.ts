@@ -1905,10 +1905,16 @@ describe('the release workflow cannot publish an unverified build', () => {
    * public URL, so the upload and the check cannot drift apart.
    */
   it('serves versioned files as immutable and the feed as uncached', () => {
-    const files = action.slice(action.indexOf('aws s3 cp verified/stage/files/'));
-    expect(files.slice(0, files.indexOf('\n\n'))).toContain(`--cache-control "${IMMUTABLE_CACHE_CONTROL}"`);
-    const feedUpload = action.slice(action.indexOf('aws s3 cp verified/stage/feed/'));
-    expect(feedUpload.slice(0, feedUpload.indexOf('\n\n'))).toContain(`--cache-control "${UNCACHED_CACHE_CONTROL}"`);
+    // The whole `aws s3 cp` command, continuation lines and all: a flag on a
+    // line the one before does not continue onto is a separate command.
+    const command = (start: string) => {
+      const from = action.slice(action.indexOf(start));
+      const lines = from.slice(0, from.indexOf('\n\n')).split('\n');
+      const end = lines.findIndex((line) => !line.trimEnd().endsWith('\\'));
+      return lines.slice(0, end + 1).join('\n');
+    };
+    expect(command('aws s3 cp verified/stage/files/')).toContain(`--cache-control "${IMMUTABLE_CACHE_CONTROL}"`);
+    expect(command('aws s3 cp verified/stage/feed/')).toContain(`--cache-control "${UNCACHED_CACHE_CONTROL}"`);
     expect(IMMUTABLE_CACHE_CONTROL).toBe('public, max-age=31536000, immutable');
     expect(UNCACHED_CACHE_CONTROL).toBe('no-cache, no-store, must-revalidate');
   });

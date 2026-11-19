@@ -254,12 +254,12 @@ type Route = { status: number; body?: string | Buffer; headers?: Record<string, 
 function fakeFetch(routes: Record<string, Route | (() => Route)>) {
   const seen: string[] = [];
   const asked: string[] = [];
-  const requests: { url: string; headers: Headers }[] = [];
+  const requests: { url: string; headers: Headers; cache: RequestCache | undefined }[] = [];
   const fetchFn = async (url: string, init: RequestInit = {}) => {
     const path = url.replace(/[?&]cb=[^&]+/, '');
     seen.push(path);
     asked.push(url);
-    requests.push({ url, headers: new Headers(init.headers) });
+    requests.push({ url, headers: new Headers(init.headers), cache: init.cache });
     const entry = routes[path];
     const route = typeof entry === 'function' ? entry() : entry ?? { status: 404 };
     const body = typeof route.body === 'string' ? route.body : new Uint8Array(route.body ?? []);
@@ -272,6 +272,13 @@ function fakeFetch(routes: Record<string, Route | (() => Route)>) {
 }
 
 const quiet = { log: () => {}, attempts: 2, delayMs: 0 };
+
+/** `routes` with the one at `url` served under `cacheControl` (none when undefined). */
+function withHeader(routes: Record<string, Route>, url: string, cacheControl: string | undefined) {
+  const route = routes[url];
+  if (!route) throw new Error(`no route for ${url}`);
+  return { ...routes, [url]: { ...route, headers: cacheControl === undefined ? {} : { 'cache-control': cacheControl } } };
+}
 
 describe('the monotonic gate', () => {
   it('lets a first release through when no feed exists yet', async () => {
@@ -489,29 +496,34 @@ describe('nothing is announced until it is readable', () => {
     ['a longer lifetime than was set', 'public, max-age=63072000, immutable'],
     ['a year without immutable, as Cloudflare strips it', 'public, max-age=31536000'],
     ['a year without public', 'max-age=31536000, immutable'],
+    ['a valued public', 'public=1, max-age=31536000, immutable'],
     ['a shorter lifetime for the edge', 'public, max-age=31536000, s-maxage=60, immutable'],
     ['two lifetimes that disagree', 'public, max-age=31536000, max-age=60, immutable'],
-    ['lookalike directives', 'x-public, max-age=31536000, x-immutable'],
-    ['a lifetime nothing may keep', 'no-store, max-age=31536000, immutable'],
-    ['a lifetime only the browser may keep', 'private, max-age=31536000, immutable'],
-    ['the feed\'s lifetime', feed.UNCACHED_CACHE_CONTROL],
+    ['two lifetimes that disagree, the other way round', 'public, max-age=60, max-age=31536000, immutable'],
+    ['a lookalike public', 'x-public, max-age=31536000, immutable'],
+    ['a lookalike immutable', 'public, max-age=31536000, x-immutable'],
+    ['no-cache as well', 'public, max-age=31536000, immutable, no-cache'],
+    ['no-store as well', 'public, max-age=31536000, immutable, no-store'],
+    ['private as well', 'public, max-age=31536000, immutable, private'],
+    ['an unterminated quote hiding a lifetime', 'public, max-age=31536000", immutable'],
+    ["the feed's lifetime", feed.UNCACHED_CACHE_CONTROL],
   ])('fails on a file served with %s', async (_label, cacheControl) => {
     const { out } = stageMac();
-    const dmg = `${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`;
-    const routes = servedFiles(out);
-    routes[dmg] = { ...routes[dmg], headers: cacheControl === undefined ? {} : { 'cache-control': cacheControl } };
+    const routes = withHeader(servedFiles(out), `${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`, cacheControl);
     const { fetchFn } = fakeFetch(routes);
     await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(
       /SpeakingGlass_0\.1\.0_universal\.dmg: served with Cache-Control/,
     );
   });
 
-  it('checks the signature and the checksums, not just the installer', async () => {
-    for (const name of ['SpeakingGlass_0.1.0_universal.app.tar.gz.sig', 'SHA256SUMS-macos.txt']) {
+  it('checks every file it uploads, not just the installer', async () => {
+    for (const name of [
+      'SpeakingGlass_0.1.0_universal.app.tar.gz',
+      'SpeakingGlass_0.1.0_universal.app.tar.gz.sig',
+      'SHA256SUMS-macos.txt',
+    ]) {
       const { out } = stageMac();
-      const url = `${PUBLIC}/releases/0.1.0/${name}`;
-      const routes = servedFiles(out);
-      routes[url] = { ...routes[url], headers: { 'cache-control': 'public, max-age=300' } };
+      const routes = withHeader(servedFiles(out), `${PUBLIC}/releases/0.1.0/${name}`, 'public, max-age=300');
       const { fetchFn } = fakeFetch(routes);
       await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(`${name}: served with Cache-Control`);
     }
@@ -521,21 +533,72 @@ describe('nothing is announced until it is readable', () => {
     const { out } = stageMac();
     const url = `${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`;
     const routes = servedFiles(out);
-    const good = routes[url];
+    const good = routes[url]!;
     let calls = 0;
     routes[url] = (() =>
-      ++calls === 1 ? { ...good, headers: { 'cache-control': 'max-age=60' } } : good) as unknown as Route;
+      ++calls === 1
+        ? { ...good, headers: { 'cache-control': 'public, max-age=60, immutable' } }
+        : good) as unknown as Route;
     const { fetchFn } = fakeFetch(routes);
     await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).resolves.toBeUndefined();
     expect(calls).toBe(2);
   });
 
-  it('accepts the immutable lifetime however the edge spells it', async () => {
+  /*
+   * A rejected body is dropped, never read: an installer is large, and a
+   * header that is wrong says nothing its bytes could change.
+   */
+  it.each([
+    ['an error status', 503, feed.IMMUTABLE_CACHE_CONTROL, /HTTP 503/],
+    ['the wrong lifetime', 200, 'max-age=60', /served with Cache-Control/],
+  ])('drops the body of a file refused for %s without reading it', async (_label, status, cacheControl, error) => {
+    const { out } = stageMac();
+    let pulls = 0;
+    let cancels = 0;
+    const fetchFn = async () =>
+      new Response(
+        new ReadableStream(
+          {
+            pull() {
+              pulls++;
+            },
+            cancel() {
+              cancels++;
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { status, headers: { 'cache-control': cacheControl } },
+      );
+    await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(error);
+    expect(pulls).toBe(0);
+    expect(cancels).toBe(quiet.attempts);
+  });
+
+  it('reports the refusal, not a failure to drop the body', async () => {
+    const { out } = stageMac();
+    const fetchFn = async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            throw new Error('the stream would not close');
+          },
+        }),
+        { status: 200, headers: { 'cache-control': 'max-age=60' } },
+      );
+    await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(/served with Cache-Control "max-age=60"/);
+  });
+
+  it.each([
+    ['in any case and order', 'Immutable,PUBLIC ,  Max-Age=31536000'],
+    ['with the same lifetime for the edge', 'public, max-age=31536000, s-maxage=31536000, immutable'],
+    ['with a quoted, zero-padded lifetime', 'public, max-age="031536000", immutable'],
+    ['with an argument to immutable, which is ignored', 'public, max-age=31536000, immutable=yes'],
+    ['with an unrelated directive', 'public, max-age=31536000, immutable, no-transform'],
+  ])('accepts the immutable lifetime %s', async (_label, cacheControl) => {
     const { out } = stageMac();
     const routes = servedFiles(out);
-    for (const route of Object.values(routes)) {
-      (route as Route).headers = { 'cache-control': 'Immutable,PUBLIC ,  Max-Age=31536000' };
-    }
+    for (const route of Object.values(routes)) route.headers = { 'cache-control': cacheControl };
     const { fetchFn } = fakeFetch(routes);
     await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).resolves.toBeUndefined();
   });
@@ -562,20 +625,70 @@ describe('the feed is verified as clients will read it', () => {
     await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(/Cache-Control/);
   });
 
+  /*
+   * Each row breaks one thing about an otherwise correct header, and only one
+   * entry carries it, so a check that looked at the first entry, or at the
+   * header as a whole, would let it through.
+   */
   it.each([
     ['no-cache alone, which a cache may still store', 'no-cache'],
-    ['no-cache naming only a header field', 'no-cache="Set-Cookie", no-store'],
+    ['no-cache naming only a header field', 'no-cache="Set-Cookie", no-store, must-revalidate'],
+    ['no no-cache', 'no-store, must-revalidate'],
     ['no-store alone', 'no-store'],
     ['no must-revalidate', 'no-cache, no-store'],
     ['a valued no-store', 'no-cache, no-store=1, must-revalidate'],
+    ['a valued must-revalidate', 'no-cache, no-store, must-revalidate=1'],
     ['a lifetime as well', 'no-cache, no-store, must-revalidate, max-age=60'],
-    ['a licence to serve it stale', 'no-cache, no-store, must-revalidate, stale-while-revalidate=60'],
-    ['lookalike directives', 'x-no-cache, x-no-store, x-must-revalidate'],
+    ['a lifetime for the edge as well', 'no-cache, no-store, must-revalidate, s-maxage=60'],
+    ['a licence to serve it stale while revalidating', 'no-cache, no-store, must-revalidate, stale-while-revalidate=60'],
+    ['a licence to serve it stale on error', 'no-cache, no-store, must-revalidate, stale-if-error=60'],
+    ['public as well', 'no-cache, no-store, must-revalidate, public'],
+    ['immutable as well', 'no-cache, no-store, must-revalidate, immutable'],
+    ['a lookalike no-cache', 'x-no-cache, no-store, must-revalidate'],
+    ['an unterminated quote hiding the policy', 'ext="never closed, no-cache, no-store, must-revalidate'],
     ['no Cache-Control at all', undefined],
   ])('fails on an entry served with %s', async (_label, cacheControl) => {
     const { out } = stageMac();
-    const { fetchFn } = fakeFetch(servedFeed(out, cacheControl === undefined ? {} : { 'cache-control': cacheControl }));
-    await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(/served with Cache-Control/);
+    const routes = withHeader(servedFeed(out), `${PUBLIC}/releases/latest-macos.json`, cacheControl);
+    const { fetchFn } = fakeFetch(routes);
+    await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(
+      /latest-macos\.json: served with Cache-Control/,
+    );
+  });
+
+  it('fails on an entry that is not served', async () => {
+    const { out } = stageMac();
+    const routes = servedFeed(out);
+    routes[`${PUBLIC}/releases/latest-macos.json`] = { ...routes[`${PUBLIC}/releases/latest-macos.json`]!, status: 503 };
+    const { fetchFn } = fakeFetch(routes);
+    await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(/latest-macos\.json: HTTP 503/);
+  });
+
+  it.each(['HIT', 'STALE', 'UPDATING', 'REVALIDATED'])(
+    'fails on an entry Cloudflare answered from its cache (%s), whatever its header says',
+    async (status) => {
+      const { out } = stageMac();
+      const routes = servedFeed(out);
+      const url = `${PUBLIC}/releases/latest-macos.json`;
+      routes[url] = {
+        ...routes[url]!,
+        headers: { 'cache-control': feed.UNCACHED_CACHE_CONTROL, 'cf-cache-status': status },
+      };
+      const { fetchFn } = fakeFetch(routes);
+      await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).rejects.toThrow(
+        new RegExp(`latest-macos\\.json: served from Cloudflare's cache \\(CF-Cache-Status ${status}\\)`),
+      );
+    },
+  );
+
+  it('accepts an entry Cloudflare passed through', async () => {
+    const { out } = stageMac();
+    for (const status of ['BYPASS', 'DYNAMIC', 'MISS']) {
+      const { fetchFn } = fakeFetch(
+        servedFeed(out, { 'cache-control': feed.UNCACHED_CACHE_CONTROL, 'cf-cache-status': status }),
+      );
+      await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).resolves.toBeUndefined();
+    }
   });
 
   it('asks as the updater does, with nothing that could make a cache answer differently', async () => {
@@ -583,25 +696,30 @@ describe('the feed is verified as clients will read it', () => {
     const { fetchFn, requests } = fakeFetch(servedFeed(out));
     await feed.verifyFeed(out, { fetchFn, ...quiet });
     expect(requests.length).toBeGreaterThan(0);
-    for (const { url, headers } of requests) {
+    for (const { url, headers, cache } of requests) {
       expect(url).not.toContain('cb=');
       expect(headers.has('cache-control')).toBe(false);
       expect(headers.has('pragma')).toBe(false);
+      expect(cache ?? 'default').toBe('default');
     }
   });
 
-  it('accepts the uncached lifetime however the edge spells it', async () => {
+  it.each([
+    ['in any case and order', 'must-revalidate,NO-STORE ,No-Cache'],
+    ['with a zero lifetime spelled out', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=00'],
+  ])('accepts the uncached policy %s', async (_label, cacheControl) => {
     const { out } = stageMac();
-    const { fetchFn } = fakeFetch(servedFeed(out, { 'cache-control': 'must-revalidate,NO-STORE ,No-Cache' }));
+    const { fetchFn } = fakeFetch(servedFeed(out, { 'cache-control': cacheControl }));
     await expect(feed.verifyFeed(out, { fetchFn, ...quiet })).resolves.toBeUndefined();
   });
 
   it('fails on a stale entry', async () => {
     const { out } = stageMac();
     const routes = servedFeed(out);
+    const staged = JSON.parse(readFileSync(join(out, 'feed', 'latest-darwin-x86_64.json'), 'utf8'));
     routes[`${PUBLIC}/releases/latest-darwin-x86_64.json`] = {
       status: 200,
-      body: JSON.stringify({ version: '0.0.9' }),
+      body: JSON.stringify({ ...staged, version: '0.0.9' }),
       headers: { 'cache-control': feed.UNCACHED_CACHE_CONTROL },
     };
     const { fetchFn } = fakeFetch(routes);
@@ -610,8 +728,14 @@ describe('the feed is verified as clients will read it', () => {
 });
 
 describe('Cache-Control is read as directives, not as text', () => {
+  const read = (header: string | null) => {
+    const directives = feed.cacheDirectives(header);
+    if (directives === null) throw new Error(`"${header}" did not parse`);
+    return directives;
+  };
+
   it('lower-cases names, trims, and unquotes values', () => {
-    expect([...feed.cacheDirectives(' Public,MAX-AGE="60" , immutable')]).toEqual([
+    expect([...read(' Public,MAX-AGE="60" , immutable')]).toEqual([
       ['public', true],
       ['max-age', '60'],
       ['immutable', true],
@@ -619,27 +743,41 @@ describe('Cache-Control is read as directives, not as text', () => {
   });
 
   it('does not split a quoted value at its comma', () => {
-    expect([...feed.cacheDirectives('no-cache="Set-Cookie, Vary", no-store')]).toEqual([
+    expect([...read('no-cache="Set-Cookie, Vary", no-store')]).toEqual([
       ['no-cache', 'Set-Cookie, Vary'],
       ['no-store', true],
     ]);
   });
 
   it('unescapes a quoted value and keeps its escaped quote inside it', () => {
-    expect([...feed.cacheDirectives('ext="a\\"b, c", no-store')]).toEqual([
+    expect([...read('ext="a\\"b, c", no-store')]).toEqual([
       ['ext', 'a"b, c'],
       ['no-store', true],
     ]);
   });
 
   it('marks a directive given twice with different values as conflicting', () => {
-    expect(feed.cacheDirectives('max-age=60, max-age=31536000').get('max-age')).toBe(feed.CONFLICTING);
-    expect(feed.cacheDirectives('no-store, no-store').get('no-store')).toBe(true);
+    expect(typeof feed.CONFLICTING).toBe('symbol');
+    expect(read('max-age=60, max-age=31536000').get('max-age')).toBe(feed.CONFLICTING);
+    expect(read('max-age=31536000, max-age=60').get('max-age')).toBe(feed.CONFLICTING);
+    expect(read('no-cache, no-cache="Set-Cookie"').get('no-cache')).toBe(feed.CONFLICTING);
+    expect(read('no-store, no-store').get('no-store')).toBe(true);
   });
 
-  it('reads nothing from an absent header', () => {
-    expect(feed.cacheDirectives(null).size).toBe(0);
-    expect(feed.cacheDirectives('').size).toBe(0);
+  it('reads nothing from an absent or empty header, or from empty members', () => {
+    expect(read(null).size).toBe(0);
+    expect(read('').size).toBe(0);
+    expect([...read(' , no-store,, ,')]).toEqual([['no-store', true]]);
+  });
+
+  it.each([
+    ['an unterminated quote', 'ext="never closed, no-store'],
+    ['a stray quote after a value', 'max-age=60", no-store'],
+    ['a value with no name', '=60, no-store'],
+    ['a name that is not a token', 'no store, max-age=60'],
+    ['a value that is not a token', 'max-age=6 0'],
+  ])('refuses %s rather than reading past it', (_label, header) => {
+    expect(feed.cacheDirectives(header)).toBeNull();
   });
 
   it('accepts exactly what the publish step uploads', () => {

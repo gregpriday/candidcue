@@ -548,64 +548,89 @@ export const UNCACHED_CACHE_CONTROL = 'no-cache, no-store, must-revalidate';
 /** A directive given twice with different values: neither can be trusted. */
 export const CONFLICTING = Symbol('conflicting Cache-Control directive');
 
+const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const QUOTED = /^"((?:[^"\\]|\\.)*)"$/s;
+const MEMBERS = /(?:[^,"]|"(?:[^"\\]|\\.)*")+/g;
+
 /**
  * The directives of a Cache-Control header: lower-cased names, each mapped to
  * its value (unquoted, unescaped) or to `true` when it has none. A comma inside
  * a quoted value does not split it. A directive repeated with a different
  * value maps to `CONFLICTING`, so a second `max-age` can neither win nor hide.
+ *
+ * `null` when the header is not a list of directives at all: an unterminated
+ * quote, or a name or value that is not a token. Reading past a stray quote
+ * would let a malformed header pass for the policy it happens to contain.
  */
 export function cacheDirectives(header) {
+  const text = header ?? '';
+  const members = text.match(MEMBERS) ?? [];
+  // Whatever the members did not cover must be only the commas and spaces
+  // between them; a stray quote is left behind here.
+  if (text.replace(MEMBERS, '').replace(/[,\s]/g, '') !== '') return null;
   const directives = new Map();
-  for (const part of (header ?? '').match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g) ?? []) {
-    const eq = part.indexOf('=');
-    const name = (eq === -1 ? part : part.slice(0, eq)).trim().toLowerCase();
-    if (!name) continue;
+  for (const member of members) {
+    const eq = member.indexOf('=');
+    const name = (eq === -1 ? member : member.slice(0, eq)).trim().toLowerCase();
+    if (!name) {
+      if (eq === -1) continue;
+      return null;
+    }
+    if (!TOKEN.test(name)) return null;
     let value = true;
     if (eq !== -1) {
-      value = part.slice(eq + 1).trim();
-      const quoted = /^"((?:[^"\\]|\\.)*)"$/s.exec(value);
+      value = member.slice(eq + 1).trim();
+      const quoted = QUOTED.exec(value);
       if (quoted) value = quoted[1].replace(/\\(.)/gs, '$1');
+      else if (!TOKEN.test(value)) return null;
     }
     directives.set(name, directives.has(name) && directives.get(name) !== value ? CONFLICTING : value);
   }
   return directives;
 }
 
-const ONE_YEAR = '31536000';
+/** A delta-seconds value, read as the number it spells, or `null`. */
+function seconds(value) {
+  return typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : null;
+}
+
+const ONE_YEAR = 31_536_000;
 
 /**
- * Why a versioned file's Cache-Control is not exactly the year-long, public,
+ * Why a versioned file's Cache-Control is not the year-long, public,
  * immutable lifetime the upload asked for, or `null` when it is. A missing or
  * different lifetime means an upload that lost its `--cache-control`, or an
- * edge rule rewriting it (Cloudflare strips `immutable` when Origin Cache
- * Control is off). `s-maxage` outranks `max-age` for the edge, so one that is
- * present must say the same.
+ * edge rule rewriting it (Cloudflare strips `immutable` when the zone's Origin
+ * Cache Control is off). `s-maxage` outranks `max-age` for the edge, so one
+ * that is present must say the same. `immutable` takes no argument, and one
+ * given to it is ignored (RFC 8246), so only its presence counts.
  */
 export function immutableCacheProblem(header) {
   const directives = cacheDirectives(header);
-  const sMaxAge = directives.get('s-maxage');
   const ok =
+    directives !== null &&
     directives.get('public') === true &&
-    directives.get('max-age') === ONE_YEAR &&
-    (sMaxAge === undefined || sMaxAge === ONE_YEAR) &&
+    seconds(directives.get('max-age')) === ONE_YEAR &&
+    (!directives.has('s-maxage') || seconds(directives.get('s-maxage')) === ONE_YEAR) &&
     directives.has('immutable') &&
-    directives.get('immutable') !== CONFLICTING &&
     !['no-cache', 'no-store', 'private'].some((name) => directives.has(name));
   return ok ? null : `served with Cache-Control "${header ?? ''}", not "${IMMUTABLE_CACHE_CONTROL}"`;
 }
 
 /**
- * Why a feed entry's Cache-Control lets a cache keep or reuse it, or `null`
- * when it does not. All three of the upload's directives, bare: `no-store`
- * keeps it out of every cache, and a bare `no-cache` and `must-revalidate`
- * make anything that kept it anyway ask again. A `no-cache` naming header
- * fields (`no-cache="Set-Cookie"`) only drops those fields, so it does not
- * count, and a lifetime or a licence to serve it stale contradicts the rest.
+ * Why a feed entry's Cache-Control is not the uncached policy the upload
+ * asked for, or `null` when it is. All three of the upload's directives,
+ * bare: `no-store` keeps it out of every cache, and a bare `no-cache` and
+ * `must-revalidate` make anything that kept it anyway ask again. A `no-cache`
+ * naming header fields (`no-cache="Set-Cookie"`) only drops those fields, so it
+ * does not count, and a lifetime or a licence to serve it stale contradicts
+ * the rest.
  */
 export function uncachedProblem(header) {
   const directives = cacheDirectives(header);
-  const zeroOrAbsent = (name) => !directives.has(name) || directives.get(name) === '0';
+  const zeroOrAbsent = (name) => !directives.has(name) || seconds(directives.get(name)) === 0;
   const ok =
+    directives !== null &&
     ['no-cache', 'no-store', 'must-revalidate'].every((name) => directives.get(name) === true) &&
     zeroOrAbsent('max-age') &&
     zeroOrAbsent('s-maxage') &&
@@ -613,7 +638,19 @@ export function uncachedProblem(header) {
   return ok
     ? null
     : `served with Cache-Control "${header ?? ''}", not "${UNCACHED_CACHE_CONTROL}", ` +
-        'which lets a stale entry outlive this release';
+        'which can let a stale entry outlive this release';
+}
+
+/**
+ * Cloudflare's own word that it answered from its cache. A feed entry served
+ * `no-store` is never stored, so a hit means a rule is caching it whatever
+ * the header says, and the next release would be hidden behind this one.
+ */
+const EDGE_HITS = new Set(['hit', 'stale', 'updating', 'revalidated']);
+
+/** Drop a rejected body without letting the drop fail or wait. */
+function discard(response) {
+  response.body?.cancel().catch(() => {});
 }
 
 /**
@@ -643,10 +680,10 @@ export async function verifyFiles(stageDir, { fetchFn = fetch, log = console.log
         const cacheProblem = immutableCacheProblem(response.headers.get('cache-control'));
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;
-          await response.body?.cancel();
+          discard(response);
         } else if (cacheProblem) {
           last = cacheProblem;
-          await response.body?.cancel();
+          discard(response);
         } else {
           const actual = await sha256OfResponse(response);
           if (actual === expected) {
@@ -686,10 +723,18 @@ export async function verifyFeed(stageDir, { fetchFn = fetch, log = console.log,
         // installed copy is served.
         const response = await fetchWithTimeout(url, {}, fetchFn);
         const cacheProblem = uncachedProblem(response.headers.get('cache-control'));
+        const edge = (response.headers.get('cf-cache-status') ?? '').trim().toLowerCase();
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;
+          discard(response);
         } else if (cacheProblem) {
           last = cacheProblem;
+          discard(response);
+        } else if (EDGE_HITS.has(edge)) {
+          last =
+            `served from Cloudflare's cache (CF-Cache-Status ${edge.toUpperCase()}) although it says no-store: ` +
+            'a cache rule is keeping it, and the next release would be hidden behind it';
+          discard(response);
         } else if (!isDeepStrictEqual(await response.json(), expected)) {
           last = 'served content differs from the staged entry';
         } else {
