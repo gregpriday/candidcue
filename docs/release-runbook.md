@@ -286,8 +286,9 @@ of them is published: release a new version instead.
 A step 6 or step 7 failure that names `Cache-Control` means the bytes are
 right and the edge is serving them with another lifetime. Cloudflare drops
 `immutable` when the zone's Origin Cache Control is off, and a Cache Rule
-can rewrite the header outright. Fix that on the zone and then re-run the
-`publish` job, which uploads the same files again with the right headers.
+can rewrite the header outright. Fix that on the zone, purge the URLs the
+failure named from Cloudflare's cache (the edge keeps what it already
+served), and then re-run the `publish` job.
 Step 6 fails before the feed is touched, so nothing points at those files yet.
 
 `scripts/release-feed.mjs` is the whole layout, with the reasons.
