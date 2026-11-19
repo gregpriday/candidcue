@@ -204,8 +204,13 @@ describe('the take-scope label', () => {
     expect(label(usual.container)?.style.top).toBe('');
     document.body.innerHTML = '';
 
-    // A camera below the screen puts the band low on the glass.
-    const low = await mount({ practice: true }, envelope({ readingBandCenterPercent: 70 }));
+    // Below the middle but with room under it: the bottom is still the far edge.
+    const lowish = await mount({ practice: true }, envelope({ readingBandCenterPercent: 70 }));
+    expect(label(lowish.container)?.dataset['edge']).toBe('bottom');
+    document.body.innerHTML = '';
+
+    // A camera below the screen puts the band in the bottom tenth of the glass.
+    const low = await mount({ practice: true }, envelope({ readingBandCenterPercent: 92 }));
     expect(label(low.container)?.dataset['edge']).toBe('top');
     expect(label(low.container)?.style.top).not.toBe('');
     expect(label(low.container)?.style.bottom).toBe('');

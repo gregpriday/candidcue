@@ -240,6 +240,14 @@ describe('practiceMenuItems (#241)', () => {
     expect(practice).toEqual(take);
   });
 
+  it('offers no second whole-script row at the beginning of an undivided script', () => {
+    const at = (herePart: ScriptPart | null) =>
+      practiceMenuItems({ hereTokenIndex: 0, hereLabel: null, herePart }, () => {}).map((i) => i.label);
+    expect(at(null)).toEqual(['Practise']);
+    // On a divided script it is the first part, which the plain row is not.
+    expect(at(parts[0]!)).toEqual(['Practise', 'Practise from here']);
+  });
+
   it('leaves "Practise from here" without a part on an undivided script', () => {
     const chosen: Array<[number | undefined, TakePartRequest | undefined]> = [];
     const items = practiceMenuItems(

@@ -671,18 +671,33 @@
    * mirror — it clears the host's "Take controls" tab by the same measure the
    * acknowledgement chip uses.
    */
-  const bandCenterPercent = $derived(
-    settings?.optics ? settings.optics.readingBandY * 100 : (settings?.readingBandCenterPercent ?? 38),
-  );
-  const takeScopeAtTop = $derived(bandCenterPercent > 50);
+  /*
+   * The bottom edge's inset: the dock's baseline, or — when a vertical mirror
+   * makes that edge the physical top — clear of the host's tab (16px down,
+   * 32px tall), measured from the safe rectangle's BOTTOM inset, which is the
+   * one that sits above it on the panel.
+   */
+  const takeScopeBottomPx = $derived.by(() => {
+    if (!(embedded && settings?.mirrorY)) return 16;
+    const safeBottomInsetPx = (vh * (100 - safeInsets.y - safeInsets.height)) / 100;
+    return Math.max(16, Math.round(16 + 32 + 12 - safeBottomInsetPx));
+  });
+  /*
+   * Bottom unless the band leaves no room under it. Measured, not a midline:
+   * a band at 55% has nearly half the glass below it, and moving the label to
+   * the top there would only bring it nearer the words. The label's height is
+   * its own line plus its padding and border.
+   */
+  const takeScopeAtTop = $derived.by(() => {
+    if (!settings || vh === 0) return false;
+    const center = settings.optics ? settings.optics.readingBandY * 100 : settings.readingBandCenterPercent;
+    const bandBottomPx = (vh * (center + settings.readingBandHalfHeightPercent)) / 100;
+    const safeBottomPx = (vh * (safeInsets.y + safeInsets.height)) / 100;
+    const labelPx = overlayFontSizePx * 1.9 + 2;
+    return bandBottomPx + 8 > safeBottomPx - takeScopeBottomPx - labelPx;
+  });
   const takeScopeTop = $derived(takeScopeAtTop ? `calc(${ackTopPx}px + 2.6em)` : undefined);
-  const takeScopeBottom = $derived(
-    takeScopeAtTop
-      ? undefined
-      : settings?.mirrorY
-        ? `${ackTopPx}px`
-        : 'var(--stage-chrome-bottom-inset, 16px)',
-  );
+  const takeScopeBottom = $derived(takeScopeAtTop ? undefined : `${takeScopeBottomPx}px`);
 
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');
@@ -2641,6 +2656,48 @@
         style:--stage-hold-top={holdChipTop}
       >
         <!--
+          What is running (#241): "Practising", the part, or both.
+
+          In this plane because it is words the presenter reads through the
+          glass, so it takes the corrective flip with the script. It takes the
+          edge away from the reading band (see `takeScopeAtTop`), and the
+          PHYSICAL right-hand side: the dock is in the unmirrored operator plane
+          at the bottom left, so under a horizontal mirror the label's side
+          flips in these coordinates to land on the right of the panel either
+          way.
+
+          First in this plane, so every transient prompt drawn after it — the
+          acknowledgement, the hold chip, the Escape prompt — paints over it
+          rather than under it.
+
+          Persistent rather than transient: it answers "is this the take?", a
+          question that matters for the whole reading, and it does not fade
+          with the dock. A blank hides it like everything else. Not a live
+          region: the take-controls drawer already announces the part, and two
+          regions would say the same thing twice.
+        -->
+        {#if takeScope && !app.blanked}
+          <div
+            class="take-scope"
+            class:flip-x={settings?.mirrorX ?? false}
+            data-edge={takeScopeAtTop ? 'top' : 'bottom'}
+            style:font-size="{overlayFontSizePx}px"
+            style:top={takeScopeTop}
+            style:bottom={takeScopeBottom}
+          >
+            <span class="take-scope-lead">{takeScope.lead}</span>
+            {#if takeScope.name}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
+              <span class="take-scope-name">{takeScope.name}</span>
+            {/if}
+            {#if takeScope.done}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
+              <span class="take-scope-done">{takeScope.done}</span>
+            {/if}
+          </div>
+        {/if}
+
+        <!--
           Layer 7: transient command acknowledgement (§33.10).
 
           Always mounted, so its status region outlives each message. It stands
@@ -2702,44 +2759,6 @@
         {#if escapeHintVisible}
           <div class="escape-hint" role="status" style:font-size="{overlayFontSizePx}px">
             Press Escape again to end
-          </div>
-        {/if}
-
-        <!--
-          What is running (#241): "Practising", the part, or both.
-
-          In this plane because it is words the presenter reads through the
-          glass, so it takes the corrective flip with the script. It takes the
-          edge away from the reading band (see `takeScopeAtTop`), and the
-          PHYSICAL right-hand side: the dock is in the unmirrored operator plane
-          at the bottom left, so under a horizontal mirror the label's side
-          flips in these coordinates to land on the right of the panel either
-          way.
-
-          Persistent rather than transient: it answers "is this the take?", a
-          question that matters for the whole reading, and it does not fade
-          with the dock. A blank hides it like everything else. Not a live
-          region: the take-controls drawer already announces the part, and two
-          regions would say the same thing twice.
-        -->
-        {#if takeScope && !app.blanked}
-          <div
-            class="take-scope"
-            class:flip-x={settings?.mirrorX ?? false}
-            data-edge={takeScopeAtTop ? 'top' : 'bottom'}
-            style:font-size="{overlayFontSizePx}px"
-            style:top={takeScopeTop}
-            style:bottom={takeScopeBottom}
-          >
-            <span class="take-scope-lead">{takeScope.lead}</span>
-            {#if takeScope.name}
-              <span class="take-scope-sep" aria-hidden="true">·</span>
-              <span class="take-scope-name">{takeScope.name}</span>
-            {/if}
-            {#if takeScope.done}
-              <span class="take-scope-sep" aria-hidden="true">·</span>
-              <span class="take-scope-done">{takeScope.done}</span>
-            {/if}
           </div>
         {/if}
 

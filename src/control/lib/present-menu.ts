@@ -238,7 +238,8 @@ export function practiceMenuItems(
       onselect: () => practise(),
     },
   ];
-  if (input.hereTokenIndex !== null) {
+  // At the beginning of an undivided script it would be the row above again.
+  if (input.hereTokenIndex !== null && (input.hereTokenIndex > 0 || input.herePart !== null)) {
     const token = input.hereTokenIndex;
     const part = input.herePart;
     items.push({
