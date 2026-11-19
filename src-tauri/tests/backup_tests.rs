@@ -441,6 +441,43 @@ async fn a_restore_refuses_a_script_folder_that_is_a_link() {
 }
 
 #[tokio::test]
+async fn a_restore_refuses_text_under_another_spelling_of_its_name() {
+    /*
+     * On a case-insensitive volume `SCRIPT.MD` answers a lookup for
+     * `script.md` — and the restore would copy it under the spelling it has,
+     * onto a volume where the app looks for the other one.
+     */
+    let h = harness().await;
+    let script = repo::create_script(&h.pool, &h.paths, create_input("Shouty", "# Shouty"))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = Path::new(&export.path);
+    let folder = export_root.join("scripts").join(&script.id);
+    fs::rename(folder.join("script.md"), folder.join("SCRIPT.MD")).expect("respell");
+    let mut manifest = manifest_of(export_root);
+    let lower = format!("scripts/{}/script.md", script.id);
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["path"] == lower.as_str() {
+            file["path"] = serde_json::json!(format!("scripts/{}/SCRIPT.MD", script.id));
+        }
+    }
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    let err = backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect_err("text under another spelling is not the script's text");
+    assert!(err.to_string().contains("Shouty"), "{err}");
+}
+
+#[tokio::test]
 async fn a_restore_preview_counts_the_scripts_the_database_indexes() {
     let h = harness().await;
     for title in ["One", "Two"] {
