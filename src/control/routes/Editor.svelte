@@ -52,6 +52,7 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import { speechModelReadiness } from '../stores/speech-model-readiness';
   import {
     lastEndingFor,
+    newestEnding,
     snapToStart,
     type RecordedEnding,
     type StartPoint,
@@ -978,21 +979,7 @@ import type { PresentationMode } from '../services/settings-types';
     void listSessionRecords(id, 20)
       .then((records) => {
         if (!current || scriptId !== id) return;
-        /*
-         * Newest first is what Rust returns; the first one with an ending is
-         * the one to resume from. A take abandoned before it recorded an end
-         * has nothing to offer and is skipped rather than treated as zero.
-         *
-         * Deliberately NOT "the newest one whose source still matches": after
-         * an edit that would quietly offer an OLDER take's ending as the last
-         * one. The newest ending is the last ending, and when the script has
-         * changed since, there is simply none to offer.
-         */
-        const newest = records.find((r) => (r.endTokenIndex ?? 0) > 0);
-        lastEndingRecord =
-          newest === undefined
-            ? null
-            : { scriptSourceHash: newest.scriptSourceHash, endTokenIndex: newest.endTokenIndex };
+        lastEndingRecord = newestEnding(records);
       })
       .catch(() => {
         // A history that will not load costs one menu row. It must never stop
@@ -1003,7 +990,23 @@ import type { PresentationMode } from '../services/settings-types';
     };
   });
 
-  const lastEndingPoint = $derived(lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput));
+  /*
+   * Only against a compile of the text on screen. Typing advances the editor's
+   * revision at once while the compile follows a debounce later, and in that
+   * window the previous compile still matches the recorded source — so the row
+   * would quote a sentence the presenter has just deleted.
+   */
+  const compileIsCurrent = $derived(
+    $editor.scriptId === scriptId &&
+      !$editor.loading &&
+      $compiled.scriptId === scriptId &&
+      $compiled.status === 'ready' &&
+      $compiled.editorRevision === $editor.editorRevision,
+  );
+
+  const lastEndingPoint = $derived(
+    compileIsCurrent ? lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput) : null,
+  );
 
   const presentStartItems = $derived(
     startMenuItems(

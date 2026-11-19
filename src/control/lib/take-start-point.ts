@@ -334,6 +334,23 @@ export interface RecordedEnding {
   endTokenIndex?: number;
 }
 
+/**
+ * The record "From last ending" resumes from: the newest one with an ending.
+ *
+ * Records arrive newest first, as Rust lists them. A take abandoned before it
+ * recorded an end has nothing to offer and is skipped rather than read as zero.
+ *
+ * Deliberately NOT "the newest whose source still matches": after an edit that
+ * would quietly offer an OLDER take's ending as the last one. The newest ending
+ * is the last ending, and once the script has changed there is none to offer.
+ */
+export function newestEnding(records: readonly RecordedEnding[]): RecordedEnding | null {
+  const newest = records.find((r) => (r.endTokenIndex ?? 0) > 0);
+  return newest === undefined
+    ? null
+    : { scriptSourceHash: newest.scriptSourceHash, endTokenIndex: newest.endTokenIndex };
+}
+
 /** A last-ending start point, with the source it is valid against. */
 export interface LastEnding extends StartPoint {
   sourceHash: string;

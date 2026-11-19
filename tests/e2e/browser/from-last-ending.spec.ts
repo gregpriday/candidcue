@@ -23,44 +23,28 @@ const SCRIPT = {
 /** Three words into "Repeat this tricky passage." (tokens 4–7). */
 const END_TOKEN = 6;
 
-async function installHistory(page: Page): Promise<void> {
-  await page.addInitScript(
-    (cfg: { scriptId: string; sourceHash: string; endTokenIndex: number }) => {
-      const internals = (
-        window as unknown as {
-          __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> };
-        }
-      ).__TAURI_INTERNALS__;
-      const invoke = internals.invoke.bind(internals);
-      internals.invoke = (command: string, args?: unknown) => {
-        if (command === 'list_sessions') {
-          return Promise.resolve([
-            {
-              id: 'session-448-0001',
-              sessionGeneration: 3,
-              scriptId: cfg.scriptId,
-              scriptSourceHash: cfg.sourceHash,
-              startedAt: '2026-11-18T09:00:00.000Z',
-              endedAt: '2026-11-18T09:01:10.000Z',
-              mode: 'voice',
-              startTokenIndex: 0,
-              endTokenIndex: cfg.endTokenIndex,
-              durationMs: 70_000,
-              softPauseMs: 0,
-              commandCount: 0,
-              retakeCount: 0,
-              reconnectCount: 0,
-              manualCorrectionCount: 0,
-            },
-          ]);
-        }
-        return invoke(command, args);
-      };
-    },
-    // The compiler hashes the source with any leading BOM removed; the seed has none.
-    { scriptId: SCRIPT.id, sourceHash: hashString(SCRIPT.source), endTokenIndex: END_TOKEN },
-  );
-}
+/** One finished take, recorded against the seeded source. */
+const HISTORY = [
+  {
+    id: 'session-448-0001',
+    sessionGeneration: 3,
+    scriptId: SCRIPT.id,
+    // The compiler's own hash: it hashes the source with any leading BOM
+    // removed, and the seed has none.
+    scriptSourceHash: hashString(SCRIPT.source),
+    startedAt: '2026-11-18T09:00:00.000Z',
+    endedAt: '2026-11-18T09:01:10.000Z',
+    mode: 'voice',
+    startTokenIndex: 0,
+    endTokenIndex: END_TOKEN,
+    durationMs: 70_000,
+    softPauseMs: 0,
+    commandCount: 0,
+    retakeCount: 0,
+    reconnectCount: 0,
+    manualCorrectionCount: 0,
+  },
+];
 
 function menu(page: Page): Locator {
   return page.getByRole('menu', { name: 'How to present' });
@@ -88,8 +72,8 @@ test.beforeEach(async ({ page }) => {
     seedScripts: [SCRIPT],
     engineStatus: { available: true, loaded: true, model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05' },
     promptMode: 'voice',
+    sessionHistory: HISTORY,
   });
-  await installHistory(page);
   await page.goto('/control.html');
   await openScript(page, SCRIPT.title);
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
@@ -133,6 +117,12 @@ test('inserting text before the ending withdraws the row instead of naming anoth
 });
 
 test('deleting the sentence the take ended in withdraws the row', async ({ page }) => {
+  // Established first, so the absence below is the edit's doing and not a
+  // history that never loaded.
+  await openMenu(page);
+  await expect(row(page, 'From last ending')).toContainText('Repeat this tricky passage.');
+  await closeMenu(page);
+
   await page.locator('.cm-line', { hasText: 'Repeat this tricky passage.' }).click();
   await page.keyboard.press('End');
   await page.keyboard.press('Shift+Home');
@@ -141,4 +131,24 @@ test('deleting the sentence the take ended in withdraws the row', async ({ page 
 
   await openMenu(page);
   await expect(row(page, 'From last ending')).toHaveCount(0);
+});
+
+test('a launch is refused when the saved script changed after the row was offered', async ({ page }) => {
+  await openMenu(page);
+  const lastEnding = row(page, 'From last ending');
+  await expect(lastEnding).toContainText('Repeat this tricky passage.');
+
+  // Another app edits the file. The editor still holds — and offers — the
+  // text it loaded; the take is compiled from what is saved.
+  await page.evaluate(
+    ({ id, source }) => window.__E2E__.setScriptSource(id, source),
+    { id: SCRIPT.id, source: `A new introduction first. ${SCRIPT.source}` },
+  );
+  await lastEnding.click();
+
+  await expect(page.getByText('The script has changed since that take ended')).toBeVisible();
+  const commands = await page.evaluate(() => window.__E2E__.calls.map((call) => call.command));
+  expect(commands).toContain('get_script');
+  expect(commands).not.toContain('start_session');
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
 });

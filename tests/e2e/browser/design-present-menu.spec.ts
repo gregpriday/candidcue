@@ -178,47 +178,31 @@ async function pretendMac(page: Page): Promise<void> {
 }
 
 /**
- * The session history, as Rust would answer `list_sessions`.
- *
- * Registered after the shim, so its `__TAURI_INTERNALS__` is already there to
- * wrap. Only the one command is taken over.
+ * The session history, as Rust would answer `list_sessions`, carrying the
+ * compiler's own hash of the seeded source: "From last ending" is offered only
+ * against the source the take was read from (#448).
  */
-async function installHistory(page: Page, script: Seed, endTokenIndex: number | undefined): Promise<void> {
-  await page.addInitScript(
-    (cfg: { scriptId: string; sourceHash: string; endTokenIndex: number | null }) => {
-      const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
-      const invoke = internals.invoke.bind(internals);
-      internals.invoke = (command: string, args?: unknown) => {
-        if (command === 'list_sessions' && cfg.endTokenIndex !== null) {
-          return Promise.resolve([
-            {
-              id: 'session-design-0001',
-              sessionGeneration: 3,
-              scriptId: cfg.scriptId,
-              scriptSourceHash: cfg.sourceHash,
-              startedAt: '2026-10-17T09:00:00.000Z',
-              endedAt: '2026-10-17T09:02:10.000Z',
-              mode: 'voice',
-              startTokenIndex: 0,
-              endTokenIndex: cfg.endTokenIndex,
-              durationMs: 130_000,
-              softPauseMs: 0,
-              commandCount: 0,
-              retakeCount: 0,
-              reconnectCount: 0,
-              manualCorrectionCount: 0,
-            },
-          ]);
-        }
-        return invoke(command, args);
-      };
+function history(script: Seed, endTokenIndex: number | undefined) {
+  if (endTokenIndex === undefined) return [];
+  return [
+    {
+      id: 'session-design-0001',
+      sessionGeneration: 3,
+      scriptId: script.id,
+      scriptSourceHash: hashString(script.source),
+      startedAt: '2026-10-17T09:00:00.000Z',
+      endedAt: '2026-10-17T09:02:10.000Z',
+      mode: 'voice',
+      startTokenIndex: 0,
+      endTokenIndex,
+      durationMs: 130_000,
+      softPauseMs: 0,
+      commandCount: 0,
+      retakeCount: 0,
+      reconnectCount: 0,
+      manualCorrectionCount: 0,
     },
-    /*
-     * The compiler's own hash of the seeded source: "From last ending" is
-     * offered only against the source the take was read from (#448).
-     */
-    { scriptId: script.id, sourceHash: hashString(script.source), endTokenIndex: endTokenIndex ?? null },
-  );
+  ];
 }
 
 function menu(page: Page): Locator {
@@ -238,8 +222,8 @@ async function openMenu(page: Page, scenario: Scenario): Promise<void> {
     seedScripts: [scenario.script],
     promptMode: 'voice',
     presentationMode: scenario.mode,
+    sessionHistory: history(scenario.script, scenario.lastEndToken),
   });
-  await installHistory(page, scenario.script, scenario.lastEndToken);
   await page.goto('/control.html');
   await openScript(page, scenario.script.title);
   const editor = page.getByRole('textbox', { name: 'Script Markdown' });

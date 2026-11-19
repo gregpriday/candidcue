@@ -18,6 +18,7 @@ import {
   describeStartPoint,
   flattenOutline,
   lastEndingFor,
+  newestEnding,
   snapToStart,
   type SnapInput,
 } from '../../../src/control/lib/take-start-point';
@@ -292,6 +293,26 @@ describe('lastEndingFor', () => {
     expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
     const undone = compiled(ORIGINAL);
     expect(lastEndingFor(record, undone.sourceHash, undone.input)?.tokenIndex).toBe(4);
+  });
+
+  it('resumes from the newest take with an ending, not the newest one that still matches', () => {
+    const edited = compiled(`A new introduction first. ${ORIGINAL}`);
+    // Newest first, as Rust lists them: an abandoned take with no ending, the
+    // last real ending (recorded against the edited text, then edited again —
+    // here, against the ORIGINAL), and an older ending against the edited text.
+    const records = [
+      { scriptSourceHash: edited.sourceHash },
+      { scriptSourceHash: edited.sourceHash, endTokenIndex: 0 },
+      { scriptSourceHash: recorded.sourceHash, endTokenIndex: 6 },
+      { scriptSourceHash: edited.sourceHash, endTokenIndex: 10 },
+    ];
+    expect(newestEnding(records)).toEqual({ scriptSourceHash: recorded.sourceHash, endTokenIndex: 6 });
+    // Against the edited text the last ending is unknown, so nothing is offered —
+    // not the older take's ending dressed up as the last one.
+    expect(lastEndingFor(newestEnding(records), edited.sourceHash, edited.input)).toBeNull();
+    expect(lastEndingFor(newestEnding(records), recorded.sourceHash, recorded.input)?.tokenIndex).toBe(4);
+    expect(newestEnding([])).toBeNull();
+    expect(newestEnding([{ scriptSourceHash: recorded.sourceHash }])).toBeNull();
   });
 
   it('offers nothing without a record, an ending, or a compile', () => {
