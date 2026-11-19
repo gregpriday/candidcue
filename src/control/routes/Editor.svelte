@@ -58,7 +58,6 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
     type StartPoint,
   } from '../lib/take-start-point';
   import { partAt } from '../../shared/markdown/parts';
-  import { sourceHash } from '../../shared/markdown/hash';
   import { listSessionRecords } from '../services/session-records';
   import { session } from '../stores/session';
   import { takeDestination, watchTakeDestination } from '../stores/destination';
@@ -992,20 +991,26 @@ import type { PresentationMode } from '../services/settings-types';
   });
 
   /*
-   * The compiler's hash of the text on screen, so the row is offered only from
-   * a compile of that text: the compile trails typing by a debounce. Through
-   * its own `$derived`, so it is recomputed when the text changes and not on
-   * every other editor update.
+   * Only from a compile of the text on screen, compared as text.
+   *
+   * The compile trails typing by a debounce, and in that window a compile of
+   * the old text still matches the record — the row would quote a sentence the
+   * presenter has just deleted. Revisions cannot stand in for this: a take's
+   * own compile supersedes a pending editor one, which then never lands, so an
+   * edit undone before it caught up would hide the row on unchanged text. Nor
+   * can the hash, which ignores a run of leading byte-order marks the parser
+   * does not.
    */
-  const editorSource = $derived(
-    $editor.scriptId === scriptId && !$editor.loading ? $editor.source : null,
+  const compileIsOfTextOnScreen = $derived(
+    $editor.scriptId === scriptId &&
+      !$editor.loading &&
+      $compiled.scriptId === scriptId &&
+      typeof $compiled.source === 'string' &&
+      $compiled.source === $editor.source,
   );
-  const onScreenSourceHash = $derived(editorSource === null ? null : sourceHash(editorSource));
 
   const lastEndingPoint = $derived(
-    $compiled.scriptId === scriptId
-      ? lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput, onScreenSourceHash)
-      : null,
+    compileIsOfTextOnScreen ? lastEndingFor(lastEndingRecord, result?.sourceHash, snapInput) : null,
   );
 
   const presentStartItems = $derived(

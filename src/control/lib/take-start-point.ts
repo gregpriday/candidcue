@@ -369,12 +369,6 @@ export interface LastEnding extends StartPoint {
  * own hash. Any other source withholds the row rather than guess. Undoing the
  * edit brings it back.
  *
- * `onScreenHash` is the same hash of the text the editor is showing. The
- * compile trails the text by a debounce, and in that window a compile of the
- * old text still matches the record — so without it the row would quote a
- * sentence the presenter has just deleted. Comparing text rather than editor
- * revisions keeps the row when an edit is undone before the compile catches up.
- *
  * `sourceHash` travels with the point so the launch can check it once more
  * against the compile the stage is built from: the script can still change
  * between choosing the row and the take starting.
@@ -383,11 +377,9 @@ export function lastEndingFor(
   record: RecordedEnding | null | undefined,
   sourceHash: string | null | undefined,
   input: SnapInput,
-  onScreenHash: string | null | undefined,
 ): LastEnding | null {
   if (record === null || record === undefined) return null;
   if (!sourceHash || record.scriptSourceHash !== sourceHash) return null;
-  if (onScreenHash !== sourceHash) return null;
   const point = continueFrom(record.endTokenIndex, input);
   return point === null ? null : { ...point, sourceHash };
 }

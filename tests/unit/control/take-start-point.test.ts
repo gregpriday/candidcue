@@ -24,7 +24,6 @@ import {
 } from '../../../src/control/lib/take-start-point';
 import type { OutlineNode, SentenceUnit } from '../../../src/shared/contracts';
 import { compile } from '../../../src/shared/markdown/compile';
-import { sourceHash } from '../../../src/shared/markdown/hash';
 
 function sentence(id: string, start: number, end: number, text: string): SentenceUnit {
   return {
@@ -267,7 +266,7 @@ describe('lastEndingFor', () => {
   const record = { scriptSourceHash: recorded.sourceHash, endTokenIndex: 6 };
 
   it('offers the recorded passage while the script is unchanged', () => {
-    const point = lastEndingFor(record, recorded.sourceHash, recorded.input, recorded.sourceHash);
+    const point = lastEndingFor(record, recorded.sourceHash, recorded.input);
     expect(point).not.toBeNull();
     expect(point!.tokenIndex).toBe(4);
     expect(point!.kind).toBe('last_ending');
@@ -280,20 +279,20 @@ describe('lastEndingFor', () => {
     const edited = compiled(`A new introduction first. ${ORIGINAL}`);
     // The bug: the same number now snaps to an unrelated sentence.
     expect(continueFrom(record.endTokenIndex, edited.input)?.excerpt).toMatch(/^“Opening words/);
-    expect(lastEndingFor(record, edited.sourceHash, edited.input, edited.sourceHash)).toBeNull();
+    expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
   });
 
   it('withholds it when the sentence the take ended in is deleted', () => {
     const edited = compiled('Opening words go here. Closing words go here.\n');
     expect(continueFrom(record.endTokenIndex, edited.input)).not.toBeNull();
-    expect(lastEndingFor(record, edited.sourceHash, edited.input, edited.sourceHash)).toBeNull();
+    expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
   });
 
   it('offers it again once the edit is undone', () => {
     const edited = compiled(`A new introduction first. ${ORIGINAL}`);
-    expect(lastEndingFor(record, edited.sourceHash, edited.input, edited.sourceHash)).toBeNull();
+    expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
     const undone = compiled(ORIGINAL);
-    expect(lastEndingFor(record, undone.sourceHash, undone.input, undone.sourceHash)?.tokenIndex).toBe(4);
+    expect(lastEndingFor(record, undone.sourceHash, undone.input)?.tokenIndex).toBe(4);
   });
 
   it('resumes from the newest take with an ending, not the newest one that still matches', () => {
@@ -310,35 +309,18 @@ describe('lastEndingFor', () => {
     expect(newestEnding(records)).toEqual({ scriptSourceHash: recorded.sourceHash, endTokenIndex: 6 });
     // Against the edited text the last ending is unknown, so nothing is offered —
     // not the older take's ending dressed up as the last one.
-    expect(lastEndingFor(newestEnding(records), edited.sourceHash, edited.input, edited.sourceHash)).toBeNull();
-    expect(lastEndingFor(newestEnding(records), recorded.sourceHash, recorded.input, recorded.sourceHash)?.tokenIndex).toBe(4);
+    expect(lastEndingFor(newestEnding(records), edited.sourceHash, edited.input)).toBeNull();
+    expect(lastEndingFor(newestEnding(records), recorded.sourceHash, recorded.input)?.tokenIndex).toBe(4);
     expect(newestEnding([])).toBeNull();
     expect(newestEnding([{ scriptSourceHash: recorded.sourceHash }])).toBeNull();
   });
 
-  it('withholds it while the compile still trails the text on screen', () => {
-    // The ending's sentence was just deleted; the debounced compile has not
-    // caught up, and the one in hand is of the original text.
-    const onScreen = sourceHash('Opening words go here. Closing words go here.\n');
-    expect(lastEndingFor(record, recorded.sourceHash, recorded.input, onScreen)).toBeNull();
-    // An edit undone before the compile caught up: the text is the original
-    // again, so the compile in hand is a compile of it.
-    expect(lastEndingFor(record, recorded.sourceHash, recorded.input, sourceHash(ORIGINAL))?.tokenIndex).toBe(4);
-  });
-
-  it('hashes the text on screen exactly as the compiler does', () => {
-    expect(sourceHash(ORIGINAL)).toBe(recorded.sourceHash);
-    // A leading byte-order mark is not part of the text.
-    expect(sourceHash(`\uFEFF${ORIGINAL}`)).toBe(compile(`\uFEFF${ORIGINAL}`, { scriptId: 'script-448' }).sourceHash);
-    expect(sourceHash(`\uFEFF${ORIGINAL}`)).toBe(recorded.sourceHash);
-  });
-
   it('offers nothing without a record, an ending, or a compile', () => {
-    expect(lastEndingFor(null, recorded.sourceHash, recorded.input, recorded.sourceHash)).toBeNull();
-    expect(lastEndingFor({ scriptSourceHash: recorded.sourceHash }, recorded.sourceHash, recorded.input, recorded.sourceHash)).toBeNull();
-    expect(lastEndingFor(record, null, recorded.input, null)).toBeNull();
+    expect(lastEndingFor(null, recorded.sourceHash, recorded.input)).toBeNull();
+    expect(lastEndingFor({ scriptSourceHash: recorded.sourceHash }, recorded.sourceHash, recorded.input)).toBeNull();
+    expect(lastEndingFor(record, null, recorded.input)).toBeNull();
     // An empty hash on either side establishes nothing.
-    expect(lastEndingFor({ ...record, scriptSourceHash: '' }, '', recorded.input, '')).toBeNull();
+    expect(lastEndingFor({ ...record, scriptSourceHash: '' }, '', recorded.input)).toBeNull();
   });
 });
 

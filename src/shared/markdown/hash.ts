@@ -29,20 +29,6 @@ export function hashString(input: string): string {
   return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
 }
 
-const LEADING_BYTE_ORDER_MARKS = /^\uFEFF+/;
-
-/**
- * A script's `sourceHash`, exactly as the compiler stamps it on a compile.
- *
- * Leading byte-order marks are not part of the text, so a file saved with one
- * hashes the same as the file without. Here rather than in the compiler so a
- * window can ask "is this compile of the text on screen?" without loading the
- * compiler to find out.
- */
-export function sourceHash(source: string): string {
-  return hashString(source.replace(LEADING_BYTE_ORDER_MARKS, ''));
-}
-
 /** Short 8-char variant for embedded IDs. */
 export function shortHash(input: string): string {
   return fnv1a32(input, 0x811c9dc5).toString(16).padStart(8, '0');

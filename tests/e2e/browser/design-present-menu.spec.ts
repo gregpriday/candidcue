@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { openScript } from './fixtures/library';
-import { sourceHash } from '../../../src/shared/markdown/hash';
+import { hashString } from '../../../src/shared/markdown/hash';
 
 const CAPTURE = process.env['DESIGN_CAPTURE'] === '1';
 const OUT = process.env['DESIGN_CAPTURE_DIR'];
@@ -189,7 +189,7 @@ function history(script: Seed, endTokenIndex: number | undefined) {
       id: 'session-design-0001',
       sessionGeneration: 3,
       scriptId: script.id,
-      scriptSourceHash: sourceHash(script.source),
+      scriptSourceHash: hashString(script.source),
       startedAt: '2026-10-17T09:00:00.000Z',
       endedAt: '2026-10-17T09:02:10.000Z',
       mode: 'voice',
