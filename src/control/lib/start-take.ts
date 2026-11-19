@@ -332,34 +332,37 @@ function restoreFrameFor(saved: AppSettings, mode: PresentationMode): ReaderFram
  *    mirror would take it away from the glass for good;
  *  - the save failed. `patchSettings` has already rolled back and said so.
  *
- * The newest saved section is the base, so a rig saved since this take began
- * is kept.
+ * The newest saved section is the base, and what a refused or unsaved take
+ * composes from, so a rig saved since this take began is neither lost nor
+ * contradicted by the first appearance change.
  */
 async function chooseCameraAboveRig(
   s: AppSettings,
   panel: DisplayDescriptor | null,
 ): Promise<AppSettings['optical']> {
   const latest = get(settings)?.optical ?? s.optical;
+  // Whatever is saved NOW, refused or not: recomposition mid-take reads that.
+  const saved = (): AppSettings['optical'] => get(settings)?.optical ?? s.optical;
   if (panel === null) {
     showToast(
       'Speaking Glass could not tell which screen this is, so it was not set up for the camera above it. Present opened it as it would any other take.',
       'info',
     );
-    return s.optical;
+    return saved();
   }
   if (isPrompterGlass(panel) || isMirroredGlassRig(latest, panel.fingerprint)) {
     showToast(
       'This screen is a teleprompter, so it was left as it is. Move the Speaking Glass window to the screen with the camera above it and choose Camera above this screen again.',
       'info',
     );
-    return s.optical;
+    return saved();
   }
   const t = s.teleprompter;
   const seed = { intensity: t.textIntensity, readingCue: t.readingCue, bias: t.sizeBias };
   const next = withCameraAboveRig(latest, panel, seed);
   return patchSettings('optical', next).then(
     () => next,
-    () => s.optical,
+    () => saved(),
   );
 }
 
