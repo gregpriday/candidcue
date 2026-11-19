@@ -499,6 +499,27 @@ describe('a mode switched while the sheet is held', () => {
     expect(launch).toHaveBeenCalledTimes(1);
   });
 
+  it('takes the sheet down while it checks again, so the old launch cannot be pressed past a newer one', async () => {
+    setMode('manual');
+    const launch = vi.fn(async () => {});
+    await checkThenStart('script-1', { requested: true }, launch);
+
+    setMode('voice');
+    const permission = deferred<string>();
+    h.readMicrophonePermission.mockReturnValueOnce(permission.promise);
+    const rechecking = startAnyway();
+    expect(get(takeReadinessPrompt), 'nothing left to press mid-check').toBeNull();
+
+    // A newer Present arrives while the old launch is being re-checked.
+    const newer = vi.fn(async () => {});
+    await checkThenStart('script-2', {}, newer);
+    permission.resolve('granted');
+    await rechecking;
+
+    expect(newer).toHaveBeenCalledTimes(1);
+    expect(launch, 'the older launch was retired by the newer one').not.toHaveBeenCalled();
+  });
+
   it('does not open the microphone for a launch that became Read', async () => {
     h.readMicrophonePermission.mockResolvedValue('denied');
     await checkThenStartTake('script-1');

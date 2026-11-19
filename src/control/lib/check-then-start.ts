@@ -160,6 +160,18 @@ export async function resolveTakeReadiness(
   scriptId: string,
   intent: LaunchIntent = {},
 ): Promise<ReadinessVerdict> {
+  return (await checkReadiness(scriptId, intent)).verdict;
+}
+
+/**
+ * The verdict, and the session mode it was reached for (#243) — read in the
+ * same synchronous stretch as the verdict's own `voiceTake`, so a Settings
+ * write landing between the two cannot stamp a Read verdict as a voice one.
+ */
+async function checkReadiness(
+  scriptId: string,
+  intent: LaunchIntent,
+): Promise<{ verdict: ReadinessVerdict; sessionMode: SessionMode }> {
   /*
    * Both passive: a device list and the OS's answer about access, neither of
    * which can prompt (§28.1). And neither asked at all for a Read take (#243):
@@ -222,7 +234,7 @@ export async function resolveTakeReadiness(
   const here = get(route);
   const destinationWatched = here.name === 'editor' && here.scriptId === scriptId;
 
-  return resolveReadiness({
+  const verdict = resolveReadiness({
     voiceTake: s.general.defaultSessionMode === 'voice',
     modelInstalled: model.installed,
     modelSupported: model.supported,
@@ -244,6 +256,7 @@ export async function resolveTakeReadiness(
         : (get(takeDestination)?.mismatch ?? null),
     requested: intent.requested ?? false,
   });
+  return { verdict, sessionMode: s.general.defaultSessionMode };
 }
 
 /**
@@ -260,10 +273,8 @@ export async function checkThenStart(
   launch: () => Promise<unknown>,
 ): Promise<void> {
   const mine = ++generation;
-  const verdict = await resolveTakeReadiness(scriptId, intent);
+  const { verdict, sessionMode } = await checkReadiness(scriptId, intent);
   if (mine !== generation) return;
-  // Read after the check, as `resolveTakeReadiness` reads it for `voiceTake`.
-  const sessionMode = get(settings).general.defaultSessionMode;
   if (!verdict.show) {
     // A sheet held over an earlier attempt is answered by this one. Left up,
     // it would sit over the take with that attempt's launch still behind it.
@@ -320,7 +331,7 @@ export function dismissTakeReadiness(): void {
 export async function startAnyway(): Promise<void> {
   const held = get(prompt);
   if (held !== null && modeChangedSince(held)) {
-    await held.rerun();
+    await recheckForNewMode(held);
     return;
   }
   dismissTakeReadiness();
@@ -331,6 +342,20 @@ export async function startAnyway(): Promise<void> {
 /** Has Settings switched between Follow voice and Read since `held` was checked? */
 function modeChangedSince(held: TakeReadinessPrompt): boolean {
   return get(settings).general.defaultSessionMode !== held.sessionMode;
+}
+
+/**
+ * Check `held`'s launch again, for the mode Settings now says.
+ *
+ * The sheet comes down first, WITHOUT retiring anything: left up during the
+ * check, it could be pressed again — and once the mode had been switched back
+ * its start would take the old launch straight past a newer Present still
+ * being checked. The rerun is still this launch's own check, so a newer one
+ * outranks it as usual and the sheet it puts up, if any, is the new verdict's.
+ */
+async function recheckForNewMode(held: TakeReadinessPrompt): Promise<void> {
+  if (get(prompt) === held) prompt.set(null);
+  await held.rerun();
 }
 
 /**
@@ -356,7 +381,7 @@ export async function allowMicrophoneForTake(): Promise<void> {
   // Switched to Read since this sheet asked: nothing needs the microphone now,
   // so it is not opened — the launch is checked again as what it now is.
   if (modeChangedSince(held)) {
-    await held.rerun();
+    await recheckForNewMode(held);
     return;
   }
   let answer: 'granted' | 'denied';
