@@ -119,6 +119,13 @@
    */
   let typed: string | null = null;
   let draft = $derived.by(() => (typed !== null && typed.trim() === title ? typed : title));
+  /*
+   * What the field's measure holds: the draft as the field shows it. An input
+   * drops line breaks from its value, and a saved title can still carry one,
+   * so the measure drops them too; an empty draft keeps a space's width so the
+   * caret has somewhere to sit.
+   */
+  const measuredDraft = $derived(draft.replace(/[\r\n]/g, '') || '\u00a0');
 
   function commitTitle(): void {
     typed = null;
@@ -206,8 +213,17 @@
             rather than from whatever is half-typed, and heading navigation
             still finds the route.
           -->
+          <!--
+            `size={1}` and the measure beside it: an input is as wide as its
+            `size` (twenty average characters) whatever it holds, so on its own
+            the field cut a long name off at ~184px with the toolbar half empty.
+            The hidden measure carries the draft in the field's own type and
+            sets the width instead, and the toolbar's flex shrink caps it.
+            The input comes first so the heading's baseline is the field's.
+          -->
           <input
             class="title-input"
+            size={1}
             bind:this={titleElement}
             bind:value={draft}
             aria-label="Script title"
@@ -215,6 +231,7 @@
             onblur={commitTitle}
             onkeydown={titleKeydown}
           />
+          <span class="title-measure" aria-hidden="true">{measuredDraft}</span>
         {:else}
           {title}
         {/if}
@@ -320,17 +337,27 @@
   }
   /*
    * Unclipped while editing. The ellipsis above needs `overflow: hidden`, and
-   * the input below sits 8px LEFT of this box on purpose (its padding lives in
-   * the gap so its text lines up with the resting title) — so the resting clip
-   * cut the field's left border and focus edge off. The input truncates its
-   * own text, so nothing here is lost by letting it show.
+   * the field sits 8px LEFT of where the resting title would on purpose (its
+   * padding lives in the gap so its text lines up with the resting title) — so
+   * the resting clip cut the field's left border and focus edge off. The input
+   * truncates its own text, so nothing here is lost by letting it show.
+   *
+   * One grid cell holds the field and its measure. The column is as wide as
+   * the measure's text and no wider than the toolbar lets the heading be: the
+   * `0` floor is what lets it shrink below the text, where the field ends in
+   * its ellipsis.
    */
   .title.editing {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, auto);
+    margin-left: calc(-1 * var(--space-2));
     min-width: 0;
     flex: 0 1 auto;
     overflow: visible;
     text-overflow: clip;
+  }
+  .title.editing > * {
+    grid-area: 1 / 1;
   }
 
   /*
@@ -340,8 +367,9 @@
    * field that always looks like a field turns the document's name into a form
    * control, and the name is the first thing on the screen.
    */
-  .title-input {
-    margin: 0 0 0 calc(-1 * var(--space-2));
+  .title-input,
+  .title-measure {
+    margin: 0;
     padding: 0 var(--space-2);
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
@@ -353,11 +381,26 @@
     letter-spacing: -0.006em;
     color: var(--text-primary);
     min-width: 0;
+  }
+  .title-input {
     width: 100%;
     height: var(--toolbar-control-h);
     transition:
       background var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out);
+  }
+  /*
+   * Takes space, shows nothing. `pre` keeps the draft's spaces as the field
+   * keeps them, and the extra 2px at the end is the caret's room plus rounding
+   * — without it a title that exactly fits measures a pixel short and ends in
+   * an ellipsis it does not need.
+   */
+  .title-measure {
+    padding-inline-end: calc(var(--space-2) + 2px);
+    white-space: pre;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
   }
   /* At rest the field is the title, so it ends the way the title does: with an
      ellipsis, not a word cut in half. Focus drops it so the caret can scroll. */
