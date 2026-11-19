@@ -208,13 +208,26 @@ describe.each(THEMES)('$name tokens', ({ selectors }) => {
    * in --accent-strong, never --accent: the accent is a fill colour and is
    * allowed to sit under 4.5:1 on the lighter surfaces. #231 asks for this
    * floor in both desk appearances; the take's palette is held to it as well.
+   * The status bar's hover and press fills count too (a status item can be
+   * accented), and so does the accent pill, whose label sits on --accent-soft
+   * (StatusPill.svelte).
    */
   it('--accent-strong clears AA (4.5:1) as small text on every opaque surface', () => {
     const hex = resolve(block, '--accent-strong');
-    for (const surface of surfaces) {
+    const grounds = [
+      ...surfaces,
+      ...[...STATUSBAR_FILLS, '--accent-soft'].map((name) => ({
+        name,
+        hex: resolve(block, name),
+      })),
+    ];
+    for (const ground of grounds) {
+      expect(ground.hex, `${ground.name} must be opaque to be checked`).toMatch(
+        /^#[0-9a-f]{6}$/i,
+      );
       expect(
-        contrast(hex, surface.hex),
-        `--accent-strong (${hex}) on ${surface.name} (${surface.hex})`,
+        contrast(hex, ground.hex),
+        `--accent-strong (${hex}) on ${ground.name} (${ground.hex})`,
       ).toBeGreaterThanOrEqual(4.5);
     }
   });
@@ -325,6 +338,15 @@ describe('the dark desk', () => {
    * every assertion above would go on passing, because the overlay supplies
    * the light value to check. So the dark block must redeclare every token.
    */
+  /*
+   * Every check here reads the FIRST block with this selector. A second one
+   * later in the file would win the cascade without being checked at all.
+   */
+  it('is declared once, so nothing later quietly overrides what is checked', () => {
+    expect(TOKENS.split(`${DARK_DESK_SELECTOR} {`).length - 1).toBe(1);
+    expect(TOKENS.split(`${WORKSPACE_SELECTOR} {`).length - 1).toBe(1);
+  });
+
   it('redeclares every token the light workspace block declares', () => {
     const dark = themeBlock(DARK_DESK_SELECTOR);
     const missing = [...themeBlock(WORKSPACE_SELECTOR).keys()].filter((name) => !dark.has(name));
