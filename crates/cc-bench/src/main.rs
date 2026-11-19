@@ -1287,6 +1287,8 @@ fn capture_all_local(
         .collect();
     dirs.sort();
 
+    std::fs::create_dir_all(runs_dir)?;
+    let staging = cc_bench::provenance::staging_root(runs_dir);
     for dir in dirs {
         let name = dir.file_name().unwrap().to_string_lossy().to_string();
         let out_dir = runs_dir.join(&name);
@@ -1337,15 +1339,25 @@ fn capture_all_local(
             started.elapsed().as_secs_f64()
         );
         anyhow::ensure!(transcripts > 0, "capture produced no transcripts for {name}");
-        std::fs::create_dir_all(&out_dir)?;
-        cc_bench::capture_local::write_events_jsonl(&out_dir.join("events.jsonl"), &events)?;
+        // Assembled and sealed in this session's own staging directory, then
+        // moved into the corpus whole. Written in place, a second capture of
+        // the same corpus could overwrite these files between the last write
+        // and the seal, and the record would describe this recogniser over
+        // the other one's events.
+        let staged = staging.join(&name);
+        std::fs::create_dir_all(&staged)?;
+        cc_bench::capture_local::write_events_jsonl(&staged.join("events.jsonl"), &events)?;
         for file in ["gold.json", "manifest.json", "performance.txt"] {
-            std::fs::copy(dir.join(file), out_dir.join(file))?;
+            std::fs::copy(dir.join(file), staged.join(file))?;
         }
-        // Last, so an interrupted capture leaves a run with no record — which
-        // the gate refuses — rather than a record for files never finished.
-        cc_bench::provenance::seal_capture(&out_dir, &conditions)?;
+        cc_bench::provenance::seal_capture(&staged, &conditions)?;
+        if !cc_bench::provenance::publish_run(&staged, &out_dir)? {
+            println!("  discarded: {name} was captured by another session meanwhile");
+            std::fs::remove_dir_all(&staged)?;
+        }
     }
+    // Empty unless a run was discarded and its removal failed.
+    let _ = std::fs::remove_dir_all(&staging);
     Ok(())
 }
 

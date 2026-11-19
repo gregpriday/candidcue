@@ -272,6 +272,48 @@ pub fn seal_capture(run_dir: &Path, conditions: &CaptureConditions) -> anyhow::R
     Ok(record)
 }
 
+/// Where one capture session assembles its runs before publishing them: a
+/// directory beside the corpus, private to this process.
+///
+/// Beside rather than inside, because Tier B and Tier C replay every directory
+/// in the corpus, and a half-written run left there by an interrupted capture
+/// would stop every replay. On the same filesystem, so publishing is a rename.
+pub fn staging_root(runs_dir: &Path) -> std::path::PathBuf {
+    let name = runs_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "runs".to_string());
+    let parent = runs_dir.parent().filter(|p| !p.as_os_str().is_empty());
+    parent
+        .unwrap_or(Path::new("."))
+        .join(format!(".{name}.capturing-{}", std::process::id()))
+}
+
+/// Move a staged, sealed run into the corpus, never over a finished one.
+///
+/// Returns `false` when the corpus already holds a captured run of that name —
+/// another capture got there first — and leaves both untouched. This is what
+/// keeps two captures of one corpus from interleaving: written in place, one
+/// could seal the other's events with its own weights' digests, and the replay
+/// would verify a record that describes a recogniser that never heard them.
+pub fn publish_run(staged: &Path, out_dir: &Path) -> anyhow::Result<bool> {
+    let finished = || out_dir.join("events.jsonl").exists();
+    if finished() {
+        return Ok(false);
+    }
+    // A rename onto a directory that is not empty fails on every platform; on
+    // Unix one onto an EMPTY directory replaces it, which loses nothing.
+    match std::fs::rename(staged, out_dir) {
+        Ok(()) => Ok(true),
+        Err(_) if finished() => Ok(false),
+        Err(e) => anyhow::bail!(
+            "cannot move {} into place at {}: {e}",
+            staged.display(),
+            out_dir.display()
+        ),
+    }
+}
+
 /// Read a run's capture record, if it has one, and check it describes this
 /// run's files.
 ///
@@ -476,6 +518,38 @@ mod tests {
         std::fs::write(b.join("events.jsonl"), "abh").unwrap();
         std::fs::write(b.join("performance.txt"), "ello").unwrap();
         assert_ne!(fixture_digest(&a).unwrap(), fixture_digest(&b).unwrap());
+    }
+
+    /// The interleaving staging exists for: two captures of one run, the
+    /// second to finish must not replace or mix into the first.
+    #[test]
+    fn a_published_run_is_never_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let corpus = root.path().join("runs");
+        std::fs::create_dir_all(&corpus).unwrap();
+        let first = root.path().join("stage-a").join("r");
+        let second = root.path().join("stage-b").join("r");
+        write_run(&first, "r", "first\n");
+        write_run(&second, "r", "second\n");
+        seal_capture(&first, &conditions()).unwrap();
+        let mut other = conditions();
+        other.weights[0].sha256 = "def".into();
+        seal_capture(&second, &other).unwrap();
+
+        let out = corpus.join("r");
+        assert!(publish_run(&first, &out).unwrap());
+        assert!(!publish_run(&second, &out).unwrap());
+        let published = read_capture(&out, "r").unwrap().unwrap();
+        assert_eq!(published.weights[0].sha256, "abc");
+        assert_eq!(std::fs::read_to_string(out.join("events.jsonl")).unwrap(), "first\n");
+    }
+
+    #[test]
+    fn staging_is_beside_the_corpus_not_in_it() {
+        let root = staging_root(Path::new("../bench/runs-fr"));
+        assert_eq!(root.parent(), Some(Path::new("../bench")));
+        assert!(root.file_name().unwrap().to_string_lossy().starts_with(".runs-fr.capturing-"));
+        assert_eq!(staging_root(Path::new("runs")).parent(), Some(Path::new(".")));
     }
 
     #[test]
