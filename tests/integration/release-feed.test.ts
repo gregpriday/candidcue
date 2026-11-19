@@ -430,10 +430,11 @@ describe('a release is published through the origin it was staged for', () => {
 
   it('warns when the variable points staging anywhere installed copies do not poll', () => {
     for (const origin of [PUBLIC, 'https://updates.candidcue.com']) {
-      const lines = feed.originReport(origin, { fromVariable: true });
+      const lines = feed.originReport(`${origin}//`, { fromVariable: true });
       expect(lines[0]).toBe(`origin: ${origin}/releases/ (from SPEAKING_GLASS_PUBLIC_URL)`);
       expect(lines).toHaveLength(2);
       expect(lines[1]).toMatch(/^::warning title=Unexpected update origin::/);
+      expect(lines[1]).toContain(`staged for ${origin}/releases/,`);
       expect(lines[1]).toContain('installed copies poll https://updates.speakingglass.com/releases/');
       expect(lines[1]).toContain('SPEAKING_GLASS_PUBLIC_URL');
     }

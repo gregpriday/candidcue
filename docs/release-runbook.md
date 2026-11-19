@@ -189,13 +189,15 @@ the base compiled into the app (`UPDATE_BASE_URL` in
 `src-tauri/src/updater.rs`). Staging prints the origin it used, and whether it
 came from the variable, and warns (`Unexpected update origin`) on any other.
 Keep it at repository level only. The build job that stages names no
-environment, so it cannot see an environment variable; publishing can, and an
-environment value that differs from the repository one makes publishing refuse
-the stage (`the release was staged for …`).
+environment, so it cannot see an environment variable, while publishing can.
+Whatever origin the two jobs end up with must be the same (trailing slashes
+aside), or publishing refuses the stage (`the release was staged for …`).
 
 ### Where each setting lives, and how to check it
 
-All of them are under Settings → Secrets and variables → Actions:
+Repository-level settings are under Settings → Secrets and variables →
+Actions; an environment's own secrets are under Settings → Environments → that
+environment.
 
 - **Signing secrets** (`APPLE_*`, `TAURI_SIGNING_PRIVATE_KEY` and its
   password): repository level, always.
@@ -216,12 +218,16 @@ gh secret list --env release-stable      # only if the R2 secrets live on enviro
 gh secret list --env release-prerelease
 ```
 
-A secret cannot be read back, so a wrong `SPEAKING_GLASS_R2_BUCKET` shows only
-when publishing reads its own upload back from the public origin: `Every file
-must be readable at its public URL` fails, before the feed is touched, so no
-installed copy is pointed at it. Copy the name from Cloudflare (R2, the bucket
-whose Settings › Custom Domains lists `updates.speakingglass.com`) rather than
-from memory.
+A secret cannot be read back, and nothing before a real publish uses
+`SPEAKING_GLASS_R2_BUCKET`. A wrong one fails at `Upload the release files`
+(a bucket that does not exist, or one the token cannot write), or when
+publishing reads its upload back from the public origin (`Every file must be
+readable at its public URL`, before the feed goes up, then `The feed must
+serve what was announced`). Those read-backs check what the origin serves,
+not which bucket was written: a re-run after a partial publish to the right
+bucket can find the files already there. The only check of the bucket itself
+is in Cloudflare, so copy the name from there (R2, the bucket whose Settings ›
+Custom Domains lists `updates.speakingglass.com`) rather than from memory.
 
 ### The CandidCue-era settings, renamed
 
@@ -232,8 +238,7 @@ exists, a tag builds and stages, then stops at publishing with
 
 - [ ] Create the repository secret `SPEAKING_GLASS_R2_BUCKET`, holding the name
   of the bucket `updates.speakingglass.com` serves (#445 named `speaking-glass`;
-  confirm it in Cloudflare as above). Scope the R2 API token to that bucket
-  (#306).
+  confirm it in Cloudflare as above).
 - [ ] Optionally, create the repository variable `SPEAKING_GLASS_PUBLIC_URL` =
   `https://updates.speakingglass.com`, with no path. Leaving it unset does the
   same thing.
@@ -249,8 +254,11 @@ exists, a tag builds and stages, then stops at publishing with
 - [ ] Delete `CANDIDCUE_PUBLIC_URL`, `CANDIDCUE_R2_BUCKET` and `CANDIDCUE_UPDATER_PUBKEY`; nothing reads them, and the updater's public key is `plugins.updater.pubkey` in `tauri.conf.json`.
 - [ ] Leave the first real publish to its own release decision (§5). In it,
   `Every publishing credential must be present` lists all four R2 secrets
-  `present`, and `Every file must be readable at its public URL` is the step
-  that proves the bucket and the origin agree.
+  `present`, and the upload and both read-backs from the public origin pass.
+
+Replacing the account-wide R2 keys with a token scoped to that bucket (#306)
+is a separate change, not part of the rename: it takes effect only once
+`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` hold the new token's keys.
 
 ### The dry run
 

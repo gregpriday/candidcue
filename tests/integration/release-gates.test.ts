@@ -2362,10 +2362,9 @@ describe('the release settings are read, checked and documented under one set of
       ),
     );
   const runbook = readWorkflow('docs/release-runbook.md');
-  const credentials = runbook.slice(
-    runbook.indexOf('### The credentials, by name'),
-    runbook.indexOf('### The dry run'),
-  );
+  const sectionStart = runbook.indexOf('### The credentials, by name');
+  const sectionEnd = runbook.indexOf('### The dry run');
+  const credentials = runbook.slice(sectionStart, sectionEnd);
 
   it('reads every secret the gate checks, and no other but the optional key password', async () => {
     const { REQUIRED } = await import('../../scripts/release-credentials.mjs');
@@ -2373,12 +2372,17 @@ describe('the release settings are read, checked and documented under one set of
     expect([...referenced('secrets')].sort()).toEqual([...checked, 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'].sort());
   });
 
-  it('reads one repository variable, the public origin', () => {
+  it('reads one repository variable, the public origin, in both the staging and the publishing of each workflow', () => {
     expect([...referenced('vars')]).toEqual(['SPEAKING_GLASS_PUBLIC_URL']);
+    for (const relPath of Object.values(RELEASE_WORKFLOWS)) {
+      const publish = jobOf(stripComments(readWorkflow(relPath)), 'publish', relPath);
+      expect(publish, relPath).toMatch(/^\s+public_url: \$\{\{ vars\.SPEAKING_GLASS_PUBLIC_URL \}\}$/m);
+    }
   });
 
   it('documents every setting the release reads where the runbook lists them', () => {
-    expect(credentials, 'the runbook section moved').not.toBe('');
+    expect(sectionStart, 'the runbook lost its credentials heading').toBeGreaterThan(-1);
+    expect(sectionEnd, 'the credentials section must end at the dry run').toBeGreaterThan(sectionStart);
     for (const name of [...referenced('secrets'), ...referenced('vars')]) {
       expect(credentials, name).toContain(`\`${name}\``);
     }
@@ -2389,10 +2393,13 @@ describe('the release settings are read, checked and documented under one set of
     for (const relPath of [...sources, ...scripts]) {
       expect(readWorkflow(relPath), relPath).not.toMatch(/\bCANDIDCUE_[A-Z_]+/);
     }
+    // Exactly one line names them, and it is the whole deletion step: an old
+    // name anywhere else could read as setup advice.
     const mentions = runbook.split('\n').filter((line) => /\bCANDIDCUE_[A-Z_]+/.test(line));
-    expect(mentions.length, 'the runbook says which old settings to delete').toBeGreaterThan(0);
-    for (const line of mentions) expect(line, 'an old name outside the deletion step').toMatch(/^- \[ \] Delete /);
-    for (const name of OBSOLETE) expect(runbook).toContain(`\`${name}\``);
+    expect(mentions).toEqual([
+      `- [ ] Delete ${OBSOLETE.slice(0, -1).map((name) => `\`${name}\``).join(', ')} and \`${OBSOLETE.at(-1)}\`; ` +
+        'nothing reads them, and the updater\'s public key is `plugins.updater.pubkey` in `tauri.conf.json`.',
+    ]);
   });
 });
 
