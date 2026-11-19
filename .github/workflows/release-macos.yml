@@ -609,7 +609,8 @@ jobs:
           rm -rf "$MOUNT" && mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT" >/dev/null
           node scripts/verify-signed-bundle.mjs "$MOUNT/Speaking Glass.app"
-          hdiutil detach "$MOUNT" >/dev/null
+          # Detaching is housekeeping on an ephemeral runner, never a verdict.
+          hdiutil detach "$MOUNT" >/dev/null || hdiutil detach -force "$MOUNT" >/dev/null || true
           rm -rf "$RUNNER_TEMP/payload" && mkdir -p "$RUNNER_TEMP/payload"
           tar -xzf "$BUNDLE"/macos/*.app.tar.gz -C "$RUNNER_TEMP/payload"
           # The same inspection as the bundle beside it: an updater payload

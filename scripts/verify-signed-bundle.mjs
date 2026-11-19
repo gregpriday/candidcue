@@ -385,11 +385,17 @@ function inspect(bundle, env) {
   // The stapled ticket. Without it the first launch needs the network, and on
   // a machine that is offline it fails. Tauri's own stapling ignores the
   // stapler's exit status, so a build that "notarised" can still lack one.
-  check(
-    'notarisation ticket',
-    tool('xcrun', ['stapler', 'validate', bundle]),
-    'a stapled ticket is what lets a first launch work offline',
-  );
+  // `validate` asks Apple's ticket service, and the release runs it on three
+  // copies after an hour of building: when it is the ONLY thing wrong, a
+  // transient service error gets two more tries. A missing or invalid ticket
+  // fails all three, a few seconds later.
+  let stapled = tool('xcrun', ['stapler', 'validate', bundle]);
+  const otherwiseClean = problems.length === 0;
+  for (let attempt = 2; attempt <= 3 && !stapled.ok && otherwiseClean; attempt++) {
+    spawnSync('sleep', ['5']);
+    stapled = tool('xcrun', ['stapler', 'validate', bundle]);
+  }
+  check('notarisation ticket', stapled, 'a stapled ticket is what lets a first launch work offline');
 
   return { problems, passed };
 }
