@@ -92,9 +92,10 @@ export const COMMAND_IDS = [
   'edit.replace',
 
   // ---- Insert ----
-  // A discoverable Insert menu in the native menu bar. These are the same commands the editor's formatting row runs, so the two
-  // surfaces cannot come to mean different things — and the menu is what gives
-  // them names and keys a user can find without hovering every button.
+  // A discoverable Insert menu in the native menu bar. These are the same
+  // commands the editor's formatting row runs, so the two surfaces cannot come
+  // to mean different things — and the menu is what gives them names and keys a
+  // user can find without hovering every button.
   'insert.heading',
   'insert.bold',
   'insert.italic',

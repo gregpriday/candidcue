@@ -180,7 +180,7 @@
      * it" — see the note at the button.
      */
     onpresentationtoggle?: () => void;
-    /** §48. Voice following is off; the presenter is driving the script. */
+    /** Voice following is off; the presenter is driving the script. */
     followPaused?: boolean;
     /** The follow control was activated. The host owns the decision (§16.9). */
     onfollowtoggle?: () => void;

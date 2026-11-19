@@ -335,12 +335,12 @@ export function clampProvisionalTarget(
  * ---------------------------------------------------------------------------
  * WHY THIS IS NOT ZERO
  * ---------------------------------------------------------------------------
- * §8's path puts every line-start knot at `R`, and the line then RISES a full
- * pitch while it is being read: at the start of line N its baseline is at `R`,
- * and by the last word of line N the document has advanced one pitch, so `R`
- * now falls on line N+1. That is the line-handoff contract working exactly as
- * specified — the next line is already in position when speech reaches it — and
- * it is correct as MOTION.
+ * Companion §8's path puts every line-start knot at `R`, and the line then
+ * RISES a full pitch while it is being read: at the start of line N its
+ * baseline is at `R`, and by the last word of line N the document has advanced
+ * one pitch, so `R` now falls on line N+1. That is the line-handoff contract
+ * working exactly as specified — the next line is already in position when
+ * speech reaches it — and it is correct as MOTION.
  *
  * The defect was treating `R` and the reading mark as the same number. The mark
  * is fixed on the glass and says "you are here"; a line is only AT `R` for the

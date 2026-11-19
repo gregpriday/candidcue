@@ -264,7 +264,7 @@ export interface PreviewDriver {
   toggleFreeze(): void;
   toggleMirror(): void;
   /**
-   * Voice following on and off (§48).
+   * Voice following on and off.
    *
    * Here for the same reason the voice pill is: the off state puts a lit
    * control in the corner of the dock and a chip on the glass, both of which

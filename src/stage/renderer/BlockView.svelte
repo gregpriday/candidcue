@@ -316,7 +316,8 @@
     opacity: var(--stage-future-opacity, 0.92);
   }
   /* The zoning opacities above are a reading aid and always apply; the fade
-     between them is an effect, and §61 turns it off under frame pressure by
+     between them is an effect, and companion §61 turns it off under frame
+     pressure by
      zeroing `--stage-fx-ms` on the script layer. */
   .block {
     transition-property: opacity;

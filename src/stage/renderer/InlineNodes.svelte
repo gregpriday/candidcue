@@ -286,12 +286,12 @@
 
 <style>
   /* Per-word past dimming. The opacity below is how the presenter sees where
-     they are and never changes; the tween is a §61 nonessential effect and is
-     zeroed by `--stage-fx-ms` on the script layer while frames are being
-     missed — this is the biggest single win of the three, because it is one
-     interpolation per rendered WORD. The ramp below moves four words per cursor
-     advance where the old step moved one, but it is the same property on the
-     same elements, so the one degraded rule still takes all of them off at
+     they are and never changes; the tween is a companion §61 nonessential
+     effect and is zeroed by `--stage-fx-ms` on the script layer while frames
+     are being missed — this is the biggest single win of the three, because it
+     is one interpolation per rendered WORD. The ramp below moves four words per
+     cursor advance where the old step moved one, but it is the same property on
+     the same elements, so the one degraded rule still takes all of them off at
      once. */
   /*
    * 240ms, and it was MEASURED down to 150 and put back.
@@ -356,9 +356,9 @@
    * The steps are an attribute plus stylesheet rules rather than an inline
    * opacity per word, and that is load-bearing twice over: the values stay
    * reachable from one place above (they are custom properties on an inherited
-   * subtree, which is how §61 and the operator's own settings reach them at
-   * all), and the styling tick stays a class/attribute write rather than a
-   * per-word style mutation on every rendered word.
+   * subtree, which is how companion §61 and the operator's own settings reach
+   * them at all), and the styling tick stays a class/attribute write rather
+   * than a per-word style mutation on every rendered word.
    */
   .w.past {
     opacity: var(--stage-past-opacity, 0.42);

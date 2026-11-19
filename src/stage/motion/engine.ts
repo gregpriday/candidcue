@@ -134,7 +134,7 @@ export interface FallbackTarget {
    * Absent, a fallback target is the RENDERER'S GUESS — a correction worked out
    * from block offsets and estimated heights when the aligner's own path cannot
    * be resolved. Every hold in this engine is aimed at exactly that: while
-   * following is switched off (§48) nothing automatic may move the document, so
+   * following is switched off nothing automatic may move the document, so
    * `paused` zeroes the forward velocity budget and the feed-forward with it.
    *
    * The fixed-pace transport is the one target that is not a guess. It exists
@@ -324,7 +324,7 @@ export interface StageMotionEngine {
   setBounds(minPx: number, maxPx: number): void;
   setReducedMotion(reduced: boolean): void;
   /**
-   * §48. Stop/resume automatic motion. `nowMs` stamps the takeover so ordinary
+   * Stop/resume automatic motion. `nowMs` stamps the takeover so ordinary
    * directives issued before it can be recognised as superseded; omitting it
    * leaves that stamp untouched.
    */
@@ -946,8 +946,8 @@ export const REANCHOR_FADE_MS = 110;
  * photosensitive users are asking to be spared; and shrinking it to "near
  * instant" (two frames) does not obscure anything anyway — it is a flicker
  * wrapped around a jump the presenter still sees. The rest of this codebase
- * already reads reduced motion as "reposition without a spectacle" (§32.4:
- * `classifyTransition` returns `instant`, and the motion limits drop the
+ * already reads reduced motion as "reposition without a spectacle" (primary
+ * §32.4: `classifyTransition` returns `instant`, and the motion limits drop the
  * easing), so a bare cut is the consistent reading.
  *
  * The machinery is duration-driven, so restoring the literal spec behaviour is
@@ -1720,7 +1720,7 @@ export function createStageMotionEngine(
     },
 
     /**
-     * §48. Automatic movement is off — the session's pause, or the presenter
+     * Automatic movement is off — the session's pause, or the presenter
      * switching voice following off at the dock.
      *
      * Both are the same instruction to this layer ("nothing automatic moves the
@@ -1760,7 +1760,7 @@ export function createStageMotionEngine(
         reacquireElapsedMs = 0;
         reacquireBudgetPx = null;
         /*
-         * §48 + §30.5. Switching following off cancels an in-flight rewind
+         * §30.5. Switching following off cancels an in-flight rewind
          * outright rather than parking it.
          *
          * The alternative — hold it and resume when following comes back — is
@@ -1861,9 +1861,9 @@ export function createStageMotionEngine(
           } else {
             /*
              * Something else has been authorized, and the transition controller
-             * only ever holds one. §8.4's newer decision wins: the walk back to
-             * the old retake point is describing a place the engine has since
-             * changed its mind about.
+             * only ever holds one (§53), and the newer decision wins: the walk
+             * back to the old retake point is describing a place the engine has
+             * since changed its mind about.
              */
             cancelGuidedRewind('superseded');
           }
@@ -1941,7 +1941,7 @@ export function createStageMotionEngine(
         handAnchorToken = null;
       } else if (overwrite && paused && overwrite.authority !== 'manual') {
         /*
-         * §48. Following is off, and a re-anchor is automatic motion.
+         * Following is off, and a re-anchor is automatic motion.
          *
          * This licence is the ONE authorized overwrite of plant state during
          * following (§26.3), and it is consumed at the top of the frame before
@@ -2051,7 +2051,7 @@ export function createStageMotionEngine(
        * see `FallbackTarget.mandate`. A mode on the engine would also exempt the
        * frames where an alignment target won, which is the one case the pause
        * has to keep holding: guessed geometry reaching the glass while following
-       * is off is exactly what §48 forbids.
+       * is off is exactly what the pause forbids.
        */
       let operatorMandate = false;
 
@@ -2097,8 +2097,8 @@ export function createStageMotionEngine(
             : 0;
         state = 'following';
         if (fallback.disposition === 'instant') {
-          // §32.4 reduced motion: reposition with no spectacle at all. An
-          // authorized plant overwrite is the end of any walk that was under
+          // Primary §32.4 reduced motion: reposition with no spectacle at all.
+          // An authorized plant overwrite is the end of any walk that was under
           // way — the document is now somewhere the walk knows nothing about.
           cancelGuidedRewind('superseded');
           reanchorTo(fallback.scrollPx);
@@ -2650,12 +2650,12 @@ export function createStageMotionEngine(
               ? (gapPx > corridorHalfPx ? 1 : 0)
               : Math.max(0, Math.min(1, (gapPx - corridorHalfPx) / decayPx));
         }
-        /* §30.3, §8.8/§16.3: the line may not be carried above the corridor's
-         * UPPER edge. Scrolling forward by one pixel past the target lifts the
-         * line one pixel above `R`, so the corridor half-height is precisely
-         * how far past the target the plant may be carried — when the map knows
-         * one. It is measured from this layout rather than converted through a
-         * pitch, so it wins wherever it exists.
+        /* §30.3, §8.8/primary §16.3: the line may not be carried above the
+         * corridor's UPPER edge. Scrolling forward by one pixel past the target
+         * lifts the line one pixel above `R`, so the corridor half-height is
+         * precisely how far past the target the plant may be carried — when the
+         * map knows one. It is measured from this layout rather than converted
+         * through a pitch, so it wins wherever it exists.
          *
          * `catchUpCeilingLines` is the same boundary in a unit that survives a
          * map built without a corridor — a degraded builder, a stage whose band
@@ -2731,15 +2731,16 @@ export function createStageMotionEngine(
       const boundedFeedForward = Math.max(0, Math.min(feedForward, realizedTargetPxS));
 
       /*
-       * §48, the hold made whole. Zeroed velocity limits stop the plant being
-       * DRIVEN toward an alignment target, but not §29.3's rest deadband from
-       * snapping it onto one that is creeping past — and a fresh snapshot's
-       * display path creeps for as long as its prediction runs. Every manual
-       * move answered while following is off is such a snapshot (#275), so the
-       * document crept on a third of a line after each one. Paused, the plant
-       * aims where it already is; the operator's own transport is the one
-       * target that still drives it. The reported `targetPx` is left alone: it
-       * is how the renderer tells a look from a move after a wheel gesture.
+       * Following off, the hold made whole. Zeroed velocity limits stop the
+       * plant being DRIVEN toward an alignment target, but not §29.3's rest
+       * deadband from snapping it onto one that is creeping past — and a fresh
+       * snapshot's display path creeps for as long as its prediction runs.
+       * Every manual move answered while following is off is such a snapshot
+       * (#275), so the document crept on a third of a line after each one.
+       * Paused, the plant aims where it already is; the operator's own
+       * transport is the one target that still drives it. The reported
+       * `targetPx` is left alone: it is how the renderer tells a look from a
+       * move after a wheel gesture.
        */
       const held = frozen || (paused && !operatorMandate);
       const step = controller.step({

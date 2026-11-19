@@ -117,7 +117,7 @@
      */
     ack?: StageAckState | null;
     /**
-     * §48. Voice following is off — the host's own switch, read straight rather
+     * Voice following is off — the host's own switch, read straight rather
      * than through a directive.
      *
      * Single-window presentation runs at stage generation 0 and the directive
@@ -676,7 +676,7 @@
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
   /**
-   * §48. Whether voice following is off, from whichever of the two roads
+   * Whether voice following is off, from whichever of the two roads
    * carries it: the host's prop in single-window presentation, the `follow`
    * directive in a standalone stage window.
    *
@@ -1211,16 +1211,17 @@
   /** §62: fatal line-map issues after the bounded rebuild retry. */
   let layoutIssues = $state<string[]>([]);
   /**
-   * §61: the stage is missing its frame budget. The engine already backs its
-   * own styling cadence and motion limits off; this is the flag the LAYERS
-   * need for the nonessential effects each one owns.
+   * Companion §61: the stage is missing its frame budget. The engine already
+   * backs its own styling cadence and motion limits off; this is the flag the
+   * LAYERS need for the nonessential effects each one owns.
    */
   let motionDegraded = $state(false);
   /**
-   * §47.1/§55. The session's motion profile, as the stage is willing to run it:
-   * the envelope's resolved profile when this build can interpret its version,
-   * and the Appendix A default otherwise. Resolved HERE, at the mount site, so
-   * the script layer is always constructed with a followable profile.
+   * Companion §47.1/§55. The session's motion profile, as the stage is willing
+   * to run it: the envelope's resolved profile when this build can interpret
+   * its version, and the Appendix A default otherwise. Resolved HERE, at the
+   * mount site, so the script layer is always constructed with a followable
+   * profile.
    */
   const followProfile = $derived(stageFollowProfile(app.envelope?.followProfile));
   /** Never block the script on a font that may never resolve. */
@@ -1505,8 +1506,9 @@
      * `metricsMeasured: false` on the measurement. If the real font lands later
      * it does not slide in unannounced: the script layer re-measures the face,
      * the fingerprint's `fontHash` moves with it, and the rebuild is classified
-     * as a relayout with a §33 semantic re-anchor. A reflow the presenter can see
-     * is survivable; one nothing in the system admits to is not.
+     * as a relayout with a companion §33 semantic re-anchor. A reflow the
+     * presenter can see is survivable; one nothing in the system admits to is
+     * not.
      */
     const fontTimeout = window.setTimeout(() => {
       fontsSettled = true;

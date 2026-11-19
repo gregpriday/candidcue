@@ -384,11 +384,11 @@ export function createJerkLimitedScrollController(
       const rawDt = Number.isFinite(input.dtMs) ? Math.max(0, input.dtMs) : 0;
       const hitch = rawDt > maxFrameDtMs;
 
-      // Finite-value fuse. A non-finite target, feed-forward, or limit would propagate
-      // into `q`, `v`, and `a` — and because the plant is persistent, every
-      // later frame would stay poisoned. Hold the current position instead, and
-      // do not touch plant state at all so the next sound frame resumes from a
-      // real position with real momentum.
+      // Finite-value fuse. A non-finite target, feed-forward, or limit would
+      // propagate into `q`, `v`, and `a` — and because the plant is persistent,
+      // every later frame would stay poisoned. Hold the current position
+      // instead, and do not touch plant state at all so the next sound frame
+      // resumes from a real position with real momentum.
       if (!motionInputsAreFinite(input)) {
         return {
           ...plant,
@@ -411,9 +411,9 @@ export function createJerkLimitedScrollController(
       let saturated = false;
 
       if (limits.snap) {
-        // Reduced motion (§32.4 / A.3): follow the target exactly. The target
-        // itself is continuous, so this still reads as motion, just without
-        // controller dynamics.
+        // Reduced motion (primary §32.4, companion A.3): follow the target
+        // exactly. The target itself is continuous, so this still reads as
+        // motion, just without controller dynamics.
         const dtSec = integratedMs / 1000;
         const previous = plant.q;
         plant.q = target;

@@ -145,10 +145,10 @@ export interface RenderedLineMap {
  * geometry but is missing from the fingerprint produces the worst failure mode
  * available: the map is silently rebuilt from new measurements under the OLD
  * generation, so control still believes the geometry it is addressing, and the
- * §33 semantic re-anchor that should have preserved the reading position never
- * runs. `sameLayout()` in `stage/motion/measure.ts` compares this type through
- * an exhaustive `Record<keyof LayoutFingerprint, …>` table so a field added here
- * fails compilation until it is classified there.
+ * companion §33 semantic re-anchor that should have preserved the reading
+ * position never runs. `sameLayout()` in `stage/motion/measure.ts` compares
+ * this type through an exhaustive `Record<keyof LayoutFingerprint, …>` table so
+ * a field added here fails compilation until it is classified there.
  */
 export interface LayoutFingerprint {
   scriptCompileHash: string;
@@ -176,7 +176,7 @@ export interface LayoutFingerprint {
   mirrored: boolean;
   mirrorX: boolean;
   mirrorY: boolean;
-  /** Reading-band centre, percent of the viewport — this is `R` in §8. */
+  /** Reading-band centre, percent of the viewport: `R` in companion §8. */
   readingBandCenterPercent: number;
   /** Reading-band half height, percent of the viewport. */
   readingBandHalfHeightPercent: number;
@@ -231,15 +231,16 @@ export interface LayoutFingerprint {
  */
 export interface SmoothFollowLineUnits {
   /**
-   * §30 hard cap on backward travel in one correction. Five lines is about as
-   * far back as a presenter who stumbles is plausibly re-reading from; past
-   * that the honest reading is not "they repeated a phrase" but "we are
+   * Companion §30 hard cap on backward travel in one correction. Five lines is
+   * about as far back as a presenter who stumbles is plausibly re-reading from;
+   * past that the honest reading is not "they repeated a phrase" but "we are
    * somewhere they are not", which is a re-anchor's job rather than a roll.
    */
   reverseTravelMaxLines: number;
   /**
-   * §30 latch escape hatch — how far the target may disagree with a latched
-   * forward position before the disagreement is treated as a relocation.
+   * Companion §30 latch escape hatch — how far the target may disagree with a
+   * latched forward position before the disagreement is treated as a
+   * relocation.
    *
    * Deliberately BELOW `reverseTravelMaxLines`, in the ordering AND very nearly
    * the ratio the pixel pair has (360 < 420): the escape hatch has to be
@@ -263,11 +264,11 @@ export interface SmoothFollowLineUnits {
    */
   fadeSkipLines: number;
   /**
-   * §30.3 upper safety boundary during catch-up, as a distance past the target
-   * the plant may be carried. The engine derives this from the reading
-   * corridor's half-height when it knows one; this is the same bound in a unit
-   * that survives a corridor the engine could not measure, so the boundary
-   * stops disappearing entirely on the frames where it is needed most.
+   * Companion §30.3 upper safety boundary during catch-up, as a distance past
+   * the target the plant may be carried. The engine derives this from the
+   * reading corridor's half-height when it knows one; this is the same bound in
+   * a unit that survives a corridor the engine could not measure, so the
+   * boundary stops disappearing entirely on the frames where it is needed most.
    */
   catchUpCeilingLines: number;
 }
@@ -352,8 +353,8 @@ export interface SmoothFollowProfile {
     maxJerkPxS3: number;
     catchUpMultiplier: number;
     /**
-     * §30.3 duration cap. Longest one continuous catch-up episode may hold the
-     * boost, measured from the frame the catch-up licence appears.
+     * Companion §30.3 duration cap. Longest one continuous catch-up episode may
+     * hold the boost, measured from the frame the catch-up licence appears.
      */
     catchUpMaxDurationMs: number;
     /**
@@ -365,7 +366,7 @@ export interface SmoothFollowProfile {
      */
     catchUpReleaseMs: number;
     /**
-     * §30.3 boost decay, in reading-corridor half-heights.
+     * Companion §30.3 boost decay, in reading-corridor half-heights.
      *
      * The boost falls to nothing over this many corridor half-heights of gap
      * ABOVE the corridor's entry edge, so it is spent bringing the spoken line
@@ -414,7 +415,7 @@ export interface SmoothFollowProfile {
  * is not a subset of a newer one — its numbers say something different. That
  * makes exact equality the only honest test: a consumer handed any other
  * version cannot interpret it, in either direction, and must fall back to its
- * own default rather than apply numbers it is guessing about (§55).
+ * own default rather than apply numbers it is guessing about (companion §55).
  *
  * 3 → 4 is such a change even though `lineUnits` is additive. The pixel bounds
  * did not move, but once a profile carries `lineUnits` they stop being the
@@ -441,10 +442,10 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     maxAccelerationPxS2: 2600,
     maxJerkPxS3: 12000,
     catchUpMultiplier: 1.6,
-    // A.4/§30.3. Long enough to absorb a sentence-length stumble or a transcript
-    // stall at 1.6× (at 900 px/s base that is ~3600 px, several screens); short
-    // enough that a catch-up which is not closing stops being a spectacle before
-    // the presenter has finished the next sentence.
+    // Companion A.4/§30.3. Long enough to absorb a sentence-length stumble or a
+    // transcript stall at 1.6× (at 900 px/s base that is ~3600 px, several
+    // screens); short enough that a catch-up which is not closing stops being a
+    // spectacle before the presenter has finished the next sentence.
     catchUpMaxDurationMs: 2500,
     catchUpReleaseMs: 250,
     // Sized so the decay LEADS the plant's own braking rather than being masked

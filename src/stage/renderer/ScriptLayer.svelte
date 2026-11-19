@@ -2,6 +2,10 @@
   Compiled-document renderer and the stage's single rAF loop
   (companion §26.2, §31, §32, §33; spec §16.2–16.5).
 
+  Bare § numbers in this file are the Smooth Following specification
+  (`docs/archive/`, "companion"); `spec` and `primary` mark the Product
+  specification.
+
   Motion is NOT a per-event animation. One persistent `StageMotionEngine` owns
   position, velocity, acceleration and authority for the life of the session;
   this component only:
@@ -203,7 +207,7 @@
     alignment?: AlignmentSnapshot | null;
     frozen?: boolean;
     /**
-     * §48. Voice following is switched off: the presenter is driving the script
+     * Voice following is switched off: the presenter is driving the script
      * themselves, by wheel or by key.
      *
      * Distinct from `frozen`, which stops the frame loop outright — the loop
@@ -552,7 +556,10 @@
    * shared home would invite new code to build on the geometry being replaced.
    * ------------------------------------------------------------------- */
 
-  /** The old §16.8 breakpoint: a display around 1024x600 got the compact table. */
+  /**
+   * The old primary §16.8 breakpoint: a display around 1024x600 got the compact
+   * table.
+   */
   function legacyIsCompact(widthPx: number, heightPx: number): boolean {
     return heightPx > 0 && heightPx <= 700 && widthPx <= 1280;
   }
@@ -1238,7 +1245,7 @@
   $effect(() => {
     if (followProfile) engine.setProfile(followProfile);
   });
-  // §48. The engine holds the document while following is off, and arms the
+  // The engine holds the document while following is off, and arms the
   // §30.6 re-grab on the way back on — see `setPaused`.
   $effect(() => {
     engine.setPaused(followPaused, performance.now());
@@ -1580,7 +1587,7 @@
     void renderWindowKey;
     if (!planeEl || vh === 0) return;
     const raf = requestAnimationFrame(() => measureBlocks());
-    // Hidden windows can throttle rAF (§43.3 publishes while hidden); a
+    // Hidden windows can throttle rAF (primary §43.3 publishes while hidden); a
     // timer fallback keeps the layout-ready handshake from stalling.
     const fallback = window.setTimeout(() => measureBlocks(), 350);
     return () => {
@@ -1648,7 +1655,7 @@
      *
      * `els.length > 0` was standing in for "the blocks have rendered", which
      * it is — right up until there are no blocks. An empty source compiles to
-     * a valid script with zero blocks and preflight lets it start, so the
+     * a valid script with zero blocks and nothing stops it presenting, so the
      * stage hydrated, mounted this layer, and then waited for an element that
      * was never coming: the handshake could not complete and the take died on
      * `waitForStageReady`'s timeout. Asking the document how many blocks it
@@ -1963,7 +1970,7 @@
       plane: planeEl,
       blocks: performanceBlocks,
       fallbackLineHeightPx: linePx,
-      // §16.7: the script sits inside the mirror plane, and
+      // Primary §16.7: the script sits inside the mirror plane, and
       // getBoundingClientRect() reports post-transform viewport space.
       mirrorX: settings.mirrorX,
       mirrorY: settings.mirrorY,
@@ -2013,8 +2020,8 @@
      *
      * `measureStageLayout` falls back to the typographic line box when it found
      * no token rows to take a median from, so "there were tokens" is the only
-     * honest test for a measured pitch — and everything that consumes it
-     * (the §16.4 provisional cap, the smooth-jump threshold, the calibration
+     * honest test for a measured pitch — and everything that consumes it (the
+     * primary §16.4 provisional cap, the smooth-jump threshold, the calibration
      * readout) has a defined behaviour for not knowing.
      */
     measuredLinePitchPx = measurement.tokens.length > 0 ? measurement.lineHeightPx : null;
@@ -2947,7 +2954,7 @@
      * holds the document has to be repeated at this door or it is not a hold.
      *
      * §30.6, both halves: the grace interval, and the engine's own "they have
-     * not spoken since". §48: following switched off. This is the path that
+     * not spoken since". Following switched off. This is the path that
      * runs at exactly the moments the line map is unresolved, which is when a
      * correction the presenter did not ask for is least defensible of all.
      *
@@ -2978,9 +2985,9 @@
     let disposition: FallbackTarget['disposition'] = 'follow';
     if (snap.state !== 'following') {
       /*
-       * Weak or contested evidence never triggers large movement (§16.4). The
-       * engine has already stopped advancing the position; this bounds what
-       * the fallback may do with the position it is holding.
+       * Weak or contested evidence never triggers large movement (primary
+       * §16.4). The engine has already stopped advancing the position; this
+       * bounds what the fallback may do with the position it is holding.
        *
        * The bound is two RENDERED LINES wherever a pitch has been measured,
        * because "a correction the presenter can absorb without losing their
@@ -3026,8 +3033,9 @@
 
   /**
    * Document-space top of a viewport rect, undoing the mirror plane's flip
-   * (§16.7). `getBoundingClientRect()` is post-transform, so under `scaleY(-1)`
-   * an element's measured `top` is its distance from the plane's bottom.
+   * (primary §16.7). `getBoundingClientRect()` is post-transform, so under
+   * `scaleY(-1)` an element's measured `top` is its distance from the plane's
+   * bottom.
    */
   function docTopOf(rect: DOMRect, planeRect: DOMRect): number {
     return settings.mirrorY ? planeRect.bottom - rect.bottom : rect.top - planeRect.top;
@@ -3415,7 +3423,7 @@
 
   /* ---- public surface ---- */
 
-  /** Feed one accepted-or-rejected semantic frame to the receiver (§26.1). */
+  /** Submit one Rust alignment snapshot to the motion receiver. */
   export function pushAlignmentSnapshot(snapshot: AlignmentSnapshot): boolean {
     const accepted = engine.receiveSnapshot(snapshot, performance.now());
     /*
@@ -3542,7 +3550,7 @@
     }
     /*
      * Off the end of what was MEASURED is not the same as off the end of the
-     * script, and on a virtualized document (§51.3) it usually is not.
+     * script, and on a virtualized document (primary §51.3) it usually is not.
      *
      * `map.lines` covers the rendered window plus overscan, and the map is
      * rebuilt on a 250 ms throttle while a wheel gesture settles in 200 ms — so
@@ -4042,7 +4050,7 @@
     flex: none;
   }
 
-  /* Subtle low-contrast rounded underlay — not a karaoke marker (§16.2). */
+  /* Subtle low-contrast rounded underlay, not a karaoke marker (primary §16.2). */
   .phrase-underlay {
     position: absolute;
     border-radius: 0.35em;

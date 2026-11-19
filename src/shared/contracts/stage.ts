@@ -127,7 +127,7 @@ export const STAGE_EVENT = {
    * and Rust re-emitted the SAME name to control, control's handler ran twice —
    * once ungated, straight from the stage, and once after the generation check
    * in app.rs. A double Escape stopped the session twice; motion acks were
-   * ingested twice into the §61 degradation logic.
+   * ingested twice into the companion §61 degradation logic.
    *
    * So the stage's own emission and Rust's relay have different names, which is
    * already the pattern for `layout-ready` → `stage://ready` and `media-error`
@@ -286,7 +286,7 @@ export type StageDirective =
   | { kind: 'autoScroll'; autoScroll: StageAutoScrollPayload }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   /**
-   * Voice following is on or off (§48).
+   * Voice following is on or off.
    *
    * The state lives in control — the same switch the transport checkbox and the
    * Live "Pause following" button already flip — and the stage has to be told
@@ -661,7 +661,8 @@ export interface StageHeartbeatAckPayload {
  * `stage://motion-report` (stage → Rust), relayed to control as
  * `stage://motion-ack` — periodic motion report (companion §54). Carries the
  * stage's current layout generation, which is how control learns that the stage
- * rebuilt its line map and that older frames are being rejected (§33).
+ * rebuilt its line map and that older frames are being rejected (companion
+ * §33).
  */
 export type StageMotionAckPayload = StageMotionAck & { stageGeneration: number };
 
@@ -730,7 +731,7 @@ export type StageIntent =
   /** Space bar. */
   | { kind: 'toggle_pause' }
   /**
-   * The dock's follow control (§48). Voice following is a mode the presenter
+   * The dock's follow control. Voice following is a mode the presenter
    * may switch off — to read from a script at their own pace, with the wheel
    * — and switching it off is not pausing the session: transcription stays
    * connected and only automatic movement stops.

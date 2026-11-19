@@ -126,12 +126,12 @@ export interface LineMapBuildOptions {
   readingLineStartY: number;
   /**
    * Distance from `R` to the reading corridor's upper edge, viewport pixels
-   * (§8.8, §16.3). The COMPUTED half-height, not the raw setting: the renderer
-   * clamps the percentage and the corridor's top edge is clipped at the
-   * viewport, so recomputing it from `fingerprint.readingBandHalfHeightPercent`
-   * here would be a second source of truth for one number. Optional so a caller
-   * that has no corridor (tests, degraded builders) gets no §30.3 ceiling
-   * rather than a wrong one.
+   * (§8.8, primary §16.3). The COMPUTED half-height, not the raw setting: the
+   * renderer clamps the percentage and the corridor's top edge is clipped at
+   * the viewport, so recomputing it from
+   * `fingerprint.readingBandHalfHeightPercent` here would be a second source of
+   * truth for one number. Optional so a caller that has no corridor (tests,
+   * degraded builders) gets no §30.3 ceiling rather than a wrong one.
    */
   readingBandHalfHeightPx?: number;
   lineHeightPx: number;

@@ -3,10 +3,10 @@
  * transcription session the control window shows.
  *
  * There is no transport type here, on purpose. The recogniser runs on-device,
- * endpoints itself and is held in Rust; audio reaches it over IPC. A client-side
- * transport abstraction would have no implementation, and one with no
- * implementation is exactly the kind of thing that gets reimplemented against
- * by mistake.
+ * endpoints itself and is held in Rust; audio reaches it over IPC. A
+ * client-side transport abstraction would have no implementation, and one with
+ * no implementation is exactly the kind of thing that gets reimplemented
+ * against by mistake.
  *
  * `RealtimeState` still names `minting_credential` and `negotiating`, states of
  * a hosted connection the app no longer makes. Nothing mints a credential: the
