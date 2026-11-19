@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { openScript } from './fixtures/library';
+import { hashString } from '../../../src/shared/markdown/hash';
 
 const CAPTURE = process.env['DESIGN_CAPTURE'] === '1';
 const OUT = process.env['DESIGN_CAPTURE_DIR'];
@@ -182,9 +183,9 @@ async function pretendMac(page: Page): Promise<void> {
  * Registered after the shim, so its `__TAURI_INTERNALS__` is already there to
  * wrap. Only the one command is taken over.
  */
-async function installHistory(page: Page, scriptId: string, endTokenIndex: number | undefined): Promise<void> {
+async function installHistory(page: Page, script: Seed, endTokenIndex: number | undefined): Promise<void> {
   await page.addInitScript(
-    (cfg: { scriptId: string; endTokenIndex: number | null }) => {
+    (cfg: { scriptId: string; sourceHash: string; endTokenIndex: number | null }) => {
       const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
       const invoke = internals.invoke.bind(internals);
       internals.invoke = (command: string, args?: unknown) => {
@@ -194,7 +195,7 @@ async function installHistory(page: Page, scriptId: string, endTokenIndex: numbe
               id: 'session-design-0001',
               sessionGeneration: 3,
               scriptId: cfg.scriptId,
-              scriptSourceHash: 'design',
+              scriptSourceHash: cfg.sourceHash,
               startedAt: '2026-10-17T09:00:00.000Z',
               endedAt: '2026-10-17T09:02:10.000Z',
               mode: 'voice',
@@ -212,7 +213,11 @@ async function installHistory(page: Page, scriptId: string, endTokenIndex: numbe
         return invoke(command, args);
       };
     },
-    { scriptId, endTokenIndex: endTokenIndex ?? null },
+    /*
+     * The compiler's own hash of the seeded source: "From last ending" is
+     * offered only against the source the take was read from (#448).
+     */
+    { scriptId: script.id, sourceHash: hashString(script.source), endTokenIndex: endTokenIndex ?? null },
   );
 }
 
@@ -234,7 +239,7 @@ async function openMenu(page: Page, scenario: Scenario): Promise<void> {
     promptMode: 'voice',
     presentationMode: scenario.mode,
   });
-  await installHistory(page, scenario.script.id, scenario.lastEndToken);
+  await installHistory(page, scenario.script, scenario.lastEndToken);
   await page.goto('/control.html');
   await openScript(page, scenario.script.title);
   const editor = page.getByRole('textbox', { name: 'Script Markdown' });

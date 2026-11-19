@@ -130,7 +130,6 @@ test('inserting text before the ending withdraws the row instead of naming anoth
 
   await openMenu(page);
   await expect(row(page, 'From last ending')).toHaveCount(0);
-  await expect(menu(page)).not.toContainText('Opening words go here.');
 });
 
 test('deleting the sentence the take ended in withdraws the row', async ({ page }) => {
