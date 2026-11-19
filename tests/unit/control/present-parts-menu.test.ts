@@ -8,7 +8,11 @@
  * dropped everything past it.
  */
 import { describe, expect, it } from 'vitest';
-import { startMenuItems, type StartMenuInput } from '../../../src/control/lib/present-menu';
+import {
+  practiceMenuItems,
+  startMenuItems,
+  type StartMenuInput,
+} from '../../../src/control/lib/present-menu';
 import type { TakePartRequest } from '../../../src/control/lib/start-take';
 import type { ScriptPart } from '../../../src/shared/contracts';
 
@@ -185,5 +189,74 @@ describe('startMenuItems part rows', () => {
       'Part 1 · Opening',
       'Part 2 · Pricing',
     ]);
+  });
+});
+
+describe('practiceMenuItems (#241)', () => {
+  const parts = [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)];
+
+  it('offers only the plain row when there is no caret', () => {
+    const items = practiceMenuItems(
+      { hereTokenIndex: null, hereLabel: null, herePart: null },
+      () => {},
+    );
+    expect(items.map((i) => i.label)).toEqual(['Practise']);
+    expect(items[0]!.group).toEqual({});
+  });
+
+  it('rehearses the whole script from the plain row, whatever the caret is in', () => {
+    const chosen: Array<[number | undefined, TakePartRequest | undefined]> = [];
+    const items = practiceMenuItems(
+      { hereTokenIndex: 14, hereLabel: '“Raise prices.”', herePart: parts[1]! },
+      (token, p) => chosen.push([token, p]),
+    );
+    items.find((i) => i.label === 'Practise')!.onselect();
+    expect(chosen).toEqual([[undefined, undefined]]);
+  });
+
+  it('carries the caret’s part on "Practise from here", as the take’s row does', () => {
+    const chosen: Array<[number | undefined, TakePartRequest | undefined]> = [];
+    const items = practiceMenuItems(
+      { hereTokenIndex: 14, hereLabel: '“Raise prices.”', herePart: parts[1]! },
+      (token, p) => chosen.push([token, p]),
+    );
+    const here = items.find((i) => i.label === 'Practise from here')!;
+    expect(here.description).toBe('“Raise prices.” · Part 2');
+    here.onselect();
+    // The part, not the whole part: the practice begins at the caret.
+    expect(chosen).toEqual([[14, { id: 'p2' }]]);
+  });
+
+  it('agrees with the take’s "From here" about which part a place is in', () => {
+    const here = { hereTokenIndex: 14, hereLabel: '“Raise prices.”', herePart: parts[1]! };
+    const take: Array<TakePartRequest | undefined> = [];
+    const practice: Array<TakePartRequest | undefined> = [];
+    startMenuItems(input({ ...here, parts }), (_t, p) => take.push(p))
+      .find((i) => i.label === 'From here')!
+      .onselect();
+    practiceMenuItems(here, (_t, p) => practice.push(p))
+      .find((i) => i.label === 'Practise from here')!
+      .onselect();
+    expect(practice).toEqual(take);
+  });
+
+  it('offers no second whole-script row at the beginning of an undivided script', () => {
+    const at = (herePart: ScriptPart | null) =>
+      practiceMenuItems({ hereTokenIndex: 0, hereLabel: null, herePart }, () => {}).map((i) => i.label);
+    expect(at(null)).toEqual(['Practise']);
+    // On a divided script it is the first part, which the plain row is not.
+    expect(at(parts[0]!)).toEqual(['Practise', 'Practise from here']);
+  });
+
+  it('leaves "Practise from here" without a part on an undivided script', () => {
+    const chosen: Array<[number | undefined, TakePartRequest | undefined]> = [];
+    const items = practiceMenuItems(
+      { hereTokenIndex: 14, hereLabel: null, herePart: null },
+      (token, p) => chosen.push([token, p]),
+    );
+    const here = items.find((i) => i.label === 'Practise from here')!;
+    expect(here.description).toBe('From the cursor');
+    here.onselect();
+    expect(chosen).toEqual([[14, undefined]]);
   });
 });

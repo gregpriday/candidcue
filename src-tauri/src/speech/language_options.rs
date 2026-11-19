@@ -31,11 +31,11 @@
 //! ---------------------------------------------------------------------------
 //! WHY UNOFFERABLE LANGUAGES ARE NOT RETURNED AT ALL
 //! ---------------------------------------------------------------------------
-//! §153 is explicit: a language we cannot follow well should not be in the list
+//! #153 is explicit: a language we cannot follow well should not be in the list
 //! at all. Not greyed out, not behind a "coming soon" badge — absent. A picker
 //! that lists French with a size beside it has already made a promise, and the
 //! bar French has to clear is a measurement in `cc-bench` that has not been
-//! taken yet (§156, §157).
+//! taken yet (#156, #157).
 //!
 //! That leaves one honest gap, which [`SpeechLanguageOptions::removable`]
 //! closes: a model already ON DISK whose language this build no longer offers
@@ -128,7 +128,7 @@ pub struct SpeechLanguageOption {
     pub status: SpeechModelStatus,
     /// Where the bytes come from, in the order they are tried.
     pub origins: Vec<SpeechDownloadOrigin>,
-    /// The licence obligation this model carries. Informational: §153 is
+    /// The licence obligation this model carries. Informational: #153 is
     /// explicit that this is the app's obligation to display, never a consent
     /// gate on the download.
     pub attribution: SpeechModelAttribution,
@@ -321,7 +321,7 @@ pub fn build<R: tauri::Runtime>(
             SpeechLanguageOption {
                 // Active when BOTH halves match. The subtag alone would call a
                 // row active while a different recogniser was persisted for it,
-                // which is precisely the disagreement §153 is about.
+                // which is precisely the disagreement #153 is about.
                 active: offer.primary_subtag == active_subtag && offer.model.id == recognizer_id,
                 language_tag: offer.language_tag,
                 primary_subtag: offer.primary_subtag.to_string(),

@@ -325,6 +325,12 @@ export interface SessionState {
    */
   practice: boolean;
   /**
+   * This take was opened under the camera above its screen (#238), not on the
+   * pinned panel. A mid-take switch back to the prompter must then return to
+   * the screen the window is on rather than jump to the pinned glass.
+   */
+  cameraAboveScreen: boolean;
+  /**
    * The part this take is recording, or null for an unbounded one (§parts).
    *
    * ADVISORY. It does not truncate the document, gate the recogniser or stop
@@ -562,6 +568,7 @@ const initial: SessionState = {
   scriptTitle: '',
   mode: 'voice',
   practice: false,
+  cameraAboveScreen: false,
   part: null,
   nextPart: null,
   partComplete: false,
@@ -961,6 +968,8 @@ export interface StartSessionInput {
   presentationMode?: PresentationMode;
   /** §practice. A rehearsal: the whole document, and no report at the end. */
   practice?: boolean;
+  /** #238. Opened under the camera above this screen; see `cameraAboveScreen`. */
+  cameraAboveScreen?: boolean;
   /** §parts. The part this take is recording; absent means the whole script. */
   part?: TakePart | null;
   /** §parts. The part after it, so the summary can offer to record it next. */
@@ -1056,6 +1065,7 @@ export function startLiveSession(input: StartSessionInput): string {
     scriptTitle: input.scriptTitle,
     mode: input.mode,
     practice: input.practice ?? false,
+    cameraAboveScreen: input.cameraAboveScreen ?? false,
     part: input.part ?? null,
     nextPart: input.nextPart ?? null,
     partComplete: false,
@@ -4205,9 +4215,16 @@ export function stopSession(): SessionSummary {
      *
      * This is the number "From last ending" opens the next take at, so it is
      * the one that most needs to agree with the glass.
+     *
+     * A PRACTICE WRITES NONE (#241). "From last ending" is "where the last
+     * take stopped", and a rehearsal is not where the footage left off: record
+     * part two, practise part three, and the next take should still open where
+     * part two ended. Left out rather than written as zero, so the row reads
+     * exactly as a take that never recorded an end — the case every reader of
+     * the column already skips — and the rest of the row is kept.
      */
     void trackPersistence(endSessionRecord(s.sessionId, {
-      endTokenIndex,
+      ...(s.practice ? {} : { endTokenIndex }),
       commandCount: 0,
       retakeCount: s.counts.retakes,
       reconnectCount: s.counts.reconnects,

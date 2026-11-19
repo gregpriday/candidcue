@@ -11,10 +11,16 @@
  * That is what this is. It does not try to be a scrubber. It refuses the one
  * mistake that actually happens — reaching for the variable that holds the
  * user's words while writing a log line about something going wrong with them.
+ *
+ * The promises: nothing logs a binding that holds the user's words, and the
+ * support-bundle copy promises no more than that discipline can deliver — it
+ * names what is left out and tells the reader to look before sending. The copy
+ * is read as the value the screen renders, and its words are otherwise free.
  */
 import { readFileSync, globSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SUPPORT_BUNDLE_EXCLUSIONS } from '../../src/control/lib/diagnostics-format';
 
 const REPO_ROOT = join(__dirname, '../..');
 
@@ -113,9 +119,10 @@ describe('nothing logs the user’s words', () => {
    * the archive against.
    */
   it('still tells the user what a support bundle leaves out', () => {
-    const source = readFileSync(join(REPO_ROOT, 'src/control/lib/diagnostics-format.ts'), 'utf8');
+    // The copy itself, not the module's source: a comment naming these would
+    // otherwise satisfy it.
     for (const excluded of [/script/i, /transcript/i, /audio/i]) {
-      expect(source, `the exclusion copy must name ${excluded}`).toMatch(excluded);
+      expect(SUPPORT_BUNDLE_EXCLUSIONS, `the exclusion copy must name ${excluded}`).toMatch(excluded);
     }
   });
 
@@ -131,9 +138,7 @@ describe('nothing logs the user’s words', () => {
    * log files, and neither of those is one of them.
    */
   it('claims a design about the user’s words, not a guarantee', () => {
-    const source = readFileSync(join(REPO_ROOT, 'src/control/lib/diagnostics-format.ts'), 'utf8');
-    const copy = /SUPPORT_BUNDLE_EXCLUSIONS\s*=\s*([\s\S]*?);\n/.exec(source)?.[1] ?? '';
-    expect(copy.length, 'SUPPORT_BUNDLE_EXCLUSIONS could not be read').toBeGreaterThan(80);
+    const copy = SUPPORT_BUNDLE_EXCLUSIONS;
 
     expect(
       copy,
@@ -143,12 +148,34 @@ describe('nothing logs the user’s words', () => {
         'Say what the bundle is designed to leave out, and tell the reader to ' +
         'look before they send it.',
     ).not.toMatch(/\bnever\b[^.]*\b(script|transcript|prose|words)/i);
+    expect(copy, 'in either order').not.toMatch(
+      /\b(script|transcript|prose|words)s?\b[^.,;]*\bnever\b/i,
+    );
+    // Nor in other words, in either order — "guaranteed to exclude your
+    // scripts", "your scripts are guaranteed to stay out" — while a sentence
+    // that disclaims the guarantee stays legal.
+    // Clause by clause: a guarantee about recordings beside a designed
+    // exclusion of scripts is two claims, and only the second is about prose.
+    const absolutes = copy.split(/[.,;]/).filter(
+      (sentence) =>
+        /\b(script|transcript|prose|words)/i.test(sentence) &&
+        /\b(?:guarantee[sd]?|always (?:leaves? out|excludes?)|cannot contain|can never)\b/i.test(sentence) &&
+        !/\b(?:not|no|cannot) (?:be )?guarantee/i.test(sentence),
+    );
+    expect(absolutes, 'the exclusion copy guarantees what it can only intend').toEqual([]);
 
     expect(
       copy,
       'The copy no longer tells the user to look at the bundle before sending ' +
         'it. That sentence is what makes the weaker promise honest rather than ' +
         'merely vaguer, and `reveal_support_bundle` exists to serve it.',
-    ).toMatch(/\b(reveal|read|review|look)\b/i);
+    ).toMatch(/\b(reveal|read|review|look|inspect|check|open|examine)\b/i);
+  });
+
+  it('is the text the support-bundle screen actually shows', () => {
+    // Importing the value proves what it says, not that anyone reads it.
+    const settings = readFileSync(join(REPO_ROOT, 'src/control/routes/Settings.svelte'), 'utf8')
+      .replace(/<!--[\s\S]*?-->/g, '');
+    expect(settings).toMatch(/>\s*\{SUPPORT_BUNDLE_EXCLUSIONS\}\s*</);
   });
 });

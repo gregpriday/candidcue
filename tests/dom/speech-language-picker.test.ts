@@ -20,6 +20,7 @@ import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import SpeechLanguagePicker from '../../src/control/components/SpeechLanguagePicker.svelte';
 import { setInvokeForTesting } from '../../src/control/services/ipc';
+import { copyForErrorCode } from '../../src/control/services/errors';
 import type {
   SpeechLanguageOption,
   SpeechLanguageOptions,
@@ -456,13 +457,15 @@ describe('a language that cannot be activated says so in authored copy', () => {
     // The click reached the command, and reached it for the row under test.
     await waitFor(() => expect(attempted).toEqual(['de-DE']));
 
+    // The alert is the copy errors.ts authors for the code, whatever its
+    // words are (error-copy-user-facing.test.ts holds what that copy may say).
+    const authored = copyForErrorCode('STT_MODEL_NOT_INSTALLED');
     await waitFor(() => {
       const alerts = Array.from(view.container.querySelectorAll('[role="alert"]'))
         .map((node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim());
-      expect(alerts.some((a) => a.includes('Settings → Speech'))).toBe(true);
+      expect(alerts.some((a) => a.includes(authored))).toBe(true);
     });
     const shown = text(view);
-    expect(shown).toContain('The speech model for the requested language is not installed.');
     expect(shown).not.toContain(backendMessage);
     // The rule the whole of `errors.ts` exists for, asserted on this screen too.
     expect(shown).not.toContain('STT_MODEL_NOT_INSTALLED');

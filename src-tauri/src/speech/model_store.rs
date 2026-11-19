@@ -3,7 +3,7 @@
 //! ---------------------------------------------------------------------------
 //! WHY THE MODEL IS NOT IN THE INSTALLER ANY MORE
 //! ---------------------------------------------------------------------------
-//! It was ~161 MB of ONNX graphs inside every build (§152). Every download of
+//! It was ~161 MB of ONNX graphs inside every build (#152). Every download of
 //! the app, every update, and every CI artefact carried the whole recogniser
 //! whether or not the machine already had it — and the archive it comes from is
 //! already pinned by SHA-256 in a catalogue the binary compiles in, so shipping

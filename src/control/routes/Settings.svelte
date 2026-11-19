@@ -54,6 +54,7 @@
   import {
     describeError,
     recentErrorDiagnostics,
+    withoutTakeAdvice,
     type ErrorDiagnosticEntry,
   } from '../services/errors';
   import { BackendUnavailableError, isTauriRuntime } from '../services/ipc';
@@ -98,7 +99,7 @@
     type SessionMode,
   } from '../services/settings-types';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
-  import { SESSION_MODE_LABELS } from '../../shared/take-vocabulary';
+  import { OFFERED_SESSION_MODES, SESSION_MODE_LABELS } from '../../shared/take-vocabulary';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -630,12 +631,10 @@
    * and where the motion comes from instead. A stored 'fixed' is an earlier
    * version's value: it is named, and the sentence says what to do about it.
    */
-  /*
-   * Named here rather than built in the markup: `error-copy-user-facing.test.ts`
-   * reads each option's availability out of this file's source, and an option
-   * whose label is a template literal is one it cannot parse.
-   */
-  const LEGACY_FIXED_LABEL = `${SESSION_MODE_LABELS.fixed} (earlier version)`;
+  /** A stored mode nothing offers any more, named as what it is. */
+  const LEGACY_MODE_LABEL = $derived(
+    `${SESSION_MODE_LABELS[$settings.general.defaultSessionMode]} (earlier version)`,
+  );
 
   function sessionModeDescription(mode: SessionMode): string {
     if (mode === 'voice') {
@@ -1862,15 +1861,12 @@
   /**
    * The failure as this screen shows it.
    *
-   * The recogniser's messages are written for a take, and several end with
-   * what to press during one ("In a take, press A to start or stop
-   * auto-scroll…"). That is the wrong advice in Settings, where nothing is
-   * scrolling; the rest of the sentence is still the diagnosis.
+   * The recogniser's messages carry what to press during a take. That is the
+   * wrong advice in Settings, where nothing is scrolling; the fault and the
+   * repair are still the diagnosis, and `withoutTakeAdvice` keeps just those.
    */
   const micTestErrorText = $derived(
-    micTestError
-      ?.replace(/\s*In a take, press A to start or stop auto-scroll(?:, then [^.]*)?\./, '')
-      .trim() ?? null,
+    micTestError === null ? null : withoutTakeAdvice(micTestError),
   );
   /** The failure says to fix it in Speech, so offer the way there. */
   const micTestNeedsSpeech = $derived(
@@ -2729,11 +2725,13 @@
             label="Session mode"
             value={$settings.general.defaultSessionMode}
             options={[
-              { value: 'voice', label: SESSION_MODE_LABELS.voice },
-              { value: 'manual', label: SESSION_MODE_LABELS.manual },
-              ...($settings.general.defaultSessionMode === 'fixed'
-                ? [{ value: 'fixed', label: LEGACY_FIXED_LABEL, disabled: true }]
-                : []),
+              ...OFFERED_SESSION_MODES.map((mode) => ({
+                value: mode,
+                label: SESSION_MODE_LABELS[mode],
+              })),
+              ...(OFFERED_SESSION_MODES.includes($settings.general.defaultSessionMode)
+                ? []
+                : [{ value: $settings.general.defaultSessionMode, label: LEGACY_MODE_LABEL, disabled: true }]),
             ]}
             description={sessionModeDescription($settings.general.defaultSessionMode)}
             onchange={(value) =>

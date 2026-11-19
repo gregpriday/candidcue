@@ -130,7 +130,7 @@ struct BundleManifest {
 /// importer has no sanitiser.
 const ALLOWED_BUNDLE_ASSET_EXTENSIONS: [&str; 4] = ["png", "jpg", "gif", "webp"];
 
-/// Spec §21.6 / H6: the manifest is the authority for what a bundle contains.
+/// Spec §21.6: the manifest is the authority for what a bundle contains.
 fn validate_declared_assets(
     declared: &[String],
     actual: &[(String, Vec<u8>)],
@@ -632,7 +632,7 @@ async fn import_bundle(
     let mut assets: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total_bytes: u64 = 0;
     // A bundle either matches its manifest exactly or is rejected, so the
-    // importer no longer accumulates "ignored entry" warnings (H6).
+    // importer no longer accumulates "ignored entry" warnings.
     let warnings: Vec<String> = Vec::new();
 
     for index in 0..archive.len() {
@@ -731,7 +731,7 @@ async fn import_bundle(
                 // Undeclared entries used to be accepted with a warning, which
                 // let a bundle smuggle HTML or executables into a managed
                 // directory. A bundle has a fixed shape (spec §21.6): anything
-                // else means the file is not one of ours (H6).
+                // else means the file is not one of ours.
                 return Err(AppError::validation(format!(
                     "The bundle contains an unexpected entry: {name}"
                 )));
@@ -747,7 +747,7 @@ async fn import_bundle(
     // The manifest is now enforced, not decorative: the declared asset list
     // and the actual archive entries must match exactly, and every asset must
     // be named after its own content hash so a name can never be bound to
-    // content it does not describe (H6).
+    // content it does not describe.
     validate_declared_assets(&manifest.assets, &assets)?;
 
     let title = title_override.unwrap_or(manifest.title);
@@ -767,7 +767,7 @@ async fn import_bundle(
     let finish = install_bundle_assets(pool, paths, &new_id, &assets, &source).await;
     if let Err(err) = finish {
         // A partially imported script is worse than no script: roll the whole
-        // import back rather than leaving a half-populated one behind (H6).
+        // import back rather than leaving a half-populated one behind.
         if let Err(cleanup) =
             repo::force_delete_partial_import(pool, paths, locks, &new_id).await
         {
@@ -787,7 +787,7 @@ async fn import_bundle(
 /// Asset files, asset rows AND the script→asset references, in one
 /// transaction. The references were previously never created, so imported
 /// assets could not be resolved by `resolve_asset_urls` and were eligible for
-/// garbage collection the moment it ran (H6).
+/// garbage collection the moment it ran.
 async fn install_bundle_assets(
     pool: &SqlitePool,
     paths: &DataPaths,

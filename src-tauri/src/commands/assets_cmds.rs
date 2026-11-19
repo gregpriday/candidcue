@@ -12,7 +12,7 @@ use crate::scripts::{DataPaths, ScriptId};
 /// Make sure the script's asset FILES resolve through the asset protocol
 /// (spec §47.8).
 ///
-/// M2: this used to grant the directory RECURSIVELY. The assets directory is
+/// This used to grant the directory RECURSIVELY. The assets directory is
 /// flat, so recursion bought nothing and would have followed any subdirectory
 /// that appeared in it. The static scope in tauri.conf.json already covers
 /// `$APPDATA/scripts/*/assets/*`; this stays as a belt-and-braces grant for
@@ -100,7 +100,7 @@ pub async fn remove_asset_reference(
 /// allow-list and it cannot drift: adding a model with a new licence adds its
 /// url here automatically, and nothing else can ever be opened.
 ///
-/// §153 is explicit that attribution is an obligation the app carries rather
+/// #153 is explicit that attribution is an obligation the app carries rather
 /// than a decision to put in front of the user, so this is not gated on
 /// anything — it is the same link, opened safely.
 #[tauri::command]

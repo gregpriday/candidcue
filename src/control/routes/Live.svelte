@@ -624,17 +624,16 @@ import { onShortcut } from '../lib/shortcuts';
       const practice = $session.practice;
       await leavePresentation(async () => {
         /*
-         * THE ENDING HAS TO BE IN THE DATABASE BEFORE THE EDITOR READS IT.
+         * THE ROW IS CLOSED BEFORE THE EDITOR READS THE HISTORY.
          *
-         * `stopSession` fire-and-forgets the session row's ending index, and the
+         * `stopSession` fire-and-forgets the session row's close, and the
          * Editor's history effect is written around that: it depends on
          * `$session.summary` so that the report's ARRIVAL is a second, later
-         * trigger, after a mount that may well have read the row before its
-         * ending was written. A practice publishes no summary, so it has no
-         * second trigger — and "From last ending" picking a rehearsal up exactly
-         * as it picks a take up is the reason a practice writes an ordinary
-         * session row at all (§practice). Without this it could offer an older
-         * ending, or none, for the whole mount.
+         * trigger. A practice publishes no summary, so it has no second
+         * trigger. Since #241 a practice's row carries no ending, so "From last
+         * ending" no longer depends on this write — but the editor that mounts
+         * next reads the same table, and a read that cannot overtake the write
+         * is the one that needs no argument about which it saw.
          *
          * Awaiting is free here and nowhere else: this is inside the cover, with
          * the window already changing shape around it. It is the same primitive
@@ -749,7 +748,12 @@ import { onShortcut } from '../lib/shortcuts';
         suspendReaderPaper(true);
         if (wasPaper) await painted();
       }
-      const switched = await switchPresentationMode(next, $settings.stage.displayFingerprint);
+      // A take under the camera above its screen (#238) asks for no panel, so
+      // returning to the prompter stays on that screen instead of the pin.
+      const switched = await switchPresentationMode(
+        next,
+        $session.cameraAboveScreen ? null : $settings.stage.displayFingerprint,
+      );
       /*
        * Switching AWAY from reader mode reports the bounds the reading window
        * had a moment ago, and this is the only time they are reported outside a
@@ -2005,6 +2009,13 @@ import { onShortcut } from '../lib/shortcuts';
         // A Read take (#243) listens to nothing, so the stage offers nothing
         // that would follow a voice.
         voiceInput: $session.mode === 'voice',
+        /*
+         * §parts, for the stage's "what is running" label (#241): the part
+         * was readable only in the console and the drawer, neither of which is
+         * on screen while reading. A label, and nothing the follow loop reads.
+         */
+        part: $session.part,
+        partComplete: $session.partComplete,
         /*
          * Already confirmed, so it does not go through `requestEndSession`.
          * The stage raises this from two gestures and both have asked: the

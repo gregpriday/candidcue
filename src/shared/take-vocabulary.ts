@@ -106,6 +106,18 @@ export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
   fixed: 'Roll at pace',
 };
 
+/**
+ * The session modes a take can be opened as in this release.
+ *
+ * Follow voice and Read (#243). 'fixed' survives only as a stored value — a
+ * document saved by an earlier version can still carry one — but nothing offers
+ * it, so no copy may send a presenter looking for it (#121). Settings builds its
+ * Session mode choice from this and shows a stored mode outside it as an
+ * earlier version's, and the error-copy test reads it to decide which modes
+ * copy may name: adding a mode here lifts both at once.
+ */
+export const OFFERED_SESSION_MODES: readonly SessionMode[] = ['voice', 'manual'];
+
 export function sessionModeLabel(mode: string): string {
   return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;
 }
@@ -201,11 +213,12 @@ export const FINISH_PRACTICE_CONFIRM_TITLE = 'Finish practising?';
  * "Your place in the script will be saved" answers a fear about losing a take.
  * A rehearsal does not create that fear; what somebody wants to know before
  * finishing one is that nothing is being written down about it. The second
- * sentence is true for the reason a practice writes an ordinary session row —
- * "From last ending" picks a rehearsal up exactly as it picks a take up.
+ * sentence says what that means for the next take (#241): a rehearsal is not
+ * an ending, so "From last ending" still opens where the last recording
+ * stopped.
  */
 export const FINISH_PRACTICE_CONFIRM_BODY =
-  'Nothing is reported. Your place in the script is kept.';
+  'Nothing is reported, and where your last take stopped is unchanged.';
 
 /* ---------------------------------------------------------------------------
  * Axis C: the microphone

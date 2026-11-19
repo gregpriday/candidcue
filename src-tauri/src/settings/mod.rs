@@ -186,7 +186,8 @@ pub struct StageBehaviorSettings {
      * is taken for every take, and the stage hides the pointer after 1.5 s.
      * Old documents that carry them still load; see `GeneralSettings`.
      */
-    /// The shape a take OPENS in: 'prompter' | 'reader' (§ reader-mode spec).
+    /// The shape a take OPENS in: 'prompter' | 'reader'
+    /// (docs/SpeakingGlass_Reader_Mode_Specification.md).
     ///
     /// ------------------------------------------------------------------------
     /// WHY `Option`, WHEN EVERY OTHER FIELD HERE HAS A PLAIN DEFAULT
@@ -276,7 +277,7 @@ pub struct AudioSettings {
     /// which takes two questions rather than a constant: the selected
     /// recogniser has to transcribe it and the alignment engine has to have a
     /// normalisation profile for it. Both are facts about the build, and they
-    /// do not give the same answer — the shipped bundle is bilingual (`zh-en`,
+    /// do not give the same answer — the shipping model is bilingual (`zh-en`,
     /// a fact the code denied for long enough to be worth stating here), while
     /// the engine normalises English alone and has no Chinese. The two overlap
     /// on English alone. See `migrate_in_place`.
@@ -291,11 +292,11 @@ pub struct AudioSettings {
     ///
     /// This no longer gates what is sent: the recogniser does its own
     /// endpointing, and nothing the local detector decides can stop a word
-    /// reaching it. It drives the *meter* — the "is it hearing me" readout in
-    /// Preflight and on the stage — which is why it survived the removal of
-    /// client-side turn detection and why it is still worth persisting: a room's
-    /// mic tuning that a cleared browser store silently returns to neutral is a
-    /// tuning the presenter would rediscover mid-take.
+    /// reaching it. It drives the *meter* — the "is it hearing me" readout —
+    /// which is why it survived the removal of client-side turn detection and
+    /// why it is still worth persisting: a room's mic tuning that a cleared
+    /// browser store silently returns to neutral is a tuning the presenter
+    /// would rediscover mid-take.
     pub vad_sensitivity: f64,
 }
 
@@ -427,7 +428,7 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
     }
 
     /*
-     * The recogniser and the language are ONE choice (§153).
+     * The recogniser and the language are ONE choice (#153).
      *
      * `migrate_in_place` repairs an incoherent pair on READ, which is right for
      * a document a previous build wrote — the user should not lose a session

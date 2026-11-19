@@ -31,6 +31,7 @@ import {
   type CalibratedRig,
   type TakeDestination,
 } from '../lib/take-destination';
+import { isCameraOffPanelProfile } from '../lib/camera-above-rig';
 import { currentWindowDisplay, listDisplays, watchDisplayChanges } from '../services/stage';
 import {
   activeOpticalProfile,
@@ -113,7 +114,13 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
     const calibratedRigs: CalibratedRig[] = [];
     for (const display of displays) {
       const profile = activeOpticalProfile(context.optical, display.fingerprint);
-      if (profile !== null) calibratedRigs.push({ display, rigName: profile.rigName });
+      if (profile !== null) {
+        calibratedRigs.push({
+          display,
+          rigName: profile.rigName,
+          ...(isCameraOffPanelProfile(profile) ? { cameraOffPanel: true } : {}),
+        });
+      }
     }
     /*
      * The pinned panel's rig is the exception to "connected only": when that
@@ -121,8 +128,14 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
      * is about to go without, and the warning should say so by name.
      */
     const pinned = context.pinnedFingerprint;
+    /*
+     * A camera-above rig is not named here either (#238): a webcam monitor that
+     * has been unplugged says nothing about how the screen the take falls back
+     * to should be sized, so it is no measured optics being gone without.
+     */
+    const pinnedProfile = pinned === null ? null : activeOpticalProfile(context.optical, pinned);
     const pinnedRigName =
-      pinned === null ? null : (activeOpticalProfile(context.optical, pinned)?.rigName ?? null);
+      pinnedProfile === null || isCameraOffPanelProfile(pinnedProfile) ? null : pinnedProfile.rigName;
 
     store.set(
       resolveTakeDestination({

@@ -52,7 +52,7 @@ const DIM_TAIL_GRACE_MS: f64 = 1_500.0;
 const UIE_INCIDENT_DARKNESS: f64 = 0.15;
 const UIE_INCIDENT_MS: f64 = 150.0;
 
-/// Readable-state thresholds (§3.1). Every one of these is a CANDIDATE pending
+/// Readable-state thresholds. Every one of these is a CANDIDATE pending
 /// the human calibration in Tier D, and is named as such in the report — they
 /// are the shape of the metric, not established perceptual facts.
 const READABLE_BAND_SLACK_LINES: f64 = 0.5;
@@ -62,7 +62,7 @@ const READABLE_NEXT_MAX_DARKNESS: f64 = 0.25;
 const READABLE_MAX_LINES_PER_S: f64 = 2.5;
 const READABLE_MIN_DOC_OPACITY: f64 = 0.8;
 
-/// Readable corridor (§6.3): how dark a word has to be before it stops counting
+/// Readable corridor: how dark a word has to be before it stops counting
 /// as material the reader still has in front of them.
 ///
 /// Numerically `FIRST_RESPONSE`, and deliberately a separate constant. That one
@@ -144,7 +144,7 @@ pub struct Disruption {
     pub duration_ms: f64,
 }
 
-/// A readable-recovery measurement, decomposed (§9.2).
+/// A readable-recovery measurement, decomposed.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ReadableRecovery {
     pub kind: EventKind,
@@ -224,7 +224,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub take_ms: f64,
 
-    // ---- §5 temporal synchronisation ----
+    // ---- temporal synchronisation ----
     #[serde(deserialize_with = "nullable_metric")]
     pub temporal_lag_p50: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -243,7 +243,7 @@ pub struct PerceptualMetrics {
     pub early_100_pct: f64,
     #[serde(deserialize_with = "nullable_metric")]
     pub worst_lag_episode_ms: f64,
-    /// The same lag, sliced by context (§5, conditional slices).
+    /// The same lag, sliced by context (conditional slices).
     #[serde(deserialize_with = "nullable_metric")]
     pub lag_p50_opening: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -253,7 +253,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub lag_p50_after_retake: f64,
 
-    // ---- §4.3 multi-threshold dim latency ----
+    // ---- multi-threshold dim latency ----
     #[serde(deserialize_with = "nullable_metric")]
     pub first_response_p50: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -276,7 +276,7 @@ pub struct PerceptualMetrics {
     pub premature_dim_p01: f64,
     pub dim_never: usize,
 
-    // ---- §4.1/§4.2 ink ----
+    // ---- ink ----
     #[serde(deserialize_with = "nullable_metric")]
     pub uie_mean: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -294,7 +294,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub sir_mean: f64,
 
-    // ---- §4.4/§4.5 retake & corrections ----
+    // ---- retake & corrections ----
     #[serde(deserialize_with = "nullable_metric")]
     pub retake_legibility_loss: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -308,7 +308,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub correction_duration_p95_ms: f64,
 
-    // ---- §6 reading band ----
+    // ---- reading band ----
     #[serde(deserialize_with = "nullable_metric")]
     pub band_occupancy_pct: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -332,7 +332,7 @@ pub struct PerceptualMetrics {
     pub below_1_future_line_pct: f64,
     pub future_starvation_events: u32,
 
-    // ---- §6.3 the readable corridor ----
+    // ---- the readable corridor ----
     // Defaulted on read: results written before this metric existed have no
     // such key, and refusing to open them would strand every archived run.
     /// Milliseconds of legible reading ahead of the mouth, bad tail.
@@ -362,7 +362,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub handoff_err_p95: f64,
 
-    // ---- §7 motion comfort ----
+    // ---- motion comfort ----
     #[serde(deserialize_with = "nullable_metric")]
     pub plant_err_p50: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -408,7 +408,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub max_line_speed: f64,
 
-    // ---- §8 honest uncertainty ----
+    // ---- honest uncertainty ----
     #[serde(deserialize_with = "nullable_metric")]
     pub fce_3_pct: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -433,7 +433,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub ece: f64,
 
-    // ---- §3 holistic ----
+    // ---- holistic ----
     #[serde(deserialize_with = "nullable_metric")]
     pub readable_availability: f64,
     pub disruptions: u32,
@@ -447,7 +447,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub longest_clean_ms: f64,
 
-    // ---- §9 readable recovery ----
+    // ---- readable recovery ----
     #[serde(deserialize_with = "nullable_metric")]
     pub readable_recovery_p50: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -459,7 +459,7 @@ pub struct PerceptualMetrics {
     #[serde(deserialize_with = "nullable_metric")]
     pub recovered_within_5_words_pct: f64,
 
-    // ---- §10 reliability ----
+    // ---- reliability ----
     #[serde(deserialize_with = "nullable_metric")]
     pub freshness_p50: f64,
     #[serde(deserialize_with = "nullable_metric")]
@@ -657,7 +657,7 @@ impl Glass<'_> {
 }
 
 /// Walk forward from where the reader is and measure how far the legible text
-/// reaches (§6.3).
+/// reaches.
 ///
 /// This is the quantity `time.lag_p50` cannot see. A stage 700 ms behind the
 /// mouth with the line correctly placed and stable opaque text under it is
@@ -805,7 +805,7 @@ struct FrameView {
     future_reserve: f64,
     /// Worst darkness among the next READABLE_NEXT_WORDS unread tokens.
     next_worst_darkness: f64,
-    /// Legible material ahead of the mouth (§6.3). `None` outside the frames
+    /// Legible material ahead of the mouth. `None` outside the frames
     /// `temporal_err` is scored over, so the two rows are comparable frame for
     /// frame — which is the comparison the row exists to make.
     readable_ahead: Option<ReadableAheadMeasurement>,
@@ -858,7 +858,7 @@ pub fn evaluate_perceptual(
         let speaking = gold.speaking(t);
         let kind = gold.kind_at(t);
 
-        // ---- §5 temporal frontier error ----
+        // ---- temporal frontier error ----
         // Where the rendered DIM FRONTIER sits, expressed as the time the reader
         // passed that position. This is the row that makes lag comparable across
         // speaking rates.
@@ -877,7 +877,7 @@ pub fn evaluate_perceptual(
             None
         };
 
-        // ---- §6 reading band and future reserve ----
+        // ---- reading band and future reserve ----
         let focus_y = trace.line_map.y_of(focus);
         let focus_screen_y = focus_y - f.q_px;
         let raw = focus_screen_y - reading_line;
@@ -897,7 +897,7 @@ pub fn evaluate_perceptual(
             }
         }
 
-        // ---- §6.3 the readable corridor ----
+        // ---- the readable corridor ----
         // Same gate as `temporal_err` above, on purpose: the two rows are the
         // pair the issue asks to be able to tell apart, and comparing them
         // across different frame sets would be the same mistake in a new place.
@@ -913,7 +913,7 @@ pub fn evaluate_perceptual(
             None
         };
 
-        // ---- §4.1/§4.2 the two ink integrals ----
+        // ---- the two ink integrals ----
         // D*_i = 1 once token i has been passed IN THE CURRENT PASS, else 0.
         // Positive residual either way is a defect, and the two directions are
         // separate metrics because they are separate complaints: "it erased text
@@ -979,7 +979,7 @@ pub fn evaluate_perceptual(
         });
     }
 
-    // ---- §5 summarise temporal ----
+    // ---- summarise temporal ----
     let scored: Vec<&FrameView> = views.iter().filter(|v| v.t >= from_ms).collect();
     let errs: Vec<f64> = scored.iter().filter_map(|v| v.temporal_err).collect();
     s.temporal_err_ms = errs.clone();
@@ -1036,7 +1036,7 @@ pub fn evaluate_perceptual(
         });
     }
 
-    // ---- §4.1/§4.2 ink ----
+    // ---- ink ----
     s.uie = scored.iter().map(|v| v.uie).collect();
     s.sir = scored.iter().map(|v| v.sir).collect();
     let secs = frame_ms / 1000.0;
@@ -1076,7 +1076,7 @@ pub fn evaluate_perceptual(
         m.uie_max_duration_ms = incidents.iter().map(|(_, d)| *d).fold(0.0, f64::max);
     }
 
-    // ---- §6 band, reserve, handoff ----
+    // ---- band, reserve, handoff ----
     let band: Vec<f64> = scored.iter().filter(|v| v.on_script).map(|v| v.band_err).collect();
     s.band_err_lines = band.clone();
     m.band_occupancy_pct = pct(band.iter().filter(|e| **e <= 0.0).count(), band.len());
@@ -1132,7 +1132,7 @@ pub fn evaluate_perceptual(
         }
         m.future_starvation_events = events;
     }
-    // §6.3 the readable corridor: how much legible text is in front of the
+    // The readable corridor: how much legible text is in front of the
     // reader, rather than how far behind them the display is.
     {
         let measured: Vec<ReadableAheadMeasurement> =
@@ -1145,7 +1145,7 @@ pub fn evaluate_perceptual(
         m.readable_ahead_viewport_deficit_pct = summary.viewport_deficit_pct;
         m.readable_ahead_material_end_frames = summary.material_end_frames;
     }
-    // §6.2 line handoff: at the acoustic end of each rendered line, where does
+    // Line handoff: at the acoustic end of each rendered line, where does
     // the NEXT line sit relative to the reading position? A stage can be well
     // placed on average and still produce a bad eye-return at every wrap.
     {
@@ -1166,7 +1166,7 @@ pub fn evaluate_perceptual(
         m.handoff_err_p95 = pctl(&handoffs, 95.0);
     }
 
-    // ---- §7 motion ----
+    // ---- motion ----
     {
         let plant: Vec<f64> = trace
             .frames
@@ -1187,7 +1187,7 @@ pub fn evaluate_perceptual(
             plant.len(),
         );
 
-        // §7.2 snapshot pulse energy + the event-triggered average.
+        // Snapshot pulse energy + the event-triggered average.
         let mut pulses = Vec::new();
         for (i, f) in trace.frames.iter().enumerate() {
             if !f.snapshot_arrived || f.t_ms < from_ms {
@@ -1211,7 +1211,7 @@ pub fn evaluate_perceptual(
         let minutes = (m.take_ms - from_ms).max(1.0) / 60_000.0;
         m.pulses_per_min = pulses.len() as f64 / minutes;
 
-        // §7.3 cadence ripple: periodic modulation of speed in the recogniser
+        // Cadence ripple: periodic modulation of speed in the recogniser
         // update band, after removing the intended semantic path velocity. The
         // reference is the gold reading rate, so a display that simply moves
         // with the reader has no residual at all.
@@ -1223,7 +1223,7 @@ pub fn evaluate_perceptual(
             .collect();
         m.cadence_ripple = band_power_ratio(&residual, frame_ms / 1000.0, RIPPLE_LO_HZ, RIPPLE_HI_HZ);
 
-        // §7.4 motion correction effort, normalised by the profile's own limits
+        // Motion correction effort, normalised by the profile's own limits
         // so the number is comparable across pitches.
         let a0 = 2600.0 * pitch / crate::stage::REFERENCE_LINE_PITCH_PX;
         let j0 = 12_000.0 * pitch / crate::stage::REFERENCE_LINE_PITCH_PX;
@@ -1235,7 +1235,7 @@ pub fn evaluate_perceptual(
             .collect();
         m.motion_correction_effort = mean_of(&eff);
 
-        // §7.5 silent motion burden, per pause class. Lines of document travelled
+        // Silent motion burden, per pause class. Lines of document travelled
         // while the presenter was NOT speaking.
         let mut burden = [0.0f64; 4];
         let mut worst_silent = 0.0f64;
@@ -1264,7 +1264,7 @@ pub fn evaluate_perceptual(
         m.silent_motion_long_lines = burden[3];
         m.silent_travel_max_lines = worst_silent;
 
-        // §7.6 rest drift: the target should be MOTIONLESS when nothing is
+        // Rest drift: the target should be MOTIONLESS when nothing is
         // happening, not merely under some large velocity threshold.
         let mut rest_travel = 0.0;
         let mut rest_v: Vec<f64> = Vec::new();
@@ -1297,7 +1297,7 @@ pub fn evaluate_perceptual(
         };
         m.rest_reversals = reversals;
 
-        // §7.7 visible relocation distance: travel weighted by how visible the
+        // Visible relocation distance: travel weighted by how visible the
         // document was while it happened. A correct hidden re-anchor scores ~0.
         let mut visible = 0.0;
         let mut max_op = 0.0f64;
@@ -1319,7 +1319,7 @@ pub fn evaluate_perceptual(
         m.relocation_max_opacity = max_op;
         m.fade_count = fades;
 
-        // §7.8 blur exposure.
+        // Blur exposure.
         let speeds: Vec<f64> = views
             .iter()
             .filter(|v| v.t >= from_ms)
@@ -1355,7 +1355,7 @@ fn honesty_and_holistic(
     let total = m.take_ms;
 
     // -----------------------------------------------------------------------
-    // §4.3 multi-threshold dim latency
+    // Multi-threshold dim latency
     // -----------------------------------------------------------------------
     // For every on-script word: from the moment the mouth finished it, how long
     // until it visibly began to change, clearly read as passed, and fully
@@ -1434,7 +1434,7 @@ fn honesty_and_holistic(
     }
 
     // -----------------------------------------------------------------------
-    // §4.4 retake rebrightening / §4.5 correction burden
+    // Retake rebrightening / correction burden
     // -----------------------------------------------------------------------
     // The global high-water metric is structurally blind to this: on that
     // reference the text a reader is re-reading has been spoken, so leaving it
@@ -1513,7 +1513,7 @@ fn honesty_and_holistic(
     }
 
     // -----------------------------------------------------------------------
-    // §8 honest uncertainty
+    // Honest uncertainty
     // -----------------------------------------------------------------------
     // Being wrong while HOLDING is a recovery problem. Being wrong while
     // claiming to follow is a lie, and it is much worse: the presenter reads
@@ -1596,7 +1596,7 @@ fn honesty_and_holistic(
                     run_ms = 0.0;
                     counted = false;
                 }
-                // §8.3 calibration: was the engine actually within 3 atoms while
+                // Calibration: was the engine actually within 3 atoms while
                 // reporting this confidence?
                 s.calibration.push((f.confidence, err <= FCE_DELTAS[0]));
             } else {
@@ -1666,7 +1666,7 @@ fn honesty_and_holistic(
     }
 
     // -----------------------------------------------------------------------
-    // §3.1 readable availability / §3.2 disruption-free survival
+    // Readable availability / disruption-free survival
     // -----------------------------------------------------------------------
     {
         let scored: Vec<&FrameView> = views.iter().filter(|v| v.t >= from_ms).collect();
@@ -1762,7 +1762,7 @@ fn honesty_and_holistic(
     }
 
     // -----------------------------------------------------------------------
-    // §9 readable recovery
+    // Readable recovery
     // -----------------------------------------------------------------------
     // A recovery is not complete when the engine's number is right. It is
     // complete when the presenter can read again: correctly placed, brightly
@@ -1845,7 +1845,7 @@ fn honesty_and_holistic(
     }
 
     // -----------------------------------------------------------------------
-    // §10 evidence freshness and follow availability
+    // Evidence freshness and follow availability
     // -----------------------------------------------------------------------
     // The most dangerous reliability failure is not a crash; it is an
     // apparently healthy take that has quietly stopped following.

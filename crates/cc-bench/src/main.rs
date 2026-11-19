@@ -3,7 +3,7 @@
 //! ```text
 //! cc-bench tier-a  --label L [--config cfg.json] [--out results.json]
 //! cc-bench synth-audio [--runs DIR]              # fal.ai TTS → fixture audio
-//! cc-bench capture-local --model DIR --runs DIR [--pace 1.0]
+//! cc-bench capture-local --model DIR --runs DIR [--pace 1.0] [--language TAG]
 //! cc-bench vocab [SCRIPT ...]                   # show extracted bias terms
 //! cc-bench tier-b  --label L [--config C] [--out F]
 //! cc-bench compare baseline.json candidate.json
@@ -113,6 +113,9 @@ struct Flags {
     blank_penalty: Option<f32>,
     /// `capture-local`: `greedy_search` | `modified_beam_search`.
     decoding: Option<String>,
+    /// `capture-local`: the BCP-47 tag the corpus is spoken in, recorded in
+    /// every run's `capture.json`. `None` means the model's default language.
+    language: Option<String>,
     /// `tier-c`: which rendered layouts to score. None means the whole sweep.
     layouts: Option<Vec<String>>,
     /// `robustness`: perturbations to evaluate per scenario.
@@ -143,6 +146,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         prime_ms: None,
         blank_penalty: None,
         decoding: None,
+        language: None,
         layouts: None,
         budget: 240,
         focus_lead: None,
@@ -168,6 +172,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--prime-ms" => flags.prime_ms = Some(take()?.parse()?),
             "--blank-penalty" => flags.blank_penalty = Some(take()?.parse()?),
             "--decoding" => flags.decoding = Some(take()?),
+            "--language" => flags.language = Some(take()?),
             "--budget" => flags.budget = take()?.parse()?,
             "--focus-lead" => flags.focus_lead = Some(take()?.parse()?),
             "--verbose" => flags.verbose = true,
@@ -639,6 +644,13 @@ fn main() -> anyhow::Result<()> {
             let out_runs = flags
                 .runs
                 .ok_or_else(|| anyhow::anyhow!("--runs <dir> required (do not overwrite bench/runs)"))?;
+            // A pace that is not a finite positive number cannot be paced, and
+            // an infinite one is written to `capture.json` as `null`, which
+            // then cannot be read back.
+            anyhow::ensure!(
+                flags.pace.is_finite() && flags.pace > 0.0,
+                "--pace must be a positive number (1.0 is real time)"
+            );
             capture_all_local(
                 &out_runs,
                 &model_dir,
@@ -646,6 +658,7 @@ fn main() -> anyhow::Result<()> {
                 flags.prime_ms,
                 flags.blank_penalty,
                 flags.decoding.clone(),
+                flags.language.clone(),
             )?;
         }
         Some("vocab") => {
@@ -1078,7 +1091,23 @@ fn main() -> anyhow::Result<()> {
 
             // Reads each tier's scoring table — the gate's rows aggregated
             // over the core fixtures alone — and refuses a result without one.
-            let report = language_gate::evaluate_saved(&language, &tier_b, &tier_c)?;
+            // The weights a capture recorded are checked against the same
+            // catalogue the app's downloader verifies an install against, as
+            // compiled into this build.
+            let catalogue = cc_bench::provenance::WeightCatalogue::shipped()?;
+            let mut report =
+                language_gate::evaluate_saved(&language, &tier_b, &tier_c, &catalogue)?;
+            // The catalogue the weights were judged against is this binary's
+            // own, so the binary has to be one somebody else can rebuild.
+            let gate = cc_bench::provenance::Revision::current();
+            if !gate.is_reproducible() {
+                report.corpus_problems.push(format!(
+                    "this gate is cc-bench {}, which is not a clean build of a \
+                     commit, so the model catalogue it judged the weights against \
+                     is not one anybody can name",
+                    gate.describe()
+                ));
+            }
             print!("{}", report.render());
             if !report.passed() {
                 anyhow::bail!(
@@ -1089,7 +1118,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => {
             eprintln!(
-                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio [--runs DIR]\n       cc-bench capture-local --model DIR --runs DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
+                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio [--runs DIR]\n       cc-bench capture-local --model DIR --runs DIR [--pace P] [--language TAG]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
             );
         }
     }
@@ -1180,6 +1209,7 @@ fn capture_all_local(
     prime_ms: Option<u32>,
     blank_penalty: Option<f32>,
     decoding: Option<String>,
+    language: Option<String>,
 ) -> anyhow::Result<()> {
     // The profile's tuning first, overrides on top. A capture that started
     // from anything else would be measuring a recogniser the app does not
@@ -1190,8 +1220,33 @@ fn capture_all_local(
     // tuning it is rather than claiming the weights are that model's. Pointing
     // this at another bundle gives it x-asr's `blank_penalty`, which is a
     // reasonable thing to want when sweeping and a corpus-poisoning mistake
-    // when not noticed. Naming the profile is what makes it noticeable.
+    // when not noticed. Naming the profile is what makes it noticeable, and
+    // every run's `capture.json` records the digests of the weights actually
+    // loaded, which `gate-language` checks against the catalogue.
     let model = cc_stt::default_model();
+    // The language is a statement about the AUDIO — sherpa has no language
+    // switch — so it is checked against both things that have to agree with
+    // it: the model must transcribe it, and the alignment engine must have a
+    // profile for it. Today that second check means English, because the
+    // replay compiles every script under the default profile.
+    let language = language.unwrap_or_else(|| model.default_language.to_string());
+    anyhow::ensure!(
+        cc_bench::provenance::is_language_tag(&language),
+        "--language {language:?} is not a language tag (en, en-US, fr, …)"
+    );
+    anyhow::ensure!(
+        model.serves_language(&language),
+        "{} does not transcribe {language} (it serves {:?})",
+        model.id,
+        model.languages
+    );
+    let compiled = cc_align::CompileOptions::default().language;
+    anyhow::ensure!(
+        cc_bench::provenance::primary_subtag(&language) == compiled.primary_subtag(),
+        "the benchmark compiles scripts as {}, so a {language} corpus would be scored \
+         against the wrong language",
+        compiled.primary_subtag()
+    );
     let mut config = cc_stt::LocalSttConfig::for_model(model, model_dir);
     if let Some(ms) = prime_ms {
         config.prime_ms = ms;
@@ -1203,13 +1258,30 @@ fn capture_all_local(
         config.decoding_method = method;
     }
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
+    let weights = cc_bench::provenance::weights_of(model_dir)?;
+    if let Some(why) = cc_bench::provenance::WeightCatalogue::shipped()?.mismatch(model.id, &weights) {
+        println!(
+            "WARNING: {} does not hold {}'s weights ({why}). The capture \
+             records what it loaded, and gate-language will refuse it.",
+            model_dir.display(),
+            model.id
+        );
+    }
+    let conditions = cc_bench::provenance::CaptureConditions {
+        language: language.clone(),
+        model: model.id.to_string(),
+        weights,
+        recogniser: config.clone(),
+        pace,
+    };
     let loading = std::time::Instant::now();
     let recognizer = cc_stt::LocalRecognizer::load(&config).map_err(|e| anyhow::anyhow!(e))?;
     println!(
-        "loaded {} in {:.0}ms with {} tuning ({} threads, {}, prime {}ms, blank_penalty {})",
+        "loaded {} in {:.0}ms with {} tuning for {language}, cc-bench {} ({} threads, {}, prime {}ms, blank_penalty {})",
         model_dir.display(),
         loading.elapsed().as_secs_f64() * 1000.0,
         model.id,
+        cc_bench::provenance::Revision::current().describe(),
         config.num_threads,
         config.decoding_method,
         config.prime_ms,
@@ -1224,6 +1296,8 @@ fn capture_all_local(
         .collect();
     dirs.sort();
 
+    std::fs::create_dir_all(runs_dir)?;
+    let staging = cc_bench::provenance::staging_root(runs_dir)?;
     for dir in dirs {
         let name = dir.file_name().unwrap().to_string_lossy().to_string();
         let out_dir = runs_dir.join(&name);
@@ -1274,12 +1348,25 @@ fn capture_all_local(
             started.elapsed().as_secs_f64()
         );
         anyhow::ensure!(transcripts > 0, "capture produced no transcripts for {name}");
-        std::fs::create_dir_all(&out_dir)?;
-        cc_bench::capture_local::write_events_jsonl(&out_dir.join("events.jsonl"), &events)?;
+        // Assembled and sealed in this session's own staging directory, then
+        // moved into the corpus whole. Written in place, a second capture of
+        // the same corpus could overwrite these files between the last write
+        // and the seal, and the record would describe this recogniser over
+        // the other one's events.
+        let staged = staging.join(&name);
+        std::fs::create_dir_all(&staged)?;
+        cc_bench::capture_local::write_events_jsonl(&staged.join("events.jsonl"), &events)?;
         for file in ["gold.json", "manifest.json", "performance.txt"] {
-            std::fs::copy(dir.join(file), out_dir.join(file))?;
+            std::fs::copy(dir.join(file), staged.join(file))?;
+        }
+        cc_bench::provenance::seal_capture(&staged, &conditions)?;
+        if !cc_bench::provenance::publish_run(&staged, &out_dir)? {
+            println!("  discarded: {name} was captured by another session meanwhile");
+            std::fs::remove_dir_all(&staged)?;
         }
     }
+    // Empty unless a run was discarded and its removal failed.
+    let _ = std::fs::remove_dir_all(&staging);
     Ok(())
 }
 

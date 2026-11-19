@@ -108,13 +108,27 @@ export async function endSessionRecord(
   );
 }
 
+/**
+ * The session rows, newest first.
+ *
+ * `withEnding` asks Rust for only the rows that recorded where they ended —
+ * what "From last ending" reads. Filtered in the query rather than here: a
+ * practice closes its row without an ending (#241), and a run of them would
+ * otherwise fill the page and push the last recording off it. Sent only when
+ * set, so the ordinary listing's payload is what it always was.
+ */
 export async function listSessionRecords(
   scriptId?: string,
   limit?: number,
+  options: { withEnding?: boolean } = {},
 ): Promise<SessionRecord[]> {
   return invokeOrMock<SessionRecord[]>(
     'list_sessions',
-    { scriptId: scriptId ?? null, limit: limit ?? null },
+    {
+      scriptId: scriptId ?? null,
+      limit: limit ?? null,
+      ...(options.withEnding ? { withEnding: true } : {}),
+    },
     () => [],
   );
 }

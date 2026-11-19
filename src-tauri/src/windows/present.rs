@@ -1070,7 +1070,7 @@ fn apply_windowed<R: Runtime>(
          * editor may well be maximized when Present is pressed, and the stored
          * rectangle would then be quietly ignored — a reading window that
          * remembers, except when it does not, which is the flakiest thing this
-         * feature could be. A no-op on every path that used to reach here.
+         * feature could be.
          */
         let _ = window.unmaximize();
     }
@@ -2232,8 +2232,7 @@ pub fn set_control_presenting<R: Runtime>(
              * Back to the OS default, so the take's black is not left behind the
              * editor.
              *
-             * The comment here used to say this restores "the workspace theme's
-             * own light canvas". It does not: `None` gives back the dynamic
+             * This is NOT a light canvas: `None` gives back the dynamic
              * `windowBackgroundColor`, which resolves DARK on a machine in Dark
              * Mode — measured, not assumed. It is close to invisible in practice
              * because the webview covers the whole window (full-size content
@@ -2241,7 +2240,7 @@ pub fn set_control_presenting<R: Runtime>(
              * the paint. Left as the OS default rather than pinned to a
              * hard-coded paper colour, which would be wrong the moment the
              * workspace palette moves; noted here so the next person does not
-             * read the old promise and trust it.
+             * assume a light backing.
              *
              * On a window material (`windows/material.rs`) the backing is
              * transparent instead, with the material laid back under it — the

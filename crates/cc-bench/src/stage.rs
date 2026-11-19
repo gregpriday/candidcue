@@ -128,7 +128,7 @@ pub fn dim_opacity(behind: i64) -> f64 {
 /// to be readable at 30 Hz on a 4K panel over HDMI and at 120 Hz on a laptop,
 /// and a controller tuned at one refresh rate is not automatically fine at the
 /// others.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layout {
     pub name: String,
     pub line_pitch_px: f64,
@@ -694,7 +694,7 @@ const REANCHOR_FADE_MS: f64 = 200.0;
 const REANCHOR_THRESHOLD_LINES: f64 = 4.25;
 
 /* --------------------------------------------------------------- §30.5 --
- * Backward is not the mirror of forward, and this port used to say it was.
+ * Backward is not the mirror of forward.
  *
  * The branch below was symmetric (`.abs() >= threshold`), so a retake more than
  * about four lines back was modelled as a fade and a plant overwrite — which is

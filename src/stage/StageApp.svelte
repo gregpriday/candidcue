@@ -99,6 +99,7 @@
   import { manualScrollRelocated } from './renderer/motion';
   import { transcriptTail } from './renderer/transcript-tail';
   import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
+  import { takeScopeText, type TakeScopePart } from './renderer/take-scope';
 
   interface EmbeddedStageBridge {
     envelope: StageSessionEnvelope;
@@ -167,6 +168,16 @@
      * an older host keep exactly what they had.
      */
     voiceInput?: boolean;
+    /**
+     * §parts. The part this reading is of, and whether its end has been
+     * reached (#241) — for the label that says on the glass what is running.
+     *
+     * Read for that label and nothing else. The part bounds nothing: the
+     * alignment and motion paths never see it, exactly as they never see the
+     * practice flag.
+     */
+    part?: TakeScopePart | null;
+    partComplete?: boolean;
     /**
      * "Show nothing", the host's own switch, mirrored the same way
      * `followPaused` is — directly, not through a directive, for the same
@@ -640,6 +651,65 @@
    * acknowledgement is only ever a confirmation of something they just did.
    */
   const ackCrowded = $derived(ackMaxWidthPx !== null && ackMaxWidthPx < 6 * overlayFontSizePx);
+
+  /**
+   * What is running, said on the glass (#241): "Practising", the part, both,
+   * or nothing for an ordinary take of the whole script. Only the embedded
+   * path has a session to describe; the separate window's preview, test and
+   * calibration have none.
+   */
+  const takeScope = $derived(
+    embedded
+      ? takeScopeText(embedded.practice ?? false, embedded.part, embedded.partComplete ?? false)
+      : null,
+  );
+
+  /*
+   * Which edge the label takes: the edge of the safe rectangle FARTHER from
+   * the reading band, and flush with it.
+   *
+   * The band is placed by the lens, not by convention — a camera below the
+   * screen puts it in the bottom tenth of the glass — so a label fixed to the
+   * bottom edge would sit on the words being read on exactly those rigs.
+   * Compared in the safe rectangle's own terms, which is what the calibrated
+   * `readingBandY` is already in; the flat `readingBandCenterPercent` is of the
+   * viewport and is converted. The farther edge is at least half the safe
+   * rectangle from the band's centre, and the label sits ON that edge rather
+   * than inset into the reading area — the transient prompts that share an
+   * edge with it are drawn after it and paint over it.
+   */
+  const takeScopeAtTop = $derived.by(() => {
+    if (!settings) return false;
+    const band = settings.optics
+      ? settings.optics.readingBandY
+      : safeInsets.height > 0
+        ? (settings.readingBandCenterPercent - safeInsets.y) / safeInsets.height
+        : settings.readingBandCenterPercent / 100;
+    return band > 0.5;
+  });
+  /*
+   * Each edge's inset. Whichever edge is PHYSICALLY the top — the top without
+   * a vertical mirror, the bottom with one — clears the host's "Take controls"
+   * tab (16px down, 32px tall), measured from the safe rectangle's inset on
+   * that physical side, as the acknowledgement chip does. The physical bottom
+   * sits on the dock's baseline; the label is on the other side from the dock.
+   */
+  const tabClearPx = (insetPx: number): number =>
+    embedded ? Math.max(16, Math.round(16 + 32 + 12 - insetPx)) : 16;
+  const takeScopeTop = $derived(
+    !takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? '16px'
+        : `${tabClearPx((vh * safeInsets.y) / 100)}px`,
+  );
+  const takeScopeBottom = $derived(
+    takeScopeAtTop
+      ? undefined
+      : settings?.mirrorY
+        ? `${tabClearPx((vh * (100 - safeInsets.y - safeInsets.height)) / 100)}px`
+        : '16px',
+  );
 
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');
@@ -2600,6 +2670,48 @@
         style:--stage-hold-top={holdChipTop}
       >
         <!--
+          What is running (#241): "Practising", the part, or both.
+
+          In this plane because it is words the presenter reads through the
+          glass, so it takes the corrective flip with the script. It takes the
+          edge away from the reading band (see `takeScopeAtTop`), and the
+          PHYSICAL right-hand side: the dock is in the unmirrored operator plane
+          at the bottom left, so under a horizontal mirror the label's side
+          flips in these coordinates to land on the right of the panel either
+          way.
+
+          First in this plane, so every transient prompt drawn after it — the
+          acknowledgement, the hold chip, the Escape prompt — paints over it
+          rather than under it.
+
+          Persistent rather than transient: it answers "is this the take?", a
+          question that matters for the whole reading, and it does not fade
+          with the dock. A blank hides it like everything else. Not a live
+          region: the take-controls drawer already announces the part, and two
+          regions would say the same thing twice.
+        -->
+        {#if takeScope && !app.blanked}
+          <div
+            class="take-scope"
+            class:flip-x={settings?.mirrorX ?? false}
+            data-edge={takeScopeAtTop ? 'top' : 'bottom'}
+            style:font-size="{overlayFontSizePx}px"
+            style:top={takeScopeTop}
+            style:bottom={takeScopeBottom}
+          >
+            <span class="take-scope-lead">{takeScope.lead}</span>
+            {#if takeScope.name}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
+              <span class="take-scope-name">{takeScope.name}</span>
+            {/if}
+            {#if takeScope.done}
+              <span class="take-scope-sep" aria-hidden="true">·</span>
+              <span class="take-scope-done">{takeScope.done}</span>
+            {/if}
+          </div>
+        {/if}
+
+        <!--
           Layer 7: transient command acknowledgement (§33.10).
 
           Always mounted, so its status region outlives each message. It stands
@@ -3317,6 +3429,58 @@
     font-weight: 550;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  /*
+   * What is running (#241). One quiet line, at the secondary floor, on the
+   * edge away from the reading band; the edge's offset arrives inline. The
+   * name gives way first, then the lead, so a narrow window or presenter-sized
+   * type truncates rather than running off the glass. The line height is the
+   * label's own, not the stage's, so large type is not clipped.
+   */
+  .take-scope {
+    position: absolute;
+    right: var(--stage-chrome-inset, 20px);
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    max-width: 45%;
+    padding: 0.3em 0.9em;
+    border-radius: 999px;
+    border: 1px solid var(--stage-chrome-border);
+    background: var(--stage-overlay);
+    color: var(--stage-text);
+    font-weight: 550;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .take-scope.flip-x {
+    right: auto;
+    left: var(--stage-chrome-inset, 20px);
+  }
+
+  .take-scope-lead,
+  .take-scope-name,
+  .take-scope-done {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .take-scope-lead,
+  .take-scope-done {
+    flex: 0 1 auto;
+  }
+
+  .take-scope-sep {
+    flex: none;
+  }
+
+  .take-scope-name {
+    flex: 0 100 auto;
+    opacity: 0.8;
   }
 
   /*

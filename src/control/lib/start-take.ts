@@ -54,6 +54,7 @@ import {
 import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
 import { loadSettings, patchSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
+import { isMirroredGlassRig, isPrompterGlass, withCameraAboveRig } from './camera-above-rig';
 import { getVoiceFacade } from '../services/voice-facade';
 import { preloadSpeechEngine } from '../services/stt/local';
 import { writable } from 'svelte/store';
@@ -311,6 +312,60 @@ function restoreFrameFor(saved: AppSettings, mode: PresentationMode): ReaderFram
   return saved.stage.readerFrame;
 }
 
+/**
+ * The optical section a take under the camera above this screen is composed
+ * from (#238): the camera rig, stored for the panel the take landed on — or,
+ * when it cannot be stored, the section as it stands.
+ *
+ * STORED OR NOT APPLIED. A mid-take recomposition (the appearance sheet, a
+ * Settings change the running take follows) reads the SAVED section, so a rig
+ * composed into the opening frame but never saved would be taken back at the
+ * first slider drag: the mirror returning, the reading line dropping away from
+ * the camera, in the middle of a take. So the take opens as a plain Present on
+ * that panel would whenever the rig cannot be kept:
+ *
+ *  - the panel was not NAMED (`panel` is null): the rig and the cleared mirror
+ *    belong to one physical screen, and a guess could be the glass;
+ *  - the panel is glass — a recognised Elgato, or a panel whose chosen rig puts
+ *    the camera behind a mirrored image. A camera cannot be above a screen it
+ *    films through, so the window was on the wrong screen, and clearing that
+ *    mirror would take it away from the glass for good;
+ *  - the save failed. `patchSettings` has already rolled back and said so.
+ *
+ * The newest saved section is the base, and what a refused or unsaved take
+ * composes from, so a rig saved since this take began is neither lost nor
+ * contradicted by the first appearance change.
+ */
+async function chooseCameraAboveRig(
+  s: AppSettings,
+  panel: DisplayDescriptor | null,
+): Promise<AppSettings['optical']> {
+  const latest = get(settings)?.optical ?? s.optical;
+  // Whatever is saved NOW, refused or not: recomposition mid-take reads that.
+  const saved = (): AppSettings['optical'] => get(settings)?.optical ?? s.optical;
+  if (panel === null) {
+    showToast(
+      'Speaking Glass could not tell which screen this is, so it was not set up for the camera above it. Present opened it as it would any other take.',
+      'info',
+    );
+    return saved();
+  }
+  if (isPrompterGlass(panel) || isMirroredGlassRig(latest, panel.fingerprint)) {
+    showToast(
+      'This screen is a teleprompter, so it was left as it is. Move the Speaking Glass window to the screen with the camera above it and choose Camera above this screen again.',
+      'info',
+    );
+    return saved();
+  }
+  const t = s.teleprompter;
+  const seed = { intensity: t.textIntensity, readingCue: t.readingCue, bias: t.sizeBias };
+  const next = withCameraAboveRig(latest, panel, seed);
+  return patchSettings('optical', next).then(
+    () => next,
+    () => saved(),
+  );
+}
+
 export interface StartTakeOptions {
   /**
    * Present in this shape, and REMEMBER it.
@@ -374,10 +429,16 @@ export interface StartTakeOptions {
    * IS what somebody is practising. A rehearsal with the following switched off
    * would be a different feature that rehearses nothing.
    *
-   * Three things follow from the flag, and they are the whole of it:
+   * Four things follow from the flag, and they are the whole of it:
    *
-   *   1. The window. A practice is always `'reader'`, and the mode is FORCED
-   *      rather than resolved — see below.
+   *   1. The window. A practice OPENS as `'reader'`, and the mode is FORCED
+   *      rather than resolved — see below. It is where a practice starts, not
+   *      where it must stay: the take's own "Switch to teleprompter" moves a
+   *      running practice onto the glass at the size and line breaks the
+   *      recording will use, and it is still a practice there. Opening on the
+   *      display instead was considered and left alone (#241): rehearsing at a
+   *      desk is the common case, and the one-step switch already covers the
+   *      rest without a second launch row for it.
    *   2. The document. The stage renders it as a rehearsal rather than as a
    *      performance projection, so a reference table stays a table instead of
    *      becoming the words REFER TO TABLE. `performance-view.ts` has said this
@@ -385,15 +446,39 @@ export interface StartTakeOptions {
    *   3. The ending. Nothing is reported: `stopSession` produces no summary, so
    *      the practice ends by putting the editor back rather than by opening a
    *      card about a performance nobody gave.
+   *   4. The resume point. A practice's session row is an ordinary voice
+   *      session, but it is closed WITHOUT an ending (#241), so "From last
+   *      ending" — "Picks up where the last take stopped" — goes on meaning the
+   *      last recording. It used to pick a rehearsal up as if it were one:
+   *      record part two, practise part three, come back to record, and the
+   *      resume point was wherever the rehearsal had stopped. A rehearsal is
+   *      not where the footage left off, so it does not count as an ending.
    *
-   * The SESSION ROW is deliberately untouched — an ordinary voice session, in
-   * the ordinary place. A rehearsal is a real reading of the script and its
-   * ending is a real place in it, so "From last ending" on the Present menu
-   * should pick a practice up exactly as it picks a take up. The flag lives in
-   * the control-side session store and nowhere else, which is also why it needs
-   * no migration.
+   * The flag lives in the control-side session store and nowhere else, which
+   * is also why it needs no migration: the row says what it always said, minus
+   * the one number a rehearsal must not supply.
+   *
+   * A practice CAN carry a `part` (#241). It bounds nothing, as for a take, and
+   * since nothing is reported at the end it is only ever a label: which part is
+   * being rehearsed, on the glass, and when its end has been reached.
    */
   practice?: boolean;
+  /**
+   * A teleprompter take under the camera above this screen (#238).
+   *
+   * The take fills the screen the window is on — the pinned panel is NOT
+   * asked for, since the camera is above this one — and, once Rust has said
+   * which panel that is, the camera rig is chosen for it and its mirror
+   * cleared (`withCameraAboveRig`). Stored against the panel, so the next plain
+   * Present finds it there whenever it falls back to this screen, and finds
+   * the pinned prompter's own rig and mirror whenever it is plugged in.
+   *
+   * Always a teleprompter take, and the saved default is left as it is: this
+   * is an action, not a shape somebody chose to work in, so a reading-window
+   * default stays one. `presentationMode` is ignored alongside it. Ignored
+   * itself for a practice, which always opens in a window.
+   */
+  cameraAboveScreen?: boolean;
   /**
    * The part of the script this take is recording (§parts).
    *
@@ -536,12 +621,19 @@ export async function startTake(
      * quietly stopped filling the display. So the mode is forced here, past the
      * resolver, and the saved default is left exactly where it was.
      */
-    const s = options.practice
-      ? await resolveLaunchSettings(loaded, undefined)
-      : await resolveLaunchSettings(loaded, options.presentationMode);
+    // A take under the camera is forced to the prompter the same way, and for
+    // the same reason leaves the saved default alone: it is an action, not a
+    // shape somebody chose to work in. See `cameraAboveScreen`.
+    const cameraAbove = options.cameraAboveScreen === true && !options.practice;
+    const s =
+      options.practice || cameraAbove
+        ? await resolveLaunchSettings(loaded, undefined)
+        : await resolveLaunchSettings(loaded, options.presentationMode);
     const presentationMode: PresentationMode = options.practice
       ? 'reader'
-      : s.stage.presentationMode;
+      : cameraAbove
+        ? 'prompter'
+        : s.stage.presentationMode;
     /*
      * Start loading the recogniser now, while the rest of the take is built
      * (#257).
@@ -622,18 +714,15 @@ export async function startTake(
      * runs unbounded, which is what every take did before §parts.
      */
     /*
-     * A PRACTICE IS NEVER BOUNDED TO A PART, and that is enforced here rather
-     * than only at the call site. `stopSession` produces no summary for a
-     * rehearsal (§practice), so "you reached the end of part three" and "record
-     * part four next" would both be claims about a reading the app has already
-     * decided not to report on — and the Live readout would name a part whose
-     * completion nothing would ever act on.
-     *
-     * The Editor's Present menu already refuses the combination. This is the
-     * invariant, in the one place every caller of the exported `startTake` goes
-     * through.
+     * A practice resolves its part exactly as a take does (#241). It used to
+     * be stripped here, on the grounds that a rehearsal reports nothing and so
+     * "you reached the end of part three" would be a claim nothing acts on. The
+     * claim turned out to be the useful half: the person rehearsing the part
+     * about to be filmed wants the glass to say which part it is and when its
+     * end has gone by. The summary card and its "record the next part" offer
+     * stay withheld, because `stopSession` withholds the whole summary.
      */
-    const compiledParts = options.practice ? [] : compiled.parts;
+    const compiledParts = compiled.parts;
     const takePart = options.part
       ? reduceToTakePart(
           compiledParts.find((p) => p.id === options.part!.id) ?? null,
@@ -657,9 +746,11 @@ export async function startTake(
      * that gets noticed only in the footage. This happens when a break is renamed
      * or deleted while the launch menu or the take summary is still open.
      */
-    if (options.part && takePart === null && !options.practice) {
+    if (options.part && takePart === null) {
       showToast(
-        'That part is no longer in the script, so the take will run to the end.',
+        options.practice
+          ? 'That part is no longer in the script, so the practice runs without one.'
+          : 'That part is no longer in the script, so the take will run to the end.',
         'info',
       );
     }
@@ -773,8 +864,10 @@ export async function startTake(
       restoreFrameFor(s, presentationMode),
       // The pinned panel, for a prompter to fill. Rust falls back to the
       // monitor the window is on when nothing is pinned or the pin is
-      // unplugged, and reports whichever it chose — see below.
-      s.stage.displayFingerprint,
+      // unplugged, and reports whichever it chose — see below. A take under
+      // the camera above this screen asks for no panel, so it gets that
+      // fallback: the screen the window is on.
+      cameraAbove ? null : s.stage.displayFingerprint,
     );
     await awaitViewportSettled(presentation);
 
@@ -813,9 +906,22 @@ export async function startTake(
      * never worse than what it replaced.
      */
     const displays = await stageService.listDisplays().catch(() => []);
+    const reported = displays.find((d) => d.fingerprint === presentation.displayFingerprint) ?? null;
+    /*
+     * A take under the camera writes a rig against the panel it lands on, so
+     * it needs a panel somebody NAMED, not a guess: Rust's answer, or failing
+     * that the monitor Rust says the window is on now that it has moved. Its
+     * last-resort guess is the primary display rather than the prompter rule,
+     * which would aim at the pinned glass this take deliberately did not ask
+     * for — and a guess gets a plain take, never the camera rig.
+     */
+    const named =
+      reported ?? (cameraAbove ? await stageService.currentWindowDisplay().catch(() => null) : null);
     const landed =
-      displays.find((d) => d.fingerprint === presentation.displayFingerprint) ??
-      chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
+      named ??
+      (cameraAbove
+        ? chooseStageDisplay(displays, null, 'reader')
+        : chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode));
     /*
      * COMPOSED AGAINST THE MODE THIS TAKE IS OPENING IN, not the saved one.
      *
@@ -837,6 +943,7 @@ export async function startTake(
      */
     const composedFrom: AppSettings = {
       ...s,
+      ...(cameraAbove ? { optical: await chooseCameraAboveRig(s, named) } : {}),
       stage: { ...s.stage, presentationMode },
     };
     const stageSettings = stageSettingsFromSettings(composedFrom, landed);
@@ -885,6 +992,7 @@ export async function startTake(
       teleprompter: s.teleprompter,
       presentationMode,
       ...(options.practice ? { practice: true } : {}),
+      ...(cameraAbove ? { cameraAboveScreen: true } : {}),
       // The panel the take was measured against, so the mid-take appearance
       // sheet recomposes against the same one it opened with.
       stageDisplay: landed,

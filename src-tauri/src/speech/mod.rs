@@ -53,7 +53,7 @@ use catalogue::catalogue;
 /// The model is not on this machine — and that is now an ordinary state.
 ///
 /// It used to mean "your installation is damaged", because every build carried
-/// the weights and their absence could only be corruption. Since §152 the
+/// the weights and their absence could only be corruption. Since #152 the
 /// stock installer ships none, so the honest message points at the download
 /// rather than telling the user to reinstall the app. Recoverable, because it
 /// genuinely is: Settings has the button.
@@ -114,8 +114,8 @@ pub const SAMPLE_RATE_HZ: u32 = 24_000;
 ///
 /// Not to be confused with `models/catalogue.json`, which `catalogue.rs` reads.
 /// That one is a FETCH manifest — URLs, digests, sizes, licences for everything
-/// `pnpm models:fetch` can download. This one is a BUNDLE manifest: the models
-/// this build actually ships and the tuning each was measured with. The fetch
+/// `pnpm models:fetch` can download. This one is a BUILD manifest: the models
+/// this build can load and the tuning each was measured with. The fetch
 /// catalogue may be the longer list, so the two are asserted equal only where
 /// they overlap, at the default.
 pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};
@@ -160,7 +160,7 @@ impl SpeechEngine {
     ///
     /// This used to be one line: resolve the resource directory and hand it
     /// back, on the assumption that every model this build knows about is
-    /// inside the application bundle. §152 removed that assumption — stock
+    /// inside the application bundle. #152 removed that assumption — stock
     /// builds bundle no models at all — so the question changed from "where
     /// would the bundler have put it" to "where, if anywhere, IS it".
     ///

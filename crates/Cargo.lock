@@ -91,6 +91,7 @@ dependencies = [
  "cc-stt",
  "num2words",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",

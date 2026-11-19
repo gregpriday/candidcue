@@ -14,11 +14,10 @@ use serde::Serialize;
 // a convention — and a script line reaching a file the user emails to support.
 pub mod logging;
 
-/// The module-wide `allow(dead_code)` that used to sit at the top of this file
-/// is scoped to these two instead: `get_system_diagnostics` builds its own,
-/// wider struct, so this pair has no caller yet. Left narrow deliberately —
-/// blanketing the module would also silence dead code in `logging`, which is
-/// the part that has to keep working.
+/// `allow(dead_code)` is scoped to these two: `get_system_diagnostics` builds
+/// its own, wider struct, so this pair has no caller yet. Left narrow
+/// deliberately — blanketing the module would also silence dead code in
+/// `logging`, which is the part that has to keep working.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

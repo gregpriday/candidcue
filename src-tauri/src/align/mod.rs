@@ -195,13 +195,11 @@ impl AlignmentState {
         // The language the SETTING resolved to, which is what #157 threaded
         // here.
         //
-        // This used to be a hardcoded `English` with a comment saying that the
-        // day a second profile existed, the setting would have to reach this
-        // line. It does now. What arrives is already resolved to a profile the
-        // engine has — `start_alignment` asks `AlignmentLanguage::from_bcp47`
-        // and falls back to English when the persisted tag names a language
-        // this build cannot normalise — so there is no tag parsing and no
-        // silent English fallback buried in the compile call itself.
+        // What arrives is already resolved to a profile the engine has —
+        // `start_alignment` asks `AlignmentLanguage::from_bcp47` and falls back
+        // to English when the persisted tag names a language this build cannot
+        // normalise — so there is no tag parsing and no silent English fallback
+        // buried in the compile call itself.
         let script = cc_align::compile_tokens_in(&inputs, language);
         let engine = Engine::new(script, AlignmentConfig::default());
         *self.lock() = Some(AlignmentSession {

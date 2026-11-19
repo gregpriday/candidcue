@@ -42,10 +42,10 @@ import SplitButton from '../components/SplitButton.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { scriptActionLabels } from '../lib/script-action-labels';
   import { presentMenuItems, type PresentMenuItem } from '../lib/present-menu';
-  import { NOUNS, PRACTICE_LABEL } from '../../shared/take-vocabulary';
+  import { NOUNS } from '../../shared/take-vocabulary';
 import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
-  import { startMenuItems } from '../lib/present-menu';
+  import { practiceMenuItems, startMenuItems } from '../lib/present-menu';
   import { checkThenStart } from '../lib/check-then-start';
   import { voiceModelFinding } from '../lib/take-readiness';
   import { openSettingsWindow } from '../lib/open-settings';
@@ -53,7 +53,7 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import {
     lastEndingFor,
     newestEnding,
-    snapToStart,
+    startPointAtCaret,
     type RecordedEnding,
     type StartPoint,
   } from '../lib/take-start-point';
@@ -917,6 +917,20 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
+   * "Camera above this screen" (#238): a teleprompter take on the screen this
+   * window is on, from the top, under its camera. Through the same readiness
+   * check as every launch; `startTake` stores the camera rig for the panel it
+   * lands on.
+   */
+  async function checkThenPresentUnderCamera(): Promise<void> {
+    const id = scriptId;
+    await checkThenStart(id, { mode: 'prompter', cameraAboveScreen: true }, async () => {
+      await saveNow();
+      await startTake(id, { cameraAboveScreen: true });
+    });
+  }
+
+  /**
    * Present opens the stage. There is no screen in between — everything the
    * old Preflight page asked for is in Settings, and the take reports its own
    * microphone, display and connection from the stage (lib/start-take.ts).
@@ -943,12 +957,10 @@ import type { PresentationMode } from '../services/settings-types';
       // #448: a previous take's ending is only valid against its own source.
       ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }),
       /*
-       * §parts. A practice is deliberately never bounded to a part: nothing is
-       * reported at the end of one, so "you reached the end of part three" and
-       * "record part four next" would both be claims about a reading the app
-       * has already decided not to report on.
+       * §parts. A practice carries its part too (#241): the stage names the
+       * part being rehearsed. Nothing is reported at the end of either.
        */
-      ...(part === undefined || practice ? {} : { part }),
+      ...(part === undefined ? {} : { part }),
     });
   }
 
@@ -972,21 +984,19 @@ import type { PresentationMode } from '../services/settings-types';
     blocks: result?.blocks ?? [],
   });
 
-  const caretStartPoint = $derived.by(() => {
-    const sentences = snapInput.sentences;
-    if (sentences.length === 0) return null;
-    // The last sentence whose source span begins at or before the caret. The
-    // caret can legitimately sit in whitespace, a cue or a heading's markup,
-    // so "the sentence containing it" is not always defined — "the one it is
-    // at or after" always is, and matches how the snapping reads elsewhere.
-    let best: (typeof sentences)[number] | null = null;
-    for (const sentence of sentences) {
-      if (sentence.source.utf16Start <= caretOffset) best = sentence;
-      else break;
-    }
-    if (best === null) return null;
-    return snapToStart(best.startTokenIndex, snapInput);
-  });
+  // A caret on a heading (where an outline click puts it) means that section;
+  // anywhere else, the sentence it is at or after. See `startPointAtCaret`.
+  const caretStartPoint = $derived(startPointAtCaret(caretOffset, snapInput));
+
+  /*
+   * §parts: the part the caret is IN, shared by both "From here" rows.
+   *
+   * One answer for the take and the practice, so "Practise from here" and
+   * "From here" can never disagree about which part a place belongs to.
+   */
+  const caretPart = $derived(
+    caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
+  );
 
   /**
    * Where the last take of this script stopped, and the source it stopped in.
@@ -1015,7 +1025,9 @@ import type { PresentationMode } from '../services/settings-types';
     // Overlapping reads (two summaries, or A → B → A) must not land out of
     // order, which a script-id check alone cannot tell apart.
     let current = true;
-    void listSessionRecords(id, 20)
+    // Only rows with an ending: a run of rehearsals, which write none (#241),
+    // must not push the last recording off the page.
+    void listSessionRecords(id, 20, { withEnding: true })
       .then((records) => {
         if (!current || scriptId !== id) return;
         lastEndingRecord = newestEnding(records);
@@ -1069,7 +1081,7 @@ import type { PresentationMode } from '../services/settings-types';
          * unbounded take, so the parts a creator reached late in a long project
          * were exactly the ones the feature stopped working for.
          */
-        herePart: caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
+        herePart: caretPart,
         lastEnding:
           lastEndingPoint === null
             ? null
@@ -1109,7 +1121,11 @@ import type { PresentationMode } from '../services/settings-types';
   const presentModeItems = $derived([
     ...withGroup(presentStartItems, 'Start'),
     ...withGroup(
-      presentMenuItems($settings.stage.presentationMode, (mode) => void checkThenPresent(mode)),
+      presentMenuItems(
+        $settings.stage.presentationMode,
+        (mode) => void checkThenPresent(mode),
+        () => void checkThenPresentUnderCamera(),
+      ),
       'Present as',
     ),
     /*
@@ -1118,32 +1134,22 @@ import type { PresentationMode } from '../services/settings-types';
      * `present-menu.ts` has said since it was written that the three choices at
      * launch are where to start, how to display, and whether this is a take or
      * a rehearsal — and that the third was not covered. It sits below the two
-     * shapes because it is a rarer choice than either, and it does not carry a
-     * start row of its own: a practice opens at the beginning of the script.
+     * shapes because it is a rarer choice than either.
      *
      * `SplitButton` runs the row it is given the moment it is chosen and
-     * closes, so no gesture picks a start row AND this one. The decision taken
-     * is the second of the two shapes that left open: a practice that opens at
-     * the caret, as its own row, offered only when the caret is somewhere a
-     * take could start — so working on one troublesome paragraph no longer
-     * means rehearsing from the top. Like every practice it is not bounded to
-     * a part; it simply begins there.
+     * closes, so no gesture picks a start row AND this one. So a practice has
+     * its own "from here", which carries the caret's part exactly as the
+     * take's does (#241) — rehearsing the section about to be filmed, and
+     * having the glass say which one it is. See `practiceMenuItems`.
      */
-    {
-      label: PRACTICE_LABEL,
-      description: 'A rehearsal in a window · nothing is reported',
-      group: {},
-      onselect: () => void checkThenPresent(undefined, undefined, true),
-    },
-    ...(caretStartPoint === null
-      ? []
-      : [
-          {
-            label: `${PRACTICE_LABEL} from here`,
-            description: startPlace(caretStartPoint) ?? 'From the cursor',
-            onselect: () => void checkThenPresent(undefined, caretStartPoint?.tokenIndex, true),
-          },
-        ]),
+    ...practiceMenuItems(
+      {
+        hereTokenIndex: caretStartPoint?.tokenIndex ?? null,
+        hereLabel: startPlace(caretStartPoint),
+        herePart: caretPart,
+      },
+      (tokenIndex, part) => void checkThenPresent(undefined, tokenIndex, true, part),
+    ),
     {
       label: 'Review take setup…',
       description: 'Speech model, microphone and display',

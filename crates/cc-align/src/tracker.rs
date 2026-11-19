@@ -406,8 +406,8 @@ pub struct Engine {
     /// `update`, so it stands only while the evidence does. Reaches the
     /// snapshot as `suggestion` when no jump is pending.
     off_screen_target: Option<u32>,
-    /// Consecutive events with weak local evidence — the trigger for global
-    /// search (spec §9.5: global proposals only when local evidence fails).
+    /// Consecutive events with weak local evidence — one of the triggers for
+    /// global search (Navigation spec §11.2).
     weak_streak: u32,
     /// Approximate-only local continuations since the last exact-content
     /// update. This is deliberately not inferred from `weak_streak`: a valid
@@ -623,19 +623,13 @@ impl Engine {
     ///
     /// ## Why this is not `set_manual_position`
     ///
-    /// It used to be. The control store's own comment said so:
-    ///
-    /// > TODO(integration): use a dedicated `reacquire` message so the aligner
-    /// > reopens candidate windows instead of being re-seeded with its own
-    /// > cursor.
-    ///
-    /// Two things were wrong with re-using the manual move. It seeded the
-    /// engine with `confirmedToken` — the engine's OWN current answer — so
-    /// "re-find me" asked it to look exactly where it was already looking,
-    /// which is the one place it is demonstrably not finding the reader. And
-    /// it set `Following` at confidence 0.9, asserting a lock the presenter
-    /// had just told it it did not have; the display then moved off that
-    /// assertion before any evidence arrived to support it.
+    /// Re-using the manual move, as this once did, got two things wrong. It
+    /// seeded the engine with `confirmedToken` — the engine's OWN current
+    /// answer — so "re-find me" asked it to look exactly where it was already
+    /// looking, which is the one place it is demonstrably not finding the
+    /// reader. And it set `Following` at confidence 0.9, asserting a lock the
+    /// presenter had just told it it did not have; the display then moved off
+    /// that assertion before any evidence arrived to support it.
     ///
     /// A reacquisition is a different act from a jump. The presenter is not
     /// saying "I am at token N", they are saying "I am somewhere on this

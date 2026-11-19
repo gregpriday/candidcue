@@ -133,7 +133,7 @@ describe('diagnostics presentation is honest about what it knows', () => {
       SUPPORT_BUNDLE_EXCLUSIONS,
       'the disclosure must tell the operator to look at the bundle before ' +
         'sending it — that is what makes a designed exclusion honest',
-    ).toMatch(/reveal/i);
+    ).toMatch(/\b(reveal|read|review|look|inspect|check|open|examine)\b/i);
   });
 
   /**

@@ -95,7 +95,7 @@ pub async fn pick_image_to_import<R: Runtime>(
 
 /// Ask the operator for a FOLDER to write into. `Ok(None)` means cancelled.
 ///
-/// C5: `export_all_data` took a `destination: String` the webview was supposed
+/// `export_all_data` took a `destination: String` the webview was supposed
 /// to supply, but the dialog plugin is deliberately not granted to JavaScript,
 /// so there was no way to obtain one — the command was uninvokable and the
 /// "Export all scripts" button did nothing at all. The picker belongs on this

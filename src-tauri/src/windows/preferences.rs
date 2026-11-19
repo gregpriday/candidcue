@@ -1,14 +1,13 @@
-//! The Preferences window (desktop refinement §14.1).
+//! The Preferences window.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY SETTINGS STOPPED BEING A PAGE
 //! ---------------------------------------------------------------------------
 //! Settings was a route in the control window with a "Back to Library" control
-//! at the top. That has three costs, and §14.1 names all of them: changing a
-//! preference means LEAVING the script you are working on; coming back is a
-//! navigation rather than a dismissal; and the whole surface reads as another
-//! page in a sequence, which is the single pattern this refinement exists to
-//! remove.
+//! at the top. That has three costs: changing a preference means LEAVING the
+//! script you are working on; coming back is a navigation rather than a
+//! dismissal; and the whole surface reads as another page in a sequence, which
+//! is the web-page pattern a desktop application should not have.
 //!
 //! It is a window now: ⌘, opens it from wherever you are, closing it puts you
 //! back exactly where you were because you never went anywhere, and the native
@@ -17,7 +16,7 @@
 //! ---------------------------------------------------------------------------
 //! SINGLE INSTANCE, AND THAT IS THE WHOLE OF THE LIFECYCLE
 //! ---------------------------------------------------------------------------
-//! §14.1: prevent multiple Settings windows, and bring the existing one to the
+//! Prevent multiple Settings windows, and bring the existing one to the
 //! front when it is invoked again. Both are this file. A second Preferences
 //! window would be two views of one document with no coordination between them,
 //! which is the failure the settings broadcast in `settings_cmds.rs` exists to
@@ -133,8 +132,8 @@ pub fn close<R: Runtime>(app: &AppHandle<R>) {
  *
  * There was one, documented as "read by the native Window menu so its entry can
  * be enabled". Nothing read it: the Window menu lists Settings unconditionally,
- * because choosing it OPENS the window when there is none — §20.4's rule that
- * the entry and ⌘, are the same action. Window › Stage is the entry whose
+ * because choosing it OPENS the window when there is none: the entry and ⌘,
+ * are the same action. Window › Stage is the entry whose
  * enabled state really does depend on a window existing, and `menu.rs` asks the
  * window list directly for that one.
  */

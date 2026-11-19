@@ -159,13 +159,28 @@ const SURFACE_TOKENS = [
  */
 const STATUSBAR_FILLS = ['--bg-hover-statusbar', '--bg-active-statusbar'];
 
+const WORKSPACE_SELECTOR = "[data-theme='workspace']";
+/*
+ * The desk in the dark appearance (#231). `appearance.ts` puts the system's
+ * choice on the root, and this block retunes the workspace palette under it,
+ * so what the desk shows in the dark is the light block overlaid by this one.
+ */
+const DARK_DESK_SELECTOR =
+  "[data-appearance='dark'] [data-theme='workspace'],\n[data-theme='workspace'][data-appearance='dark']";
+
+/** The tokens a theme resolves to: its blocks, later ones overriding earlier. */
+function themeTokens(selectors: readonly string[]): Map<string, string> {
+  return new Map(selectors.flatMap((selector) => [...themeBlock(selector)]));
+}
+
 const THEMES = [
-  { name: 'studio (dark)', selector: ":root,\n[data-theme='studio']" },
-  { name: 'workspace (light)', selector: "[data-theme='workspace']" },
+  { name: 'studio (dark)', selectors: [":root,\n[data-theme='studio']"] },
+  { name: 'workspace (light)', selectors: [WORKSPACE_SELECTOR] },
+  { name: 'workspace (dark appearance)', selectors: [WORKSPACE_SELECTOR, DARK_DESK_SELECTOR] },
 ];
 
-describe.each(THEMES)('$name tokens', ({ selector }) => {
-  const block = themeBlock(selector);
+describe.each(THEMES)('$name tokens', ({ selectors }) => {
+  const block = themeTokens(selectors);
   // Alpha fills are skipped rather than composited: a ratio against a colour
   // whose backdrop is unknown would be a fiction. (`--empty-bg` is opaque in
   // the light theme and a wash in the dark one, so it takes part in one.)
@@ -187,6 +202,35 @@ describe.each(THEMES)('$name tokens', ({ selector }) => {
       }
     },
   );
+
+  /*
+   * Small accent text — a link in the editor, a chosen item's label — is drawn
+   * in --accent-strong, never --accent: the accent is a fill colour and is
+   * allowed to sit under 4.5:1 on the lighter surfaces. #231 asks for this
+   * floor in both desk appearances; the take's palette is held to it as well.
+   * The status bar's hover and press fills count too (a status item can be
+   * accented), and so does the accent pill, whose label sits on --accent-soft
+   * (StatusPill.svelte).
+   */
+  it('--accent-strong clears AA (4.5:1) as small text on every opaque surface', () => {
+    const hex = resolve(block, '--accent-strong');
+    const grounds = [
+      ...surfaces,
+      ...[...STATUSBAR_FILLS, '--accent-soft'].map((name) => ({
+        name,
+        hex: resolve(block, name),
+      })),
+    ];
+    for (const ground of grounds) {
+      expect(ground.hex, `${ground.name} must be opaque to be checked`).toMatch(
+        /^#[0-9a-f]{6}$/i,
+      );
+      expect(
+        contrast(hex, ground.hex),
+        `--accent-strong (${hex}) on ${ground.name} (${ground.hex})`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
 
   it('the filled danger button can be read at both its fill and its hover', () => {
     const label = resolve(block, '--danger-contrast');
@@ -283,6 +327,49 @@ describe.each(THEMES)('$name tokens', ({ selector }) => {
     const faint = resolve(block, '--text-faint');
     const surface = resolve(block, '--bg-panel');
     expect(contrast(muted, surface)).toBeGreaterThanOrEqual(contrast(faint, surface));
+  });
+});
+
+describe('the dark desk', () => {
+  /*
+   * The dark block restates the workspace palette rather than inheriting it.
+   * A token added to the light block alone would still resolve on the dark
+   * desk — to its light value, a pale surface or a dark ink on graphite — and
+   * every assertion above would go on passing, because the overlay supplies
+   * the light value to check. So the dark block must redeclare every token.
+   */
+  /*
+   * Every check here reads the FIRST block with this selector. A second one
+   * later in the file would win the cascade without being checked at all.
+   */
+  it('is declared once, so nothing later quietly overrides what is checked', () => {
+    expect(TOKENS.split(`${DARK_DESK_SELECTOR} {`).length - 1).toBe(1);
+    expect(TOKENS.split(`${WORKSPACE_SELECTOR} {`).length - 1).toBe(1);
+  });
+
+  it('redeclares every token the light workspace block declares', () => {
+    const dark = themeBlock(DARK_DESK_SELECTOR);
+    const missing = [...themeBlock(WORKSPACE_SELECTOR).keys()].filter((name) => !dark.has(name));
+    expect(missing, 'these would show their light value on the dark desk').toEqual([]);
+  });
+
+  it('tells the browser it is dark, for scrollbars and native controls', () => {
+    const start = TOKENS.indexOf(`${DARK_DESK_SELECTOR} {`);
+    const body = TOKENS.slice(start, TOKENS.indexOf('\n}', start));
+    expect(body).toMatch(/color-scheme:\s*dark;/);
+  });
+
+  it('is actually darker than the light desk — the overlay is not a no-op', () => {
+    const light = themeTokens([WORKSPACE_SELECTOR]);
+    const dark = themeTokens([WORKSPACE_SELECTOR, DARK_DESK_SELECTOR]);
+    for (const surface of ['--bg-canvas', '--bg-panel', '--bg-chrome']) {
+      expect(luminance(resolve(dark, surface)), surface).toBeLessThan(
+        luminance(resolve(light, surface)),
+      );
+    }
+    expect(luminance(resolve(dark, '--text-primary'))).toBeGreaterThan(
+      luminance(resolve(light, '--text-primary')),
+    );
   });
 });
 

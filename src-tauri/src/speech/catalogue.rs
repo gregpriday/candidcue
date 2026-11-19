@@ -158,7 +158,7 @@ impl ModelEntry {
     /// Where the bundler puts this model, relative to the resource root.
     ///
     /// Only meaningful for a build that opts into shipping one: stock
-    /// `tauri.conf.json` bundles no models at all (§152), and the resolver
+    /// `tauri.conf.json` bundles no models at all (#152), and the resolver
     /// treats this as a fallback to check rather than a place to expect.
     pub fn resource_dir(&self) -> String {
         format!("models/{}", self.install_dir)
