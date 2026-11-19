@@ -2,36 +2,14 @@
   The session dock — one quiet control location, bottom left.
 
   ---------------------------------------------------------------------------
-  THE DESKTOP-STRUCTURE PASS STOPPED HERE, ON PURPOSE
+  NOT SUBJECT TO THE DESK'S DENSITY
   ---------------------------------------------------------------------------
-  The desktop-structure pass reduced radii, control heights and shadow use
-  across the whole control window. It stopped at this file: stage appearance
-  changes only where real-device testing shows a problem, and none of these
-  has been verified on a real panel at a real viewing distance. The verdicts
-  below are therefore reasoned, not measured.
-
-    40px buttons        They have to stay usable viewed directly at the rig,
-                        and they are sized for exactly that — see the note
-                        below on the 48px pointer target claimed by a
-                        pseudo-element. Shrinking them to the workspace's 32px
-                        would apply a desk density rule to the one surface it
-                        does not govern.
-
-    12px radius         A flatter dock was offered "if the current control
-                        group looks too pill-like". At 12px on a 40px square
-                        this is a squircle rather than a capsule, and deciding
-                        it looks wrong needs eyes on a real panel at a real
-                        viewing distance. Nobody has had those since the
-                        question was asked.
-
-    the chrome shadow   Shadows are kept for genuinely floating things. This
-                        dock floats over moving text on glass, which is the
-                        clearest case for one in the product.
-
-  So the honest state is: reviewed, unchanged, and waiting on the one kind of
-  evidence that could justify changing it. The control window's tokens no
-  longer reach in here — `--stage-chrome-*` are the stage's own — so a future
-  density pass cannot alter this surface by accident.
+  The dock's 40px controls, 44px hit targets, 12px radius and chrome shadow
+  are sized for a panel read at the rig, not for the desk. The control
+  window's tokens do not reach in here — `--stage-chrome-*` are the stage's
+  own — so a density pass over the desk cannot alter this surface by accident.
+  Change any of them only after checking it on a real panel at reading
+  distance.
 
   ---------------------------------------------------------------------------
   WHY IT IS ONE THING AND WHY IT IS UNMIRRORED

@@ -316,9 +316,10 @@
    *
    * `bind:clientWidth/clientHeight` is a ResizeObserver, and an observation is
    * delivered during the rendering update — which a window that has never been
-   * shown may never run. The stage window is created hidden and shown only
-   * AFTER the handshake completes (primary §43.3), so for the whole of that
-   * handshake these were the numbers of an unrendered window: zero. Everything
+   * shown may never run. The stage window is created hidden (primary §43.3),
+   * and Settings' document preview shows it only once it reports
+   * `layout-ready`, so for the whole of that handshake these were the numbers
+   * of an unrendered window: zero. Everything
    * downstream is guarded on a nonzero viewport, so the measurement pass bailed
    * and `layout-ready` was never sent.
    *
@@ -458,11 +459,11 @@
   /**
    * Both counters start again with each SESSION.
    *
-   * The stage can outlive one — the separate window can be handed a new
-   * envelope — and `alignmentArrived` is counted here rather than by the
-   * receiver, so nothing else would ever clear it. The receiver zeroes its own
-   * counters on the same signal (`setSession`), which is what keeps the two
-   * halves of this readout describing the same stretch of time.
+   * A mounted stage can be handed a new one, and `alignmentArrived` is counted
+   * here rather than by the receiver, so nothing else would ever clear it. The
+   * receiver zeroes its own counters on the same signal (`setSession`), which
+   * is what keeps the two halves of this readout describing the same stretch of
+   * time.
    *
    * A retake inside a session is deliberately NOT a reset: "restart paragraph"
    * opens a new take pass without minting a generation, and the feed it would
@@ -973,8 +974,8 @@
    * -------------------------------------------------------------------------
    * Every inbound event refreshed it — directives, the transcript tap, the
    * voice pill, live sync, and alignment. Alignment is the one that breaks it:
-   * Rust publishes snapshots DIRECTLY to this window, with control out of the
-   * motion path entirely (that is the whole point of the design). So a control
+   * Rust published snapshots DIRECTLY to the separate stage window, with
+   * control out of that path entirely. So a control
    * window that had crashed or wedged went on being reported as alive for as
    * long as the aligner kept publishing — which, mid-take with the recogniser
    * running, is indefinitely. The watchdog could not fire in precisely the
@@ -1236,9 +1237,9 @@
   }
 
   function applyAlignment(snapshot: StageAlignmentPayload) {
-    // Deliberately does NOT touch the control-liveness clock. These arrive from
-    // Rust with control out of the path, so they say nothing about whether the
-    // control window is still answering. See `lastHeartbeatAt`.
+    // Deliberately does NOT touch the control-liveness clock. On the separate
+    // window these arrive straight from Rust, so they say nothing about whether
+    // the control window is still answering. See `lastHeartbeatAt`.
     alignmentArrived += 1;
     const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
     const stats = scriptLayer?.alignmentFeedStats();
@@ -1357,9 +1358,9 @@
            *     healthy.
            *
            * Seeding here is honest about what it proves: control published this
-           * envelope, so control was alive when it did. A real beat refreshes it
-           * about a second later, and if none comes the deadline expires on
-           * schedule.
+           * envelope, so control was alive when it did. A real beat was meant
+           * to refresh it about a second later, and if none comes the deadline
+           * expires on schedule.
            *
            * `sessionGeneration` is the discriminator, and it is not incidental:
            * `buildStageEnvelope` omits it exactly when the payload belongs to no
@@ -1550,8 +1551,8 @@
     /*
      * `?preview=1&replay=<url>` replays a frozen Tier-B run — real recorded
      * speech, through the real renderer — instead of the synthetic driver. It
-     * is the only automated configuration in which "does the product follow"
-     * can be asserted through the real renderer: the benchmark proves the
+     * exercises the real renderer with recorded alignment snapshots, so "does
+     * the product follow" can be asserted through it: the benchmark proves the
      * ENGINE follows and scores Rust's own model of the display, never the code
      * that moves the glass.
      */
@@ -1839,7 +1840,7 @@
    * §16.9's missing half: a way out that is not a keystroke.
    *
    * Escape reaches the stage only while its window has the keyboard, and a
-   * presented take is borderless and fills its panel (§52.7). Put those
+   * prompter take is borderless and fills its panel (§52.7). Put those
    * together and there is a reachable state with no exit: the stage is
    * covering a screen,
    * the operator is working in some other application, and Escape goes to that
@@ -2817,11 +2818,11 @@
               {/if}
             {/if}
           </div>
-          <!-- Taps that arrived on the separate window's event path; Rust emits
-               the snapshots. If this stays 0 while taps are being sent, the
-               control -> stage channel is the fault and the snapshots are
-               arriving by a different road. A take's embedded stage gets its
-               transcript through the bridge, which this does not count. -->
+          <!-- Transcript deliveries on the separate window's event path,
+               replayed directives included. Zero is expected in a take — the
+               embedded stage gets its transcript through the bridge, which
+               this does not count — so on its own it cannot establish a
+               delivery fault. -->
           <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
             taps: {transcriptTapsArrived} arrived
           </div>
@@ -3446,24 +3447,11 @@
   /*
    * One line directly above the dock, newest word at the right.
    *
-   * ------------------------------------------------------------------------
-   * IT USED TO RUN THE WHOLE WIDTH OF THE PANEL, AND THEN IT USED TO SIT IN A
-   * DIFFERENT CORNER FROM THE INSTRUMENT IT BELONGS WITH
-   * ------------------------------------------------------------------------
-   * First it was `left: 0; right: 0` with a gradient behind it, holding
-   * everything the recogniser had said since its last finalisation — the widest
-   * element on the glass, a strip of moving text under a script somebody is
-   * reading.
-   *
-   * Then it was a bounded box in the bottom RIGHT, lined up with a voice pill
-   * that lived in the mirrored plane. The old comment here was careful to say
-   * that the alignment was a convenience of the common rig rather than a
-   * relationship the code maintained — under `mirrorX` the two were in opposite
-   * physical corners, and under a hood their right margins were measured from
-   * different edges. That was an honest description of a defect.
-   *
-   * Both instruments are now in the same plane, in the same safe rectangle, on
-   * the same left edge, so the alignment IS a relationship the code maintains.
+   * The bar and the voice readout are in the same plane, in the same safe
+   * rectangle, on the same left edge, so their alignment IS a relationship the
+   * code maintains. When the bar sat in the opposite corner from a pill in the
+   * mirrored plane, `mirrorX` put the two in opposite physical corners and a
+   * hood measured their margins from different edges.
    *
    * The width cap and the ten-word crop in `transcript-tail.ts` still do
    * different halves of one job: ten long words are still wide, and a box with

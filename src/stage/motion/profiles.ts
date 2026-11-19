@@ -566,11 +566,12 @@ export function limitsForState(
      * document has to come back to the reader.
      *
      * Applied AFTER the state and transition shaping and as a `min`, never as a
-     * multiplier, for the reason the §20.4 fade threshold is combined the same
-     * way: this is a bound on a correction the presenter did not ask for, so a
-     * state that happens to be feeling energetic may not raise it. Large type
-     * can make the re-grab faster in pixels — that is what keeps it four LINES
-     * a second on every rig — and nothing can make it faster in lines.
+     * multiplier, for the reason the fade-skip threshold
+     * (`fadeSkipThresholdPx`) is combined the same way: this is a bound on a
+     * correction the presenter did not ask for, so a state that happens to be
+     * feeling energetic may not raise it. Large type can make the re-grab
+     * faster in pixels — that is what keeps it four LINES a second on every rig
+     * — and nothing can make it faster in lines.
      *
      * Reduced motion is exempt and goes back to `snap`: somebody who has asked
      * their system not to animate is not asking for a gentler animation

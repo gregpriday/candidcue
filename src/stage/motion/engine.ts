@@ -217,7 +217,7 @@ export interface StageMotionEngineOptions {
    * nothing new to say. `displayAt` already stops advancing at
    * `maxPredictionMs`, so a merely-old snapshot holds the position by itself.
    * This threshold is about something stronger — the feed being GONE (the
-   * session ended, the recogniser stopped publishing) — after which the stage
+   * session ended, or nothing is publishing) — after which the stage
    * stops claiming to follow anyone and hands over to the fallback target.
    */
   snapshotStaleMs?: number;
@@ -310,9 +310,9 @@ export interface StageMotionEngine {
    * §47.1/§55. Adopt a resolved motion profile — the user's Follow feel, as
    * control resolved it, arriving in the stage envelope.
    *
-   * It is a setter rather than a constructor argument alone because a stage can
-   * outlive a session: a second envelope published into the same stage reaches
-   * the SAME engine, and a profile that could only be read at
+   * It is a setter rather than a constructor argument alone because the
+   * mounted renderer can be handed a new session generation, which reaches the
+   * SAME engine, and a profile that could only be read at
    * construction would leave the new session running the previous one's feel.
    *
    * Nothing about plant state changes. The profile reshapes the motion limits;
@@ -976,9 +976,9 @@ type ReanchorFadePhase = 'idle' | 'down' | 'up';
 export function createStageMotionEngine(
   options: StageMotionEngineOptions = {},
 ): StageMotionEngine {
-  // §47.1: mutable, because a stage can outlive a session and the next
-  // session's envelope may carry a different feel. Read on every frame — never
-  // captured — so a swap takes effect on the next one.
+  // §47.1: mutable, because a mounted renderer can be handed a new session and
+  // the next session's envelope may carry a different feel. Read on every frame
+  // — never captured — so a swap takes effect on the next one.
   let profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
   /**
    * `profile` with its §30 viewport ceilings applied — the one every motion
@@ -1667,12 +1667,12 @@ export function createStageMotionEngine(
        * §30.6. Manual authority does not survive a session either, and this is
        * the one place it could have.
        *
-       * A stage can outlive a take — that is the whole reason this function
-       * exists — so a take that ENDED with the presenter's hand on the
-       * script would have carried the hold into the next one: take two would
-       * open holding, and the §62 degraded fallback would be suppressed with
-       * it, until somebody said something. The hold is a fact about a gesture
-       * in a session that is over.
+       * A mounted renderer can be handed a new session — that is the whole
+       * reason this function exists — so a take that ENDED with the presenter's
+       * hand on the script would have carried the hold into the next one: take
+       * two would open holding, and the §62 degraded fallback would be
+       * suppressed with it, until somebody said something. The hold is a fact
+       * about a gesture in a session that is over.
        */
       manualAwaitingEvidence = false;
       manualAnchorUnit = null;
@@ -1761,7 +1761,7 @@ export function createStageMotionEngine(
         reacquireElapsedMs = 0;
         reacquireBudgetPx = null;
         /*
-         * §30.5. Switching following off cancels an in-flight rewind
+         * Switching following off cancels an in-flight rewind
          * outright rather than parking it.
          *
          * The alternative — hold it and resume when following comes back — is

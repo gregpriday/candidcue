@@ -17,8 +17,7 @@
 
   A plain pixel target is still honoured, but only as the fallback used when no
   alignment snapshot is current — it drives the same jerk-limited controller
-  rather than a spring of its own (companion §32.1–5, which replaces primary
-  §32).
+  rather than a spring of its own (companion §26.2, §29).
 -->
 <script module lang="ts">
   import type { FontMetrics } from '../../shared/optics';
@@ -225,12 +224,12 @@
      * §47.1/§55. The versioned motion profile this session runs on — the user's
      * Follow feel, resolved by control and validated by the
      * mount site (`stageFollowProfile`). Given to the engine at construction
-     * AND on every change, because a stage can outlive a session (the separate
-     * window is handed a new envelope without a remount).
+     * AND on every change, in case the mounted renderer is handed a new
+     * session generation.
      */
     followProfile?: SmoothFollowProfile;
     /**
-     * §7.1. Extra bottom inset the mount site reserves below the script.
+     * Extra bottom inset the mount site reserves below the script.
      * Applied before the take begins and held for the whole take; it is folded
      * into the bottom padding, so document height and scroll bounds account for
      * it. Nothing reserves a band today, so the stage passes `0`.
@@ -911,7 +910,7 @@
       ? stagePaddingPx(bandGeometry).topPx
       : reachableTopPx(legacyPad.topPx, bandCenterPx - linePx / 2)) + lineEntryPx,
   );
-  // §7.1: any inset the mount site reserves is folded into the bottom padding,
+  // Any inset the mount site reserves is folded into the bottom padding,
   // so document height and scroll bounds account for it with no separate
   // bookkeeping.
   const padBottomPx = $derived(
@@ -1235,10 +1234,9 @@
    * Both halves are load-bearing, for different orderings. The constructor read
    * covers the normal case, where the envelope arrives before this component
    * mounts (the mount site gates on `doc`, which comes from the envelope), so
-   * the very first frame already runs the chosen feel. The effect covers the
-   * stage outliving a session: a second envelope published into this same
-   * component instance would otherwise, with a construction-only read, run
-   * session two on session one's feel.
+   * the very first frame already runs the chosen feel. The effect covers a
+   * mounted renderer handed a new session generation: with a construction-only
+   * read it would run session two on session one's feel.
    */
   const engine = createStageMotionEngine(
     untrack(() => (followProfile ? { profile: followProfile } : {})),
@@ -1424,12 +1422,12 @@
     /*
      * Scoped to the SESSION, not just to the token.
      *
-     * A stage can outlive a take. Latching on the token alone meant a second
-     * take that opened at the same place — the obvious case, "Retry last
-     * section" twice — was suppressed, and `openingHandedOver` is plain state
-     * that a new session resets without waking this effect. Reading the
-     * generation makes the effect re-run when a take begins and gives the latch
-     * something that actually changes between takes.
+     * A mounted stage can be handed a new take. Latching on the token alone
+     * meant a second take that opened at the same place — the obvious case,
+     * "Retry last section" twice — was suppressed, and `openingHandedOver` is
+     * plain state that a new session resets without waking this effect. Reading
+     * the generation makes the effect re-run when a take begins and gives the
+     * latch something that actually changes between takes.
      */
     const session = sessionGeneration;
     if (session !== seededForSession) {
@@ -1656,11 +1654,13 @@
      *
      * `els.length > 0` was standing in for "the blocks have rendered", which it
      * is — right up until there are no blocks. An empty source compiles to a
-     * valid script with zero blocks. A take now refuses a script with no spoken
-     * words before presenting, but a stage can still be handed one, and when it
-     * was the stage hydrated, mounted this layer, and then waited for an
-     * element that was never coming: the handshake could not complete and the
-     * take died on `waitForStageReady`'s timeout. Asking the document how many
+     * valid script with zero blocks, and when a stage was handed one it
+     * hydrated, mounted this layer, and then waited for an element that was
+     * never coming: the handshake could not complete and the take died on
+     * `waitForStageReady`'s timeout. (A take now refuses a script with no
+     * spoken words before presenting.) A zero-block document reports
+     * layout-ready right after the measurement pass; a nonempty one waits for
+     * its blocks. Asking the document how many
      * blocks it has separates "not rendered yet" from "nothing to render".
      */
     const rendered = els.length > 0 || performanceBlocks.length === 0;
@@ -2023,7 +2023,7 @@
      * `measureStageLayout` falls back to the typographic line box when it found
      * no token rows to take a median from, so "there were tokens" is the only
      * honest test for a measured pitch — and everything that consumes it (the
-     * primary §16.4 provisional cap, the smooth-jump threshold, the calibration
+     * primary §16.3 provisional cap, the smooth-jump threshold, the calibration
      * readout) has a defined behaviour for not knowing.
      */
     measuredLinePitchPx = measurement.tokens.length > 0 ? measurement.lineHeightPx : null;
@@ -2610,8 +2610,8 @@
    * The reveal's deadline, and the only thing in this file that is allowed to
    * show the script without knowing where it is.
    *
-   * Keyed on the session so a second session on a stage that outlived the
-   * first gets its own opening rather than inheriting a reveal from a script
+   * Keyed on the session so a second session handed to a mounted stage gets
+   * its own opening rather than inheriting a reveal from a script
    * that is no longer on the glass.
    */
   $effect(() => {
@@ -2640,8 +2640,8 @@
      * The three flags above have just declared the position unknown, and
      * nothing else would ever contradict them: the build effect keys on the
      * document, the layout inputs and the render window, none of which a
-     * session bump changes. So a second session on a stage that outlived
-     * the first would sit behind the plate for the whole ceiling and then
+     * session bump changes. So a second session handed to a mounted stage
+     * would sit behind the plate for the whole ceiling and then
      * reveal wherever the LAST take had left the script — the new take never
      * opening at the top being the older half of that bug.
      *
@@ -2951,7 +2951,8 @@
      * frame loop's own limits cannot reach.
      *
      * This path can RE-ANCHOR — `disposition: 'instant'` and `'reanchor'` write
-     * the plant directly (§62, §32.4) — so the zeroed velocities that enforce
+     * the plant directly (§62; primary §32.4 for `instant`, §20.4 for
+   * `reanchor`) — so the zeroed velocities that enforce
      * manual authority inside `limitsForState` do not bind here. Anything that
      * holds the document has to be repeated at this door or it is not a hold.
      *
@@ -3425,7 +3426,7 @@
 
   /* ---- public surface ---- */
 
-  /** Submit one Rust alignment snapshot to the motion receiver. */
+  /** Submit one alignment snapshot to the motion receiver. */
   export function pushAlignmentSnapshot(snapshot: AlignmentSnapshot): boolean {
     const accepted = engine.receiveSnapshot(snapshot, performance.now());
     /*
@@ -3758,7 +3759,7 @@
   export function motionDiagnostics() {
     return {
       // Which §55 profile the engine is ACTUALLY running: the resolved feel, or
-      // `default-v1` if the envelope carried nothing this build could interpret.
+      // the build's default if the envelope carried nothing it could interpret.
       profileId: engine.profile.id,
       profileVersion: engine.profile.version,
       layoutGeneration,

@@ -149,8 +149,8 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
         /*
-         * A new session starts with following switched on, so the switch goes
-         * back on with it.
+         * A new stage generation clears this reducer's own `followPaused`; the
+         * embedded stage reads the host's pause state instead.
          *
          * The standalone stage window outlives a session, and control sends no
          * `follow` directive at the start of one: it has nothing to say, the

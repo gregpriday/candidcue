@@ -5,9 +5,10 @@
  * The separate stage window is opened for Settings' preview and "Show test"
  * and for Calibrate. A take does not use it: it renders in the control window,
  * where `Live.svelte` embeds `StageApp` and drives it through the
- * `EmbeddedStageBridge` prop. So during a take most of these events have no
- * listener; alignment snapshots are the exception, because Rust publishes every
- * one to both windows.
+ * `EmbeddedStageBridge` prop, and the embedded stage subscribes to none of
+ * these events. Rust publishes every alignment snapshot under two names, one
+ * per window; a take uses control's copy (`align://snapshot`), handed to the
+ * embedded stage through the bridge.
  *
  * Event names use the Rust `stage://` convention and are mirrored verbatim in
  * `src-tauri/src/windows/mod.rs::events` (a Rust test asserts the two sides
@@ -24,13 +25,15 @@
  *                                    close-session
  *   Rust → stage                    : alignment-snapshot
  *   control → stage (direct emitTo): heartbeat (§43.5; no production sender
- *                                    today — the in-page preview drivers
- *                                    dispatch it)
- *   stage → Rust bridge             : hydrated, layout-ready, heartbeat-ack,
- *                                    media-error, escape-pressed,
- *                                    motion-report, layout-error,
- *                                    viewport-hint
- *   stage → control (direct)        : intent
+ *                                    today — only the dev preview and fixture
+ *                                    replay dispatch it, on the local bus)
+ *   stage → Rust bridge             : hydrated, listening, layout-ready,
+ *                                    heartbeat-ack, media-error,
+ *                                    escape-pressed, motion-report,
+ *                                    layout-error, viewport-hint, sync-request
+ *   Rust → stage (live sync)        : live-sync
+ *   stage → control (direct)        : intent (an embedded take reports
+ *                                    intents through the bridge instead)
  *   Rust → control                  : ready, closed, error (CONTROL_EVENT),
  *                                    escape-requested, motion-ack,
  *                                    layout-failed, align snapshot
@@ -274,12 +277,12 @@ export type StageDirective =
    * from RUST, arrived and moved the document perfectly. Two roads to the same
    * window, one of them not delivering.
    *
-   * So the standalone stage takes the words on the road that demonstrably
-   * works: control invokes `publish_stage_command`, Rust validates the
+   * So the standalone stage accepts the words on the road that demonstrably
+   * works: a `publish_stage_command` relay, where Rust validates the
    * generation and emits to the stage, and the stage handles it beside every
    * other directive. It also gets the generation check for free, which the old
-   * direct emit never had. A take's embedded stage gets the words through the
-   * bridge prop instead.
+   * direct emit never had. No production path sends this directive today: a
+   * take's embedded stage gets the words through the bridge prop.
    */
   | { kind: 'transcript'; text: string; final: boolean }
   /**
@@ -291,7 +294,7 @@ export type StageDirective =
   /**
    * Roll the script at a fixed pace, because nothing is following a voice.
    *
-   * On the standalone stage it travels the same Rust relay as the transcript
+   * The standalone stage accepts it on the same Rust relay as the transcript
    * and the pill, for the same reason: it is a live transport command, and the
    * one road to that window that has demonstrably kept working on every rig is
    * the one that goes through Rust with a generation check on it. A take passes
@@ -305,10 +308,11 @@ export type StageDirective =
    * The state lives in control — the dock's follow control flips it — and the
    * stage has to be told because the stage is where the consequence is visible
    * (a take's embedded stage reads it from the bridge prop). Without it the
-   * only way the glass learns that following stopped is that snapshots stop
-   * arriving, which it cannot distinguish from a presenter who has gone quiet
-   * until the 15 s staleness window expires. A mode has to be announced, not
-   * inferred from an absence.
+   * glass would have to infer that following stopped from voice-driven
+   * snapshots no longer arriving — manual moves still send their anchors —
+   * which it cannot distinguish from a presenter who has gone quiet until the
+   * 15 s staleness window expires. A mode has to be announced, not inferred
+   * from an absence.
    */
   | { kind: 'follow'; paused: boolean }
   | { kind: 'diagnostics'; visible: boolean };
@@ -608,10 +612,13 @@ export const STAGE_VOICE_PILL_TRACE_SAMPLES = 20;
 export const ESCAPE_DOUBLE_PRESS_MS = 1500;
 
 /**
- * If no HEARTBEAT arrives for this long while live, the standalone stage
- * freezes locally and says so on the glass (control is presumed gone; it owns
- * recovery). A take's embedded stage lives in the control window and has no
- * heartbeat to miss.
+ * If no HEARTBEAT arrives for this long once the handshake is over, the
+ * standalone stage freezes locally and says so on the glass (control is
+ * presumed gone; it owns recovery). Only an envelope carrying a session
+ * generation, or a beat for the current stage generation, arms it, and no
+ * shipped path does either today: the Settings preview omits the session
+ * generation, Calibrate sends no envelope, and a take's embedded stage bypasses
+ * both handlers.
  *
  * Heartbeats only, and generation-scoped. This used to read "heartbeat/snapshot
  * /tracking", and the stage implemented exactly that — which made the watchdog

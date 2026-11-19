@@ -80,9 +80,9 @@ export function nextMenuIndex(
 }
 
 /**
- * First-letter navigation (typeahead): the index of the next enabled
- * item whose label starts with the typed character, or null when the key is
- * not a letter for this menu.
+ * First-letter navigation (typeahead): the index of the next enabled item
+ * whose label starts with the typed character, or null when the key is not
+ * eligible or nothing matches.
  *
  * Searches forward from the active item and wraps, so pressing D twice in a
  * menu holding Duplicate and Delete walks between them rather than sticking on

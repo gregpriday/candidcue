@@ -8,10 +8,11 @@
  * still — correctly, because moving on evidence it does not have is the one
  * thing a prompter must never do. But there are ordinary rooms where holding
  * still is the answer for the whole take: no speech model installed yet, a
- * language the recogniser handles badly, or a stage loud enough that finals
- * stop arriving. The presenter is then in front of a camera with a script that
- * will not move, and their only recourse is a keyboard they are not standing
- * next to. A take without voice following has no other way to move at all.
+ * language the recogniser handles badly, or a stage loud enough that too little
+ * usable text comes back. The presenter is then in front of a camera with a
+ * script that will not move except by hand, from a keyboard they are not
+ * standing next to. A take without voice following has the same problem from
+ * the start.
  *
  * It is not smarter than voice following and does not try to be: it advances
  * at the rate it is told. While it runs it owns the document — starting it

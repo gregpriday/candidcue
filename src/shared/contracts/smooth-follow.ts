@@ -368,9 +368,10 @@ export interface SmoothFollowProfile {
     /**
      * Companion §30.3 boost decay, in reading-corridor half-heights.
      *
-     * The boost falls to nothing over this many corridor half-heights of gap
-     * ABOVE the corridor's entry edge, so it is spent bringing the spoken line
-     * back to the corridor and ordinary following covers the rest. Expressed in
+     * The boost applies while the spoken line is still BELOW the corridor's
+     * entry edge and falls to nothing over this many corridor half-heights as
+     * the line reaches it, so it is spent bringing the spoken line back to the
+     * corridor and ordinary following covers the rest. Expressed in
      * corridors rather than pixels or milliseconds because the corridor is the
      * only scale that means the same thing on a 1080p stage and a 4K one, and
      * because a time-relative decay makes a long catch-up crawl at the end and
@@ -409,13 +410,14 @@ export interface SmoothFollowProfile {
 }
 
 /**
- * The one `SmoothFollowProfile.version` this build knows how to interpret.
+ * The `SmoothFollowProfile.version` this build writes.
  *
  * The version is bumped whenever a FIELD'S MEANING changes, so an older profile
- * is not a subset of a newer one — its numbers say something different. That
- * makes exact equality the only honest test: a consumer handed any other
- * version cannot interpret it, in either direction, and must fall back to its
- * own default rather than apply numbers it is guessing about (companion §55).
+ * is not a subset of a newer one — its numbers say something different. A
+ * consumer handed a version it cannot interpret falls back to its own default
+ * rather than apply numbers it is guessing about (companion §55). This build
+ * also interprets v3 when it carries no `lineUnits` — see
+ * `isInterpretableSmoothFollowProfile`.
  *
  * 3 → 4 is such a change even though `lineUnits` is additive. The pixel bounds
  * did not move, but once a profile carries `lineUnits` they stop being the
@@ -442,7 +444,7 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     maxAccelerationPxS2: 2600,
     maxJerkPxS3: 12000,
     catchUpMultiplier: 1.6,
-    // Companion A.4/§30.3. Long enough to absorb a sentence-length stumble or a
+    // Companion §30.3. Long enough to absorb a sentence-length stumble or a
     // transcript stall at 1.6× (at 900 px/s base that is ~3600 px, several
     // screens); short enough that a catch-up which is not closing stops being a
     // spectacle before the presenter has finished the next sentence.
@@ -479,10 +481,6 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
    * two bounds nobody measured again, applied the instant a stage learns its own
    * pitch and to no stage before that. `LINE_LIMIT_MIN_SCALE` leans on the same
    * fidelity for its band to mean one pitch range — see the note there.
-   *
-   * `fadeSkipLines` and `catchUpCeilingLines` were already line- and
-   * corridor-relative in the engine; they move here so there is one table of
-   * motion bounds rather than a profile and a scatter of constants beside it.
    */
   lineUnits: {
     reverseTravelMaxLines: 5,

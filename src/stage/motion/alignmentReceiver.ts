@@ -43,11 +43,11 @@
  * ---------------------------------------------------------------------------
  * THE STAGE DOES NOT TRUST WHAT IT IS SENT
  * ---------------------------------------------------------------------------
- * Snapshots come from Rust, over an event or through the embedded bridge, and
- * nothing upstream promises their shape. The motion plant
- * is persistent for the life of the session, so a single `NaN` would poison
- * every later frame permanently. Everything is validated structurally before
- * acceptance, and rejections are counted rather than logged per snapshot.
+ * Snapshots come from Rust — over an event, or through the embedded bridge —
+ * and from the in-page preview drivers. The motion plant is persistent for the
+ * life of the session, so a single `NaN` would poison every later frame
+ * permanently. Everything is validated structurally before acceptance, and
+ * rejections are counted rather than logged per snapshot.
  */
 import {
   isAlignmentSnapshot,
@@ -206,16 +206,15 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
        * The COUNTERS go too, not just `lastSeq`.
        *
        * These describe the feed, and the feed is a property of the SESSION —
-       * which is the unit this method is given, and the only one it can see.
-       * One stage can serve a second session (the separate window is handed a
-       * new envelope), and the engine that owns this receiver survives the
-       * change. Carried forward, the counts stop answering the question anybody
-       * asks of them: a session that rejected everything early would keep
-       * supplying the "dominant" rejection reason for a later, healthy one —
-       * and, worse in the other direction, a single acceptance from the earlier
-       * session would make the next one's all-rejected feed look partly
-       * healthy, which is precisely the reading this instrument exists to make
-       * impossible.
+       * which is the unit this method is given, and the only one it can see. A
+       * mounted renderer can be handed a second session, and the engine that
+       * owns this receiver survives the change. Carried forward, the counts
+       * stop answering the question anybody asks of them: a session that
+       * rejected everything early would keep supplying the "dominant" rejection
+       * reason for a later, healthy one — and, worse in the other direction, a
+       * single acceptance from the earlier session would make the next one's
+       * all-rejected feed look partly healthy, which is precisely the reading
+       * this instrument exists to make impossible.
        *
        * NOT per take PASS. A retake ("restart paragraph") opens a new pass
        * inside the same session and never changes the generation, so its counts

@@ -230,8 +230,8 @@ export interface FingerprintInput {
   viewportHeightPx: number;
   displayScaleFactor: number;
   /**
-   * Actual rendered top padding, px — NOT a constant (primary §16.8 compact
-   * viewports).
+   * Actual rendered top padding, px — NOT a constant: the fingerprint has to
+   * see the actual layout input (companion §7.2).
    */
   paddingTopPx: number;
   /** Actual rendered bottom padding, px. */

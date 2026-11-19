@@ -261,8 +261,7 @@
   .hold-status {
     position: absolute;
     /* The shared chrome geometry, so the chip lines up with the dock's left
-       edge and carries the same material as everything else that floats over
-       the script.
+       edge and shares the stage chrome's inset and fill.
 
        `--stage-hold-top` is the one exception, set by the stage only where
        something else already owns the corner the chip would land in. */

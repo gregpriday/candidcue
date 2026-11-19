@@ -64,9 +64,9 @@ export interface AudioLevelSnapshot {
 }
 
 /**
- * The default recogniser's id, from the model catalogue
- * (`src-tauri/models/catalogue.json`). No installer carries the model itself:
- * it is downloaded from Settings › Speech.
+ * The default recogniser's full model name — the catalogue's `modelName` in
+ * `src-tauri/models/catalogue.json`, not its short `id`. No installer carries
+ * the model itself: it is downloaded from Settings › Speech.
  *
  * Rust re-derives the real value on every settings read, so a stale copy here
  * is corrected before a take — but this is also what the browser mock and the
@@ -77,7 +77,7 @@ export interface AudioLevelSnapshot {
 export const BUNDLED_MODEL_NAME = 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05';
 
 export interface TranscriptionConfig {
-  /** The configured recogniser's id — see {@link BUNDLED_MODEL_NAME}. */
+  /** The recogniser's model name — see {@link BUNDLED_MODEL_NAME}. */
   model: string;
   /** BCP-47 tag, e.g. `en-US`. */
   language?: string;

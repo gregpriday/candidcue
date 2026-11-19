@@ -123,11 +123,12 @@ export type SafeRenderNode =
     };
 
 /* -------------------------------------------------------------------------
- * Additions beyond Appendix C.1 — the IR types referenced by §25.3
+ * Additions beyond Appendix C.1 — the IR types sketched in §25.3
  * (CompiledScript, SpokenToken) plus the supporting shapes they require
- * (CueEvent, CompiledAsset, ScriptStatistics, CompileOptions). Appendix C.1
- * names these in CompiledScript but does not define them. They depart from §25
- * where lexical judgement is concerned: see `SpokenToken`.
+ * (CueEvent, CompiledAsset, ScriptStatistics, CompileOptions). They depart
+ * from §25 where lexical judgement is concerned: the contract carries
+ * structural token data and leaves lexical judgement to `cc-align` (see
+ * `SpokenToken`).
  * ---------------------------------------------------------------------- */
 
 /**
@@ -231,9 +232,9 @@ export interface CompileOptions {
   readInlineCode?: boolean;
   wordsPerMinute?: number;
   /**
-   * Phrases the compiler's `command_collision` warning looks for (spec §25.1).
-   * Nothing listens for a spoken command during a take; the warning is all
-   * that reads them.
+   * Phrases the compiler's `command_collision` warning looks for (spec §25.1),
+   * also folded into `settingsHash`. Nothing listens for a spoken command
+   * during a take.
    */
   wakePhrases?: string[];
 }

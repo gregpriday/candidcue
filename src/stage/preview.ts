@@ -38,10 +38,9 @@ import { resolveStageGeometry } from '../shared/optical-resolve';
  * ----------------------
  * Until it did, `?preview=1` only ever drove the CALIBRATED path: the harness
  * discovers a rig, resolves it, and hands the stage a full `optics` block. That
- * is the configuration almost nobody is in. A rig is calibrated by standing at
- * the glass with a ruler, and until somebody does that every take in the app
- * runs on the branch below — the branch that had no end-to-end coverage of
- * whether the document actually follows.
+ * leaves out the flat fallback sizing below, which a take gets whenever there
+ * is no chosen rig and no usable automatic profile — the branch that had no
+ * end-to-end coverage of whether the document actually follows.
  *
  * `stage-preview.spec.ts` asserts the spoken word ARRIVES at the reading band,
  * which is the one assertion that can tell following from highlighting. Running
@@ -92,9 +91,9 @@ export function uncalibratedPreviewSettings(): StageSettings {
  * question is exactly the arrangement the optical layer replaces, and keeping
  * one here would mean the preview no longer showed what the stage does.
  *
- * So the preview discovers a rig the same way a take does. The window it is
- * running in stands in for the panel, and the profile it produces is resolved by
- * the same `resolveStageGeometry` control uses — which means a change to the
+ * So the preview simulates an Elgato panel from the window it is running in,
+ * and the profile it produces is resolved by the same `resolveStageGeometry` a
+ * prompter take uses — which means a change to the
  * model is visible in the browser preview immediately, without a Tauri build and
  * without a physical prompter.
  */
@@ -267,7 +266,7 @@ export interface PreviewDriver {
    * Here for the same reason the voice pill is: the off state puts a lit
    * control in the corner of the dock and a chip on the glass, both of which
    * are judged by looking at them beside a script, and the only other way to
-   * see either is to start a billable take with a microphone attached.
+   * see either is to start a real take with a microphone attached.
    */
   toggleFollow(): void;
   /**

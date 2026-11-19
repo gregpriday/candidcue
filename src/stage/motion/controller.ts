@@ -411,7 +411,7 @@ export function createJerkLimitedScrollController(
       let saturated = false;
 
       if (limits.snap) {
-        // Reduced motion (primary §32.4, companion A.3): follow the target
+        // Reduced motion (primary §32.4): follow the target
         // exactly. The target itself is continuous, so this still reads as
         // motion, just without controller dynamics.
         const dtSec = integratedMs / 1000;
