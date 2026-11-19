@@ -264,6 +264,16 @@ async fn an_export_missing_a_scripts_text_is_incomplete_and_names_it() {
         .expect("create");
     let lost_id = script_id(&lost.id);
     fs::remove_file(h.paths.canonical_file(&lost_id)).expect("lose the text");
+    // A trashed script is still the user's, and restorable from the Trash.
+    let binned = repo::create_script(&h.pool, &h.paths, create_input("Binned", "# Binned"))
+        .await
+        .expect("create");
+    sqlx::query("UPDATE scripts SET status = 'trash', trashed_at = '2026-11-19T00:00:00Z' WHERE id = ?")
+        .bind(&binned.id)
+        .execute(&h.pool)
+        .await
+        .expect("trash it");
+    fs::remove_file(h.paths.canonical_file(&script_id(&binned.id))).expect("lose its text");
 
     let dest = tempfile::tempdir().expect("dest");
     let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -275,6 +285,7 @@ async fn an_export_missing_a_scripts_text_is_incomplete_and_names_it() {
     let warning = result.warnings.join("\n");
     assert!(warning.contains("Keynote"), "the warning names the script: {warning}");
     assert!(warning.contains(&lost.id), "and its folder: {warning}");
+    assert!(warning.contains("Binned"), "every missing script, trashed too: {warning}");
     assert!(!warning.contains("Opening"), "only the affected script is named: {warning}");
 
     let manifest = manifest_of(Path::new(&result.path));
@@ -294,8 +305,10 @@ async fn an_empty_library_still_exports_complete() {
     let h = harness().await;
     // With and without the scripts root: neither is a missing script.
     for remove_root in [false, true] {
-        if remove_root && h.paths.scripts_dir().exists() {
+        if remove_root {
             fs::remove_dir_all(h.paths.scripts_dir()).expect("remove the scripts root");
+        } else {
+            fs::create_dir_all(h.paths.scripts_dir()).expect("an empty scripts root");
         }
         let dest = tempfile::tempdir().expect("dest");
         let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -340,6 +353,9 @@ async fn a_restore_refuses_an_export_whose_script_has_no_text() {
     let lost = repo::create_script(&h.pool, &h.paths, create_input("Keynote", "# Keynote\n\nGone."))
         .await
         .expect("create");
+    let hollow = repo::create_script(&h.pool, &h.paths, create_input("Hollow", "# Hollow"))
+        .await
+        .expect("create");
 
     let dest = tempfile::tempdir().expect("dest");
     let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -347,24 +363,19 @@ async fn a_restore_refuses_an_export_whose_script_has_no_text() {
         .expect("export");
     assert!(export.complete);
     let export_root = Path::new(&export.path);
-    let body = format!("scripts/{}/script.md", lost.id);
-    fs::remove_file(export_root.join(&body)).expect("remove the text from the export");
-    let mut manifest = manifest_of(export_root);
-    let files = manifest["files"].as_array_mut().expect("files");
-    let before = files.len();
-    files.retain(|file| file["path"] != body.as_str());
-    assert_eq!(files.len(), before - 1, "the manifest listed the text");
-    fs::write(
-        export_root.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).expect("manifest"),
-    )
-    .expect("write the manifest");
+    remove_from_export(export_root, &format!("scripts/{}/script.md", lost.id));
+    // A directory where the text should be is no text either.
+    let hollow_body = format!("scripts/{}/script.md", hollow.id);
+    remove_from_export(export_root, &hollow_body);
+    fs::create_dir(export_root.join(&hollow_body)).expect("a directory named script.md");
     let files_before: Vec<String> = list_files(export_root);
 
     let outcome = backup::restore_all_data(&h.paths, export_root).await;
     let err = outcome.expect_err("an export missing a script's text must not restore");
     let message = err.to_string();
     assert!(message.contains("Keynote"), "the refusal names the script: {message}");
+    assert!(message.contains("Hollow"), "and the one with a folder for text: {message}");
+    assert!(!message.contains("Opening"), "and only those: {message}");
     assert!(
         !h.dir.path().join("restore-pending.json").exists(),
         "nothing is scheduled"
@@ -441,10 +452,181 @@ async fn a_restore_preview_counts_the_scripts_the_database_indexes() {
     let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
         .await
         .expect("export");
+    // A folder no script owns is not a script the restore brings back.
+    fs::create_dir(Path::new(&export.path).join("scripts").join("stray")).expect("stray folder");
     let preview = backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
     assert_eq!(preview.scripts_in_export, 2);
+}
+
+/// Take one file out of an export and out of its manifest, as an export
+/// written without it would be.
+fn remove_from_export(export_root: &Path, relative: &str) {
+    fs::remove_file(export_root.join(relative)).expect("remove the file from the export");
+    let mut manifest = manifest_of(export_root);
+    let files = manifest["files"].as_array_mut().expect("files");
+    let before = files.len();
+    files.retain(|file| file["path"] != relative);
+    assert_eq!(files.len(), before - 1, "the manifest listed {relative}");
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+}
+
+#[tokio::test]
+async fn an_export_with_rows_and_no_scripts_folder_is_incomplete() {
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening"))
+        .await
+        .expect("create");
+    fs::remove_dir_all(h.paths.scripts_dir()).expect("lose the whole tree");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    assert!(!result.complete);
+    assert!(result.warnings.join("\n").contains("Opening"), "{:?}", result.warnings);
+}
+
+#[tokio::test]
+async fn an_export_names_a_script_whose_id_the_app_cannot_open() {
+    /*
+     * A row whose id is not a canonical UUID is skipped by reconciliation and
+     * cannot be opened, whatever text sits in a folder of that name.
+     */
+    let h = harness().await;
+    sqlx::query(
+        "INSERT INTO scripts (id, title, canonical_rel_path, source_hash, created_at, updated_at) \
+         VALUES ('not-a-uuid', 'Odd', 'scripts/not-a-uuid/script.md', 'x', '2026-11-19', '2026-11-19')",
+    )
+    .execute(&h.pool)
+    .await
+    .expect("seed the row");
+    let folder = h.paths.scripts_dir().join("not-a-uuid");
+    fs::create_dir_all(&folder).expect("folder");
+    fs::write(folder.join("script.md"), "# Odd").expect("text");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    assert!(!result.complete);
+    assert!(result.warnings.join("\n").contains("Odd"), "{:?}", result.warnings);
+}
+
+#[tokio::test]
+async fn an_export_whose_scripts_cannot_be_listed_is_incomplete() {
+    /*
+     * The snapshot succeeds and the check cannot read it: that is no evidence
+     * of an empty library, so the export is not called complete.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening"))
+        .await
+        .expect("create");
+    sqlx::query("ALTER TABLE scripts RENAME TO scripts_elsewhere")
+        .execute(&h.pool)
+        .await
+        .expect("hide the scripts table");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    assert!(!result.complete);
+    assert!(
+        result.warnings.join("\n").contains("could not check"),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[tokio::test]
+async fn a_restore_refuses_an_export_whose_scripts_cannot_be_listed() {
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening"))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = Path::new(&export.path);
+    let database = export_root.join("speaking-glass.sqlite3");
+    {
+        use sqlx::Connection;
+        let mut connection = sqlx::SqliteConnection::connect(&format!("sqlite://{}", database.display()))
+            .await
+            .expect("open the exported database");
+        sqlx::query("ALTER TABLE scripts RENAME TO scripts_elsewhere")
+            .execute(&mut connection)
+            .await
+            .expect("hide the scripts table");
+        connection.close().await.expect("close");
+    }
+    // Vouched for again, so only the script check can refuse it.
+    let bytes = fs::read(&database).expect("database");
+    let digest = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&bytes))
+    };
+    let mut manifest = manifest_of(export_root);
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["path"] == "speaking-glass.sqlite3" {
+            file["sha256"] = serde_json::json!(digest);
+            file["bytes"] = serde_json::json!(bytes.len());
+        }
+    }
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    let err = backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect_err("an export whose scripts cannot be listed must not restore");
+    assert!(err.to_string().contains("could not be read"), "{err}");
+    assert!(!h.dir.path().join("restore-pending.json").exists());
+}
+
+#[tokio::test]
+async fn a_scheduled_restore_rechecks_every_scripts_text_at_the_next_launch() {
+    /*
+     * The export is re-validated when the restore is applied, because it is a
+     * folder the user can change in between. A body lost after scheduling must
+     * stop the restore before anything live moves.
+     */
+    let h = harness().await;
+    let live = repo::create_script(&h.pool, &h.paths, create_input("Live", "# Live\n\nKeep me."))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = Path::new(&export.path);
+    backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect("schedule");
+    close_fully(&h.pool, h.dir.path()).await;
+
+    remove_from_export(export_root, &format!("scripts/{}/script.md", live.id));
+
+    let err = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect_err("the restore must be refused at the next launch");
+    assert!(err.to_string().contains("Live"), "{err}");
+    let canonical = h.paths.canonical_file(&script_id(&live.id));
+    assert!(
+        fs::read_to_string(&canonical).expect("live text").contains("Keep me."),
+        "nothing live moved"
+    );
+    assert!(h.dir.path().join("speaking-glass.sqlite3").is_file());
 }
 
 fn list_files(root: &Path) -> Vec<String> {
@@ -3489,9 +3671,17 @@ async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
     // The state the restore is FOR: the scripts tree is gone.
     fs::remove_dir_all(h.paths.scripts_dir()).expect("lose the scripts");
 
+    let failed = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect_err("a database that fails its integrity check must fail the restore");
     assert!(
-        backup::apply_pending_restore(&h.paths).await.is_err(),
-        "a database that fails its integrity check must fail the restore"
+        failed.to_string().contains("integrity check failed"),
+        "the restore must get as far as checking the copied database: {failed}"
+    );
+    assert_ne!(
+        fs::read(h.dir.path().join("speaking-glass.sqlite3")).expect("live database"),
+        garbage,
+        "the damaged copy must not be what is left live"
     );
 
     assert!(

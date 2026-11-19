@@ -450,55 +450,89 @@ async fn scripts_without_text(
     database: &Path,
     scripts_root: &Path,
 ) -> Result<IndexedScripts, String> {
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use sqlx::Row;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+    use sqlx::{ConnectOptions, Connection, Row};
 
-    let options = SqliteConnectOptions::new()
+    let mut connection: SqliteConnection = SqliteConnectOptions::new()
         .filename(database)
         .create_if_missing(false)
         .read_only(true)
-        .immutable(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+        .immutable(true)
+        .connect()
         .await
         .map_err(|e| e.to_string())?;
     let rows = sqlx::query("SELECT id, title FROM scripts ORDER BY title COLLATE NOCASE, id")
-        .fetch_all(&pool)
+        .fetch_all(&mut connection)
         .await;
-    pool.close().await;
+    /*
+     * One connection, closed and awaited here rather than a pool. A pool's
+     * `close()` can return while the connection is still on its way back to
+     * it, and on Windows SQLite holds its file without delete sharing — so the
+     * restore's later copy, or the export's rename, could meet a handle this
+     * check had already finished with.
+     */
+    let closed = connection.close().await;
     let rows = rows.map_err(|e| e.to_string())?;
+    closed.map_err(|e| e.to_string())?;
 
+    let folders = real_entries(scripts_root);
     let mut missing = Vec::new();
     for row in &rows {
         let id: String = row.try_get("id").map_err(|e| e.to_string())?;
         let title: String = row.try_get("title").map_err(|e| e.to_string())?;
-        if !has_canonical_text(scripts_root, &id) {
+        if !has_canonical_text(scripts_root, &folders, &id) {
             missing.push((id, title));
         }
     }
     Ok(IndexedScripts { total: rows.len() as u32, missing })
 }
 
+/// The entries of `dir` by their exact names, each with its own type — links
+/// are reported as links, never as what they point at. Empty when `dir` is not
+/// a real directory.
+fn real_entries(dir: &Path) -> std::collections::HashMap<std::ffi::OsString, std::fs::FileType> {
+    let is_real_dir = std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir());
+    if !is_real_dir {
+        return std::collections::HashMap::new();
+    }
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| Some((entry.file_name(), entry.file_type().ok()?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Whether `<scripts_root>/<id>/script.md` is text the app can open: an id the
-/// app accepts, and real directories down to a regular file.
+/// app accepts, and real directories down to a regular file, by exact name.
 ///
 /// Every level is checked without following links, because `copy_tree` skips
 /// symbolic links — a script folder that is a link to a folder holding a
-/// perfectly good `script.md` would verify here and arrive as nothing. And an
+/// perfectly good `script.md` would verify here and arrive as nothing. Names
+/// are matched exactly rather than looked up, because an export may sit on a
+/// case-insensitive volume: `SCRIPT.MD` would be found there and restored
+/// under that name onto a volume where the app looks for `script.md`. And an
 /// id that is not a canonical UUID is skipped by the app's own reconciliation,
 /// so its script cannot be opened whatever is on disk.
-fn has_canonical_text(scripts_root: &Path, id: &str) -> bool {
+fn has_canonical_text(
+    scripts_root: &Path,
+    folders: &std::collections::HashMap<std::ffi::OsString, std::fs::FileType>,
+    id: &str,
+) -> bool {
     use crate::scripts::ScriptId;
 
     let Ok(script_id) = ScriptId::parse(id) else {
         return false;
     };
-    let folder = scripts_root.join(script_id.as_str());
-    let kind = |path: &Path| std::fs::symlink_metadata(path).map(|meta| meta.file_type()).ok();
-    kind(scripts_root).is_some_and(|t| t.is_dir())
-        && kind(&folder).is_some_and(|t| t.is_dir())
-        && kind(&folder.join("script.md")).is_some_and(|t| t.is_file())
+    let name = std::ffi::OsStr::new(script_id.as_str());
+    if !folders.get(name).is_some_and(|kind| kind.is_dir()) {
+        return false;
+    }
+    real_entries(&scripts_root.join(name))
+        .get(std::ffi::OsStr::new("script.md"))
+        .is_some_and(|kind| kind.is_file())
 }
 
 /// "“Keynote” (3f2c…), “Opening” (9a1b…)", every script named in full: the
