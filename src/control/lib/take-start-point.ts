@@ -327,6 +327,46 @@ export function continueFrom(endTokenIndex: number | undefined, input: SnapInput
   return { ...snapped, kind: 'last_ending' };
 }
 
+/** What a session record says about where its take stopped. */
+export interface RecordedEnding {
+  /** The compiler's hash of the source the take was performed from. */
+  scriptSourceHash: string;
+  endTokenIndex?: number;
+}
+
+/** A last-ending start point, with the source it is valid against. */
+export interface LastEnding extends StartPoint {
+  sourceHash: string;
+}
+
+/**
+ * "From last ending", offered only against the source the take was read from
+ * (#448).
+ *
+ * An ending is a token offset, and an offset means nothing outside the
+ * document it was counted in: insert an introduction above the passage and the
+ * same number lands on whatever sentence now sits there, which the menu would
+ * then quote and launch as if it were the place the take stopped. Nothing kept
+ * with the session says which words those were, so the destination can only be
+ * established while the source is unchanged — byte for byte, by the compiler's
+ * own hash. Any other source withholds the row rather than guess. Undoing the
+ * edit brings it back.
+ *
+ * `sourceHash` travels with the point so the launch can check it once more
+ * against the compile the stage is built from: the script can still change
+ * between choosing the row and the take starting.
+ */
+export function lastEndingFor(
+  record: RecordedEnding | null | undefined,
+  sourceHash: string | null | undefined,
+  input: SnapInput,
+): LastEnding | null {
+  if (record === null || record === undefined) return null;
+  if (!sourceHash || record.scriptSourceHash !== sourceHash) return null;
+  const point = continueFrom(record.endTokenIndex, input);
+  return point === null ? null : { ...point, sourceHash };
+}
+
 /**
  * How the start point reads next to the Present button.
  *

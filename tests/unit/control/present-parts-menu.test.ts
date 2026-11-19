@@ -28,8 +28,7 @@ function input(overrides: Partial<StartMenuInput> = {}): StartMenuInput {
     hereTokenIndex: null,
     hereLabel: null,
     herePart: null,
-    lastEndingTokenIndex: null,
-    lastEndingLabel: null,
+    lastEnding: null,
     parts: [],
     ...overrides,
   };
@@ -149,13 +148,32 @@ describe('startMenuItems part rows', () => {
     expect(chosen).toEqual([[14, undefined]]);
   });
 
+  it('hands the last-ending row its source hash so the launch can re-check it (#448)', () => {
+    const chosen: Array<[number, TakePartRequest | undefined, string | undefined]> = [];
+    const items = startMenuItems(
+      input({
+        lastEnding: { tokenIndex: 12, label: '“Raise prices.”', sourceHash: 'abc123' },
+        parts: [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)],
+      }),
+      (token, p, hash) => chosen.push([token, p, hash]),
+    );
+    const row = items.find((i) => i.label === 'From last ending')!;
+    expect(row.description).toBe('“Raise prices.” · Part 2');
+    row.onselect();
+    expect(chosen).toEqual([[12, undefined, 'abc123']]);
+  });
+
+  it('offers no last-ending row when there is none to offer', () => {
+    const items = startMenuItems(input({ lastEnding: null }), () => {});
+    expect(items.map((i) => i.label)).not.toContain('From last ending');
+  });
+
   it('keeps the here and last-ending rows above the parts', () => {
     const items = startMenuItems(
       input({
         hereTokenIndex: 5,
         hereLabel: 'Opening',
-        lastEndingTokenIndex: 12,
-        lastEndingLabel: 'somewhere',
+        lastEnding: { tokenIndex: 12, label: 'somewhere', sourceHash: 'h' },
         parts: [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)],
       }),
       () => {},

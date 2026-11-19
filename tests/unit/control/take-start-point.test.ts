@@ -17,10 +17,12 @@ import {
   continueFrom,
   describeStartPoint,
   flattenOutline,
+  lastEndingFor,
   snapToStart,
   type SnapInput,
 } from '../../../src/control/lib/take-start-point';
 import type { OutlineNode, SentenceUnit } from '../../../src/shared/contracts';
+import { compile } from '../../../src/shared/markdown/compile';
 
 function sentence(id: string, start: number, end: number, text: string): SentenceUnit {
   return {
@@ -233,6 +235,71 @@ describe('continueFrom', () => {
     expect(continueFrom(0, INPUT)).toBeNull();
     // A take that ended inside the first sentence has not got anywhere either.
     expect(continueFrom(3, INPUT)).toBeNull();
+  });
+});
+
+/**
+ * #448: a take's ending is a token offset into the source it was performed
+ * from. Against any other source the same number names whatever sentence now
+ * happens to sit there, so the row is offered only while the source is the one
+ * the take was recorded against.
+ */
+describe('lastEndingFor', () => {
+  const ORIGINAL = 'Opening words go here. Repeat this tricky passage. Closing words go here.\n';
+
+  function compiled(source: string) {
+    const script = compile(source, { scriptId: 'script-448' });
+    return {
+      sourceHash: script.sourceHash,
+      input: {
+        sentences: script.sentences,
+        outline: script.outline,
+        totalTokens: script.statistics.spokenWordCount,
+        blocks: script.blocks,
+      } satisfies SnapInput,
+    };
+  }
+
+  const recorded = compiled(ORIGINAL);
+  // Three words into "Repeat this tricky passage." — a take ended mid-sentence.
+  const record = { scriptSourceHash: recorded.sourceHash, endTokenIndex: 6 };
+
+  it('offers the recorded passage while the script is unchanged', () => {
+    const point = lastEndingFor(record, recorded.sourceHash, recorded.input);
+    expect(point).not.toBeNull();
+    expect(point!.tokenIndex).toBe(4);
+    expect(point!.kind).toBe('last_ending');
+    expect(point!.excerpt).toMatch(/^“Repeat this tricky passage/);
+    // The launch re-checks this against the compile the stage is built from.
+    expect(point!.sourceHash).toBe(recorded.sourceHash);
+  });
+
+  it('withholds it after text is inserted before the ending', () => {
+    const edited = compiled(`A new introduction first. ${ORIGINAL}`);
+    // The bug: the same number now snaps to an unrelated sentence.
+    expect(continueFrom(record.endTokenIndex, edited.input)?.excerpt).toMatch(/^“Opening words/);
+    expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
+  });
+
+  it('withholds it when the sentence the take ended in is deleted', () => {
+    const edited = compiled('Opening words go here. Closing words go here.\n');
+    expect(continueFrom(record.endTokenIndex, edited.input)).not.toBeNull();
+    expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
+  });
+
+  it('offers it again once the edit is undone', () => {
+    const edited = compiled(`A new introduction first. ${ORIGINAL}`);
+    expect(lastEndingFor(record, edited.sourceHash, edited.input)).toBeNull();
+    const undone = compiled(ORIGINAL);
+    expect(lastEndingFor(record, undone.sourceHash, undone.input)?.tokenIndex).toBe(4);
+  });
+
+  it('offers nothing without a record, an ending, or a compile', () => {
+    expect(lastEndingFor(null, recorded.sourceHash, recorded.input)).toBeNull();
+    expect(lastEndingFor({ scriptSourceHash: recorded.sourceHash }, recorded.sourceHash, recorded.input)).toBeNull();
+    expect(lastEndingFor(record, null, recorded.input)).toBeNull();
+    // An empty hash on either side establishes nothing.
+    expect(lastEndingFor({ ...record, scriptSourceHash: '' }, '', recorded.input)).toBeNull();
   });
 });
 

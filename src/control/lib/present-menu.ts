@@ -86,9 +86,13 @@ export interface StartMenuInput {
    * silently produced an unbounded take.
    */
   herePart: ScriptPart | null;
-  /** Where the last take stopped, snapped, or null when there is no history. */
-  lastEndingTokenIndex: number | null;
-  lastEndingLabel: string | null;
+  /**
+   * Where the last take stopped, snapped, or null when there is no history or
+   * the script has changed since (#448). `sourceHash` is the source the token
+   * is valid against; choosing the row hands it to `present` so the launch can
+   * refuse a script that changed after the menu was drawn.
+   */
+  lastEnding: { tokenIndex: number; label: string | null; sourceHash: string } | null;
   /** The script's parts, in document order. Empty when it has no division. */
   parts: readonly ScriptPart[];
 }
@@ -100,7 +104,7 @@ export interface StartMenuInput {
  */
 export function startMenuItems(
   input: StartMenuInput,
-  present: (tokenIndex: number, part?: TakePartRequest) => void,
+  present: (tokenIndex: number, part?: TakePartRequest, expectedSourceHash?: string) => void,
 ): PresentMenuItem[] {
   /*
    * ONE LINE EACH, AND EACH ONE A FACT THE LABEL DOES NOT ALREADY STATE.
@@ -135,15 +139,15 @@ export function startMenuItems(
     });
   }
 
-  if (input.lastEndingTokenIndex !== null) {
-    const token = input.lastEndingTokenIndex;
+  if (input.lastEnding !== null) {
+    const { tokenIndex: token, label, sourceHash } = input.lastEnding;
     items.push({
       label: 'From last ending',
       description: locate(
-        input.lastEndingLabel ?? 'Where the last take stopped',
+        label ?? 'Where the last take stopped',
         input.parts.find((p) => token >= p.startTokenIndex && token <= p.endTokenIndex) ?? null,
       ),
-      onselect: () => present(token),
+      onselect: () => present(token, undefined, sourceHash),
     });
   }
 
