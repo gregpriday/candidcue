@@ -2627,6 +2627,7 @@
   $effect(() => {
     void sessionGeneration;
     scriptRevealed = false;
+    revealReason = null;
     plantAtTarget = false;
     mapEverBuilt = false;
     // The engine's own copy goes with `configureSession`; this is ours.

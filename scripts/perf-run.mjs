@@ -25,7 +25,7 @@
  */
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir, loadavg } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -216,7 +216,7 @@ function takeLock() {
 function profileInUse() {
   const profile = join(LIBRARY, 'Application Support', IDENTIFIER);
   if (!existsSync(profile)) return false;
-  const probe = spawnSync('lsof', ['-t', '+D', profile], { encoding: 'utf8' });
+  const probe = spawnSync('lsof', ['-t', '+D', profile], { encoding: 'utf8', timeout: 30_000 });
   if (probe.error) throw new Error(`could not check the benchmark profile: ${probe.error.message}`);
   return probe.stdout.trim() !== '';
 }
@@ -271,7 +271,16 @@ async function main() {
   // Never over an existing file: a recording is evidence, and a baseline is
   // replaced by copying a recording over it on purpose, not by a reused --out.
   const out = resolve(ROOT, opts.out);
-  if (existsSync(out)) throw new Error(`${opts.out} exists; record to a new file`);
+  // lstat, so a dangling symlink there counts as taken too.
+  const taken = (() => {
+    try {
+      lstatSync(out);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (taken) throw new Error(`${opts.out} exists; record to a new file`);
 
   const fixture = readFileSync(join(ROOT, FIXTURE));
   const report = {
@@ -294,7 +303,13 @@ async function main() {
   };
 
   for (let pair = 1; pair <= opts.pairs; pair++) {
-    if (profileInUse()) throw new Error('something has the benchmark profile open; quit it and run again');
+    // Stop, but keep the pairs already recorded: they are still evidence.
+    if (profileInUse()) {
+      report.stoppedEarly = `pair ${pair}: something had the benchmark profile open`;
+      process.stderr.write(`${report.stoppedEarly}; saving ${pair - 1} pair(s)\n`);
+      process.exitCode = 1;
+      break;
+    }
     clearProfile();
     // The machine's 1-minute load either side of the pair. Everything here is
     // wall-clock, and this Mac is shared: a recording made while something
@@ -326,8 +341,16 @@ async function main() {
   mkdirSync(dirname(out), { recursive: true });
   // `wx` as well as the check above: nothing may have appeared there since,
   // and a symlink at the path is refused rather than followed.
-  writeFileSync(out, serialiseReport(report), { flag: 'wx' });
-  process.stdout.write(`\n${opts.out}\n`);
+  let saved = out;
+  try {
+    writeFileSync(out, serialiseReport(report), { flag: 'wx' });
+  } catch {
+    // Something appeared at --out during the run. A 14-minute recording is
+    // not thrown away for that: it goes beside it under a fresh name.
+    saved = `${out}.${Date.now()}.json`;
+    writeFileSync(saved, serialiseReport(report), { flag: 'wx' });
+  }
+  process.stdout.write(`\n${saved}\n`);
   for (const [name, values] of Object.entries(seriesOf(report))) {
     const s = summarise(values);
     process.stdout.write(`${name.padEnd(34)} n=${s.n} p50=${s.p50} p95=${s.p95} max=${s.max}\n`);
