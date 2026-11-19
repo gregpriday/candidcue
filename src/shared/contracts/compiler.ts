@@ -223,7 +223,6 @@ export interface ScriptStatistics {
   blockCount: number;
 }
 
-/** JSON-serializable candidate-generation indexes (spec §25.6). */
 /** Compile settings honoured by the pure compiler (spec §22.2, §21.8, §33). */
 export interface CompileOptions {
   scriptId: string;
@@ -262,7 +261,7 @@ export interface CompiledScript {
    * Ranges are inclusive, non-overlapping, and in ascending token order.
    */
   /**
-   * The script's presentable segments, in document order (§parts).
+   * The script's presentable segments, in document order.
    *
    * Empty when the script has no natural division — one part and "the whole
    * script" are the same offer, and a launch menu that made it twice would be

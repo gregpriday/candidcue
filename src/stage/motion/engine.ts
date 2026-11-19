@@ -1097,7 +1097,7 @@ export function createStageMotionEngine(
    * than stacked when a second retake arrives during the first.
    */
   let guidedRewind: GuidedRewindEpisode | null = null;
-  /* Guided rewind counters — diagnostics only, never a feedback loop (§9). */
+  /* Guided rewind counters — diagnostics only, never a feedback loop. */
   let guidedRewindStarts = 0;
   let guidedRewindCompletes = 0;
   let guidedRewindCancels = 0;

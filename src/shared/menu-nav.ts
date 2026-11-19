@@ -80,7 +80,7 @@ export function nextMenuIndex(
 }
 
 /**
- * First-letter navigation (§18.3 "typeahead"): the index of the next enabled
+ * First-letter navigation (typeahead): the index of the next enabled
  * item whose label starts with the typed character, or null when the key is
  * not a letter for this menu.
  *

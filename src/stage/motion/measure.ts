@@ -241,7 +241,7 @@ export interface FingerprintInput {
    *
    * `stageMode === 'diagnostic'` used to be the only way to reach the rehearsal
    * projection, so this was derived from the settings alone. A practice
-   * (§practice) reaches it from a per-take flag that no settings field records,
+   * reaches it from a per-take flag that no settings field records,
    * and a fingerprint that cannot see it would call a table and the words REFER
    * TO TABLE the same layout — the exact omission `IDENTIFIES_LAYOUT` exists to
    * prevent. The caller that renders the document is the one that knows, so it

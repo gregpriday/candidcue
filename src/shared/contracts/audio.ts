@@ -1,15 +1,17 @@
 /**
- * Audio contracts (spec Appendix C.3) — device metadata, level snapshots, and
- * the state the Preflight/Live screens show for the transcription connection.
+ * Audio contracts — device metadata, level snapshots, and the state of the
+ * transcription session the control window shows.
  *
- * The WebRTC transport types that used to live here are gone with the provider
- * that needed them: `CommitReason`, `DisconnectReason`, `TransportDiagnostics`,
- * `CommitMeta`, `EphemeralCredential` and `RealtimeTranscriptionTransport` all
- * described a client that decided its own turn boundaries and minted its own
- * short-lived credentials. The recogniser endpoints itself and is held
- * in Rust, so none of that has a caller — and a transport abstraction with no
+ * There is no transport type here, on purpose. The recogniser runs on-device,
+ * endpoints itself and is held in Rust; audio reaches it over IPC. A client-side
+ * transport abstraction would have no implementation, and one with no
  * implementation is exactly the kind of thing that gets reimplemented against
  * by mistake.
+ *
+ * `RealtimeState` still names `minting_credential` and `negotiating`, states of
+ * a hosted connection the app no longer makes. Nothing mints a credential: the
+ * live path reports `minting_credential` as its "starting" state while it opens
+ * the microphone and the recogniser.
  */
 export type Unsubscribe = () => void;
 

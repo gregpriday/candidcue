@@ -243,7 +243,7 @@
      */
     cueHollow?: boolean;
     /**
-     * This reading is a rehearsal, so show the whole document (§practice).
+     * This reading is a rehearsal, so show the whole document.
      *
      * The performance projection replaces a table, an image, a diagram and a
      * code fence with four words apiece, which is right in front of a camera

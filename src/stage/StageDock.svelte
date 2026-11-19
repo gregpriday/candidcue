@@ -2,36 +2,29 @@
   The session dock — one quiet control location, bottom left.
 
   ---------------------------------------------------------------------------
-  THE DESKTOP REFINEMENT'S §13.2 CODE REVIEW: NOTHING CHANGED HERE, ON PURPOSE
-
-  Read "review", not "audit". What happened was a reading of this file against
-  §13.2's checklist; what §13.2 actually asks for is verification on a real
-  panel at a real viewing distance, and that has not happened. The verdicts
-  below are therefore reasoned, not measured.
+  THE DESKTOP-STRUCTURE PASS STOPPED HERE, ON PURPOSE
   ---------------------------------------------------------------------------
   The desktop-structure pass reduced radii, control heights and shadow use
-  across the whole control window. It stopped at this file, and the reason is
-  written into the review itself: §29.6 says to change stage appearance only
-  where real-device testing demonstrates a problem, and §31.5 lists weakening
-  the stage architecture among the changes that would make the product worse.
+  across the whole control window. It stopped at this file: stage appearance
+  changes only where real-device testing shows a problem, and none of these
+  has been verified on a real panel at a real viewing distance. The verdicts
+  below are therefore reasoned, not measured.
 
-  What the review found, and why each item stands:
+    40px buttons        They have to stay usable viewed directly at the rig,
+                        and they are sized for exactly that — see the note
+                        below on the 48px pointer target claimed by a
+                        pseudo-element. Shrinking them to the workspace's 32px
+                        would apply a desk density rule to the one surface it
+                        does not govern.
 
-    40px buttons        §13.2 asks whether they remain usable viewed directly
-                        at the rig. They are sized for exactly that — see the
-                        note below on the 48px pointer target claimed by a
-                        pseudo-element — and shrinking them to match the
-                        workspace's new 32px would be applying a density rule
-                        to the one surface §31.3 exempts from it.
-
-    12px radius         §13.2 offers a flatter dock "if the current control
+    12px radius         A flatter dock was offered "if the current control
                         group looks too pill-like". At 12px on a 40px square
                         this is a squircle rather than a capsule, and deciding
                         it looks wrong needs eyes on a real panel at a real
                         viewing distance. Nobody has had those since the
                         question was asked.
 
-    the chrome shadow   §9.3 keeps shadows for genuinely floating things. This
+    the chrome shadow   Shadows are kept for genuinely floating things. This
                         dock floats over moving text on glass, which is the
                         clearest case for one in the product.
 
@@ -192,7 +185,7 @@
     /** The follow control was activated. The host owns the decision (§16.9). */
     onfollowtoggle?: () => void;
     /**
-     * §practice. This reading is a rehearsal, so say so on the way out.
+     * A practice: this reading is a rehearsal, so say so on the way out.
      *
      * The only thing it changes here is the WORDS on the exit control and its
      * confirmation, and that is not decoration: "End take?" over a rehearsal

@@ -74,8 +74,8 @@ export interface MotionLimits {
    * in the same scroll-pixel space as `targetPx`.
    *
    * `Number.POSITIVE_INFINITY` means "no ceiling", which is the value for every
-   * state except catch-up. It is deliberately NOT one of the fields the §C1
-   * finite fuse checks: infinity is the legitimate resting value here, and every
+   * state except catch-up. It is deliberately NOT one of the fields the
+   * controller's finite-value fuse checks: infinity is the legitimate resting value here, and every
    * use site tests `Number.isFinite` before doing arithmetic with it.
    */
   forwardPositionCeilingPx: number;

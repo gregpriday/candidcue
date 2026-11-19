@@ -1,5 +1,5 @@
 /**
- * The application command vocabulary (desktop refinement §6.1).
+ * The application command vocabulary.
  *
  * ---------------------------------------------------------------------------
  * ONE ID PER ACTION, AND EVERY SURFACE DERIVES FROM IT
@@ -92,8 +92,7 @@ export const COMMAND_IDS = [
   'edit.replace',
 
   // ---- Insert ----
-  // §11.4: "Add a clearly discoverable Insert menu in the native menu bar."
-  // These are the same commands the editor's formatting row runs, so the two
+  // A discoverable Insert menu in the native menu bar. These are the same commands the editor's formatting row runs, so the two
   // surfaces cannot come to mean different things — and the menu is what gives
   // them names and keys a user can find without hovering every button.
   'insert.heading',
@@ -140,14 +139,14 @@ export const COMMAND_IDS = [
   // ---- Window ----
   'window.main',
   /**
-   * The Settings window (§20.4).
+   * The Settings window.
    *
    * Always LISTED, and always enabled, because choosing it opens the window
    * when there is none — the menu entry and ⌘, are the same action.
    */
   'window.settings',
   /**
-   * The Stage window, ENABLED while one exists (§13.4).
+   * The Stage window, ENABLED while one exists.
    *
    * Listed always — a menu whose items appear and disappear is harder to learn
    * than one whose items grey out — and enabled only when there is a window to
@@ -169,13 +168,12 @@ export const COMMAND_IDS = [
   /*
    * NO `window.reopen-stage`.
    *
-   * §13.4 also asks for Reopen Stage, and that is a genuine gap rather than a
-   * moot one. Recovering a lost stage today means ending the take and
-   * presenting again, which is what `Live.svelte` tells the operator to do. A
-   * real reopen has to re-enter the presentation state machine mid-take
-   * (`windows/present.rs`), and §29.6 is explicit that it should not be
-   * disturbed casually. It wants its own change, with its own tests — and an
-   * enabled menu item that did nothing would be worse than its absence.
+   * A Reopen Stage item is a genuine gap rather than a moot one. Recovering a
+   * lost stage today means ending the take and presenting again, which is what
+   * `Live.svelte` tells the operator to do. A real reopen has to re-enter the
+   * presentation state machine mid-take (`windows/present.rs`), which should
+   * not be disturbed casually. It wants its own change, with its own tests —
+   * and an enabled menu item that did nothing would be worse than its absence.
    */
 
   // ---- Help ----

@@ -149,7 +149,7 @@
      */
     autoScroll?: StageAutoScrollPayload | null;
     /**
-     * §practice. This reading is a rehearsal.
+     * A practice: this reading is a rehearsal.
      *
      * Only ever true on the embedded path, and that is a property of the
      * feature rather than an omission: a practice happens IN the control
@@ -312,8 +312,8 @@
    *
    * `bind:clientWidth/clientHeight` is a ResizeObserver, and an observation is
    * delivered during the rendering update — which a window that has never been
-   * shown may never run. The stage is created hidden and only goes full screen
-   * AFTER the handshake completes (§29.2 step 3), so for the whole of that
+   * shown may never run. The stage window is created hidden and shown only
+   * AFTER the handshake completes (primary §43.3), so for the whole of that
    * handshake these were the numbers of an unrendered window: zero. Everything
    * downstream is guarded on a nonzero viewport, so the measurement pass bailed
    * and `layout-ready` was never sent.
@@ -953,7 +953,7 @@
   /**
    * Reported on every heartbeat ack and read by the coordinator (§40.5).
    *
-   * It has had no producer since the Listener was removed (§106): the layer
+   * It has had no producer since the Listener was removed: the layer
    * that decoded video was the only thing on the stage that could report a
    * media failure, so this is constant `true` today. The channel is kept
    * because the health field is part of the `StageStatus` contract rather than

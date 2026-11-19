@@ -218,7 +218,7 @@ function jerkLimitedAccel(velocityHeadroom: number, jerkMax: number, dt: number)
 /**
  * Which `MotionLimits` fields must be finite before the plant may be
  * integrated. Typed `Record<keyof MotionLimits, …>` so a new limit fails
- * compilation until it is classified (§C1: the stage does not trust control).
+ * compilation until it is classified: the stage does not trust control.
  */
 const LIMIT_IS_NUMERIC: Record<keyof MotionLimits, boolean> = {
   omega: true,
@@ -288,7 +288,7 @@ export interface ControllerStepResult extends MotionPlantState {
   jerkPxS3: number;
   /**
    * The finite-value fuse rejected this step's inputs: the plant was NOT
-   * integrated and NOT mutated, and the previous position is being held (§C1).
+   * integrated and NOT mutated, and the previous position is being held.
    */
   fused: boolean;
   /**
@@ -384,7 +384,7 @@ export function createJerkLimitedScrollController(
       const rawDt = Number.isFinite(input.dtMs) ? Math.max(0, input.dtMs) : 0;
       const hitch = rawDt > maxFrameDtMs;
 
-      // §C1 fuse. A non-finite target, feed-forward, or limit would propagate
+      // Finite-value fuse. A non-finite target, feed-forward, or limit would propagate
       // into `q`, `v`, and `a` — and because the plant is persistent, every
       // later frame would stay poisoned. Hold the current position instead, and
       // do not touch plant state at all so the next sound frame resumes from a
