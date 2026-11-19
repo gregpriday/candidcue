@@ -46,20 +46,24 @@ function titleWrites(page: Page): Promise<number> {
   );
 }
 
-/** Quit the way Rust asks, and wait for the frontend's acknowledgement. */
-async function quit(page: Page): Promise<void> {
+/**
+ * Quit the way Rust asks, wait for the frontend's acknowledgement, and return
+ * the steps it reports as completed.
+ */
+async function quit(page: Page): Promise<string[]> {
   await deliver(page, 'app://shutdown-requested', null);
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.__E2E__.calls.some(
-          (call) =>
-            call.command === 'plugin:event|emit' &&
-            call.args?.['event'] === 'app://shutdown-complete',
-        ),
-      ),
-    )
-    .toBe(true);
+  const ack = () =>
+    page.evaluate(() => {
+      const call = window.__E2E__.calls.find((c) => {
+        const args = c.args as { event?: unknown } | null;
+        return c.command === 'plugin:event|emit' && args?.event === 'app://shutdown-complete';
+      });
+      if (!call) return null;
+      const args = call.args as { payload?: { completed?: string[] } };
+      return args.payload?.completed ?? [];
+    });
+  await expect.poll(ack).not.toBeNull();
+  return (await ack()) ?? [];
 }
 
 /** The title as persisted, read back through the backend. */
@@ -109,9 +113,11 @@ test('quitting with the caret in the title persists the new title', async ({ pag
   const errors = watchPageErrors(page);
   await typeTitle(page, 'Renamed rehearsal');
 
-  await quit(page);
+  const completed = await quit(page);
 
+  expect(completed).toContain('flush-editor');
   expect(await persistedTitle(page)).toBe('Renamed rehearsal');
+  await expect(titleField(page)).toBeFocused();
   errors.expectClean();
 });
 

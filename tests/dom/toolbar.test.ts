@@ -204,6 +204,58 @@ describe('Toolbar — abandoning an edit', () => {
   });
 });
 
+/*
+ * #449: File › Save and a quit move no focus, so neither fires the blur that
+ * commits the draft. They READ it instead, through `pendingTitle()` — which
+ * must answer exactly what leaving the field would have committed, and leave
+ * the field as the user has it.
+ */
+describe('Toolbar — the pending title a Save or quit reads', () => {
+  function typeInto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+  }
+
+  it('is the trimmed draft while the caret is still in the field, and reports nothing', () => {
+    const ontitlechange = vi.fn();
+    const { container, component } = renderHeader({ editableTitle: true, ontitlechange });
+    const input = titleInput(container);
+    input.focus();
+    typeInto(input, '  Keynote  ');
+
+    expect(component.pendingTitle()).toBe('Keynote');
+    expect(ontitlechange, 'reading is not committing').not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('  Keynote  ');
+  });
+
+  it('is nothing for an untouched, unchanged or emptied field', () => {
+    const { container, component } = renderHeader({ editableTitle: true });
+    const input = titleInput(container);
+    expect(component.pendingTitle()).toBeNull();
+    typeInto(input, ' Panel talk ');
+    expect(component.pendingTitle(), 'the same name is not a rename').toBeNull();
+    typeInto(input, '   ');
+    expect(component.pendingTitle(), 'an empty name is not a name').toBeNull();
+  });
+
+  it('is nothing once Escape has abandoned the edit', async () => {
+    const { container, component } = renderHeader({ editableTitle: true });
+    const input = titleInput(container);
+    input.focus();
+    typeInto(input, 'Half-typed nonsen');
+    press(input, 'Escape');
+    await tick();
+    expect(component.pendingTitle()).toBeNull();
+  });
+
+  it('is nothing for a title that is not editable', () => {
+    const { component } = renderHeader();
+    expect(component.pendingTitle()).toBeNull();
+  });
+});
+
 describe('Toolbar — focus treatment', () => {
   it('the back control is a small control, so it keeps the accent ring', () => {
     const { container } = renderHeader({ onback: () => {} });

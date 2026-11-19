@@ -121,11 +121,18 @@ import type { PresentationMode } from '../services/settings-types';
   let titleInput: HTMLInputElement | null = $state(null);
   /**
    * The toolbar, so an explicit Save or a quit can include a title still being
-   * typed (#449). Registered for this route's lifetime; while the script is
-   * opening there is no toolbar and so nothing to read.
+   * typed (#449). Registered per script: this route is not remounted when
+   * another script opens in it, and a draft read while the store already holds
+   * a different document must not rename that one. While the script is opening
+   * there is no toolbar and so nothing to read.
    */
   let toolbar: Toolbar | null = $state(null);
-  $effect(() => registerTitleDraft(() => toolbar?.pendingTitle() ?? null));
+  $effect(() => {
+    const id = scriptId;
+    return registerTitleDraft(() =>
+      $editor.scriptId === id ? (toolbar?.pendingTitle() ?? null) : null,
+    );
+  });
   /**
    * The layout, from the workspace store rather than from local state.
    *
