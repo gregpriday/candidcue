@@ -930,8 +930,10 @@ import type { PresentationMode } from '../services/settings-types';
 
   /**
    * Present reshapes this window into the prompter or a reading window. There
-   * is no screen in between — a take is configured in Settings, and it reports
-   * its own microphone and display from the stage (lib/start-take.ts).
+   * is no settings screen in between — a take is configured in Settings. The
+   * readiness check (lib/check-then-start.ts) only stops a script that cannot
+   * be followed, and the take reports its own microphone and display from the
+   * stage (lib/start-take.ts).
    *
    * `mode` is absent for the main button, which presents in whatever the saved
    * default is, and set when the choice came from the split menu — which also
@@ -1757,6 +1759,10 @@ import type { PresentationMode } from '../services/settings-types';
   /**
    * Preview click returns to Edit mode at the block's source.
    *
+   * The editor has to be shown and measured before the caret moves: running
+   * `goToOffset` while Preview still had the editor unmounted once made the
+   * click land nowhere.
+   *
    * The caret goes to the WORD that was clicked,
    * when the click was on a spoken one: the compiler knows where every spoken
    * token sits in the source, and a long paragraph is one long source line, so
@@ -2432,8 +2438,9 @@ import type { PresentationMode } from '../services/settings-types';
 
           A prompter take opens on the panel pinned in Settings › Prompter
           display and rigs, or on the monitor THIS window is on when nothing
-          pinned is connected; a reading window opens in place or back at the
-          frame it was last left at. None of that is visible from the editor, so
+          pinned is connected; a reading window opens in place or at the frame
+          it was last left at, fitted or moved onto a panel when that frame is
+          off-screen. None of that is visible from the editor, so
           the line says where the take is going before anybody presses Present.
 
           IN A ROW, NOT A STACK. It was a two-line column, and a column inside a

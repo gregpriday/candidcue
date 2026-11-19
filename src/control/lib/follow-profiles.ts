@@ -144,8 +144,8 @@ export function motionProfileFamily(id: string): MotionProfileFamily {
  *   balanced    1.60      1440      4160      12000          499 px
  *   responsive  1.84      1656      5502      13800          579 px
  *
- * (stop ≈ v²/2a + v·a/2j — the same estimate the default profile quotes as
- * ~565 px for balanced. The v²/2a half is identical at every feel, because the
+ * (stop ≈ v²/2a + v·a/2j. The ~565 px full-authority stop quoted in
+ * `shared/contracts/smooth-follow.ts` comes from a different estimate. The v²/2a half is identical at every feel, because the
  * feel scales the multiplier and the acceleration by the same ratio; the jerk
  * half is not, because acceleration is scaled twice over — once by the feel
  * and once by the boost — while jerk is scaled once.)

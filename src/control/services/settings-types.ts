@@ -179,7 +179,7 @@ export interface AppSettings {
    * On-device speech-to-text. There is no API key and no credential store —
    * the model is installed from Settings › Speech. What the UI holds is which
    * recogniser this installation is CONFIGURED with and the language it is
-   * told to expect, which a diagnostics bundle reports. Nothing stamps the
+   * told to expect. Nothing stamps the
    * model onto a session, so this cannot say what heard an older take.
    */
   speech: {
@@ -223,8 +223,8 @@ export interface AppSettings {
      * device id — a grant on this Mac says nothing about another one.
      *
      * It exists because `navigator.permissions.query({ name: 'microphone' })`
-     * is not implemented in WKWebView, which is the only webview this app
-     * ships in. `queryMicrophonePermission` therefore returns 'unsupported'
+     * is not implemented in WKWebView, the macOS webview. There
+     * `queryMicrophonePermission` returns 'unsupported'
      * every time, the "notice a permission that is already granted" path never
      * fires, and the user was asked to click Allow before every single take —
      * the exact re-prompt that path was written to prevent, on the one platform
@@ -365,8 +365,11 @@ export interface AppSettings {
    */
   following: FollowingSettings;
   /*
-   * No `privacy` section. None of its fields was ever read (#180), and takes no
-   * longer store transcripts (#214), so it went (#215). A `privacy` section
+   * No `privacy` section, and no transcript retention setting. Takes no longer
+   * store transcripts (#214). Older builds did, under a chosen retention
+   * period that Rust swept; the transcript table was dropped outright
+   * (migration 0003) rather than the sweep removed with the rows kept, which
+   * would have turned a one-day retention into forever. A `privacy` section
    * still sitting in the localStorage overlay is ignored.
    *
    * If a privacy setting genuinely ships, it comes back Rust-owned, and must

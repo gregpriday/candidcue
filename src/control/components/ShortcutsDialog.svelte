@@ -146,8 +146,9 @@
       actions: ['prev-chapter', 'next-chapter'],
       mirrors: ['session.previous-chapter', 'session.next-chapter'],
     },
-    // One verb. This key raises "End the session?" — the help calling the
-    // same action "Stop session" would be a vocabulary split.
+    // One verb. This key ends the take (asking first when confirmation is
+    // on) — the help calling the same action "Stop session" would be a
+    // vocabulary split.
     {
       label: 'End Take',
       keys: one('Mod+.'),

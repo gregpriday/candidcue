@@ -12,9 +12,10 @@
  * So each step reports itself, with elapsed milliseconds, to a Rust command
  * that prints through `tracing` and appends to `logs/client-trace.log`. The
  * trace names the step, the state and the timing, and nothing else: no
- * transcript text. Lines are composed from fixed step names and small scalars
- * rather than from anything the recogniser or the user supplied, so there is
- * no path by which spoken words reach one.
+ * transcript text. Lines are composed from fixed step names, small scalars
+ * and error messages, and no caller passes recognised words. An error message
+ * is free text, though, so keep recogniser output out of the errors this
+ * reports.
  *
  * On by default in a dev build; see {@link initConnectTrace}.
  */

@@ -33,9 +33,10 @@ export interface TrackingDriverOptions {
   /** Full compile result; required for the real engine-backed driver. */
   compiled?: CompiledScript | null;
   /**
-   * The transcription generation this alignment belongs to. Rust rejects any
-   * transcript frame whose generation differs, which is what keeps the tail of
-   * a stopped take out of the next one.
+   * The take's session generation. Rust echoes it onto every snapshot, and
+   * the driver drops a snapshot that carries another, which keeps the tail of
+   * a stopped take out of the next one. Rust filters transcript frames on its
+   * own recogniser stream generation, not on this.
    */
   sessionGeneration?: number;
   onSnapshot(snapshot: AlignmentSnapshot): void;

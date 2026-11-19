@@ -75,7 +75,7 @@ export interface TakeOutcomeInput {
    * which is judged on `durationSeconds` as before.
    */
   listenedSeconds?: number;
-  /** Times the speech recognition session dropped and came back. */
+  /** Times the speech recognition session dropped and started reconnecting. */
   reconnects: number;
   /** Times the operator moved the script by hand. */
   manualJumps: number;

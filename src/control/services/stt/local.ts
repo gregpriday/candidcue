@@ -8,8 +8,9 @@
  *
  * Frames are not translated here. The alignment engine lives in Rust and
  * consumes them directly beside the audio clock they are timed against. What
- * crosses into JavaScript is the wire shape, for the transcript bar and the
- * retained record.
+ * crosses into JavaScript is the wire shape, for the transcript tail Live
+ * shows. Recognised words are held in memory only; a take's record keeps
+ * counts and position, never text.
  *
  * A start carries no options: Rust reads the selected model itself, so a take
  * and the Settings transcription test cannot be configured differently. There
@@ -61,7 +62,7 @@ export const STT_EVENT = 'stt://event';
  */
 export const STT_SAMPLE_RATE_HZ = 24_000;
 
-/** How much audio each `stt_audio` call carries. */
+/** How much audio each push to Rust carries. */
 export const STT_FRAME_MS = 100;
 
 /** What Settings shows about the speech engine. Mirrors `SpeechEngineStatus`. */

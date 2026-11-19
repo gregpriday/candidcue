@@ -10,10 +10,10 @@
  *
  * What the sentence ceiling does not change is RECOVERY: the
  * approximate-bridge gate is still bounded by the paragraph on purpose
- * (`can_bridge_local_approx` in `tracker.rs`), because failing that gate does
- * not merely dim less — it drops the engine into `Holding`. Inside a
- * three-hundred-word block that bound sits three hundred words away, so a
- * skipped line or a restarted sentence still has a very long runway before the
+ * (`can_bridge_local_approx` in `tracker.rs`), and failing that gate does
+ * not merely dim less — repeated weak evidence drops the engine into
+ * `Holding`. The paragraph is the gate's outer bound, so inside a
+ * three-hundred-word block a skipped line or a restarted sentence still has a very long runway before the
  * script's own structure catches it. That is what the long-paragraph finding is
  * about, and it is why this lives in the editor and not in the engine.
  *

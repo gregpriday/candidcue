@@ -598,9 +598,10 @@ export class VoiceSessionPipeline {
   /**
    * Stop sending audio without closing the session.
    *
-   * The recogniser session stays open so resuming is instant, but the frames stop, which is
-   * both the CPU saving and — because the recogniser endpoints on silence — the thing
-   * that finalizes whatever sentence was in progress.
+   * The recogniser session stays open so resuming is instant, but the frames
+   * stop, which is the CPU saving. Withholding frames does not finalize a
+   * sentence in progress: the recogniser endpoints only on audio it is given,
+   * and only a stop flushes it.
    */
   softPause(): void {
     if (this.paused) return;

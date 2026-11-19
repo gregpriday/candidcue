@@ -130,8 +130,9 @@
      */
     readerTheme?: ReaderTheme;
     /**
-     * A saved rig decided this take's appearance, so none of it is the
-     * panel's to set. It reports and points at the wizard instead.
+     * A rig profile (a saved rig, or the automatic one) decided this take's
+     * appearance, so the panel reports it rather than setting it, and points
+     * at the wizard.
      */
     rigResolved: boolean;
     /**

@@ -532,8 +532,10 @@ export interface TakePartRequest {
  * Open a take for a script and route to Live. Resolves true when the take is
  * running.
  *
- * Every failure path leaves nothing behind: no window left presenting, no
- * unfinished session row, no microphone held by a session that does not exist.
+ * Every failure path tries to leave nothing behind: no window left
+ * presenting, no unfinished session row, no microphone held by a session that
+ * does not exist. Restoring the window and closing the row are best-effort —
+ * a failure there is logged and the cover still drops.
  */
 export async function startTake(
   scriptId: string,

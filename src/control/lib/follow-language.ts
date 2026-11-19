@@ -142,8 +142,9 @@ export interface FollowStatusInput {
   voiceInput: boolean;
   micState: 'live' | 'muted' | 'disconnected';
   /**
-   * The INPUT failed — unplugged, silent or refused — as opposed to the
-   * recogniser failing, which also leaves `micState` disconnected.
+   * The INPUT failed — unplugged or silent — as opposed to the recogniser
+   * failing, which also leaves `micState` disconnected. A permission refusal
+   * is reported separately and leaves this false.
    *
    * Only this one is fixable by choosing another device, so only this one may
    * say so. Offering a microphone picker as the cure for a recogniser failure

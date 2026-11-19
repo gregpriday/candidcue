@@ -297,13 +297,14 @@ export function createRealVoiceFacade(): VoiceFacade {
         });
 
         /*
-         * The SAME call a take makes.
+         * The SAME recogniser start a take makes.
          *
-         * There is nothing to configure here — Rust reads the selected model
-         * itself and the call carries no options — so the test and the take
-         * are identical by construction. That is what this had to guarantee:
-         * a microphone test that exercises a configuration the take will not use
-         * cannot answer the only question it is asked.
+         * Rust reads the selected model itself and the call carries no
+         * options, so the test hears with exactly the model the take will
+         * use: a test of a recogniser the take will not use cannot answer the
+         * only question it is asked. Capture is not identical — this opens the
+         * device with default processing, where a take applies the saved
+         * echo-cancellation, noise and gain settings.
          */
         generation = await startTranscription();
         const opened = generation;

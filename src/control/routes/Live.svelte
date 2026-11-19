@@ -139,13 +139,16 @@ import { onShortcut } from '../lib/shortcuts';
   /* ------------------------------------------------- input recovery */
 
   /**
-   * A microphone that dies mid-take is recoverable: the voice pipeline reopens
-   * PCM capture on the chosen device while the recogniser session stays up, so
-   * the take keeps its position and its transcript.
+   * A microphone that dies mid-take is recoverable: with the recogniser still
+   * running, the voice pipeline reopens PCM capture on the chosen device and
+   * the take keeps its position; after a failed start, choosing a device
+   * resumes the pipeline instead. A busy device can fall back to the system
+   * default.
    *
-   * The picker only appears when the INPUT is what failed (`inputDeviceLost`,
-   * not the broader `micState === 'disconnected'`, which a refused speech model
-   * also produces) and there is a pipeline to switch on. Offering a microphone
+   * The picker only appears when the INPUT is what failed or a fallback input
+   * is in use (`inputDeviceLost` or `usingFallbackInput`, not the broader
+   * `micState === 'disconnected'`, which a refused speech model also
+   * produces) and there is a pipeline to switch on. Offering a microphone
    * swap as the cure for a missing speech model, or in a manual take with no
    * pipeline at all, would promise something the UI cannot deliver.
    */
@@ -154,7 +157,7 @@ import { onShortcut } from '../lib/shortcuts';
   let micSwitching = $state(false);
   /**
    * Offer a swap when there is a voice pipeline to swap on and the INPUT is
-   * what failed. Read by the take-controls drawer, never only by the console
+   * what failed, or capture is running on a fallback input. Read by the take-controls drawer, never only by the console
    * arm: that arm renders only with no take active, which made the condition
    * unsatisfiable. See the take-controls block further down.
    */
@@ -469,8 +472,9 @@ import { onShortcut } from '../lib/shortcuts';
    * `clearSession()` here once destroyed every summary one step before the
    * screen it would have appeared on was replaced, so nobody ever saw one. The
    * summary lives in an app-level host (`SessionSummary.svelte`) which
-   * outlives this route, and the only thing that clears the session is
-   * somebody dismissing it.
+   * outlives this route, and the only thing that clears a take's session is
+   * somebody dismissing it. A practice has no summary, so its session is
+   * cleared here.
    *
    * The cover still cannot be rendered under — App's `.present-cover` sits at
    * z-index 9999, deliberately above the dialog host — which is why the
@@ -1680,8 +1684,8 @@ import { onShortcut } from '../lib/shortcuts';
 -->
 {#snippet partStatus(stacked = false)}
   <!--
-    The part. Which piece of the script this take is recording, and whether the
-    presenter has read to the end of it.
+    The part. Which piece of the script this take is recording, and whether its
+    end has been reached (by reading or by auto-scroll).
 
     RENDERED IN TWO PLACES, and it had to be. Everything under
     `{#if $session.active}` is the embedded stage — during a single-window take
@@ -2215,7 +2219,7 @@ import { onShortcut } from '../lib/shortcuts';
   <footer class="transport" bind:clientHeight={transportHeightPx}>
     <div class="transport-left">
       <!--
-        Every transport control names its key in its tooltip. During a take the
+        Transport controls with a key name it in their tooltip. During a take the
         keys are the interface, so the tooltip is where somebody learns the key
         they will actually use.
 
@@ -2268,8 +2272,8 @@ import { onShortcut } from '../lib/shortcuts';
         </Button>
       {/if}
       <!--
-        End keeps its own place at the end of the left group, never moving with
-        the primary control beside it or with secondary actions.
+        End stays last in the left group, after the primary control and apart
+        from the secondary actions.
       -->
       <Button
         variant="danger"

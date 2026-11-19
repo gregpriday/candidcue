@@ -9,7 +9,8 @@
 
   THIS IS NOT A READINESS GATE. Nothing here disables a CTA, blocks Present, or
   prompts for hardware; the rows are a readout plus a link. The app deliberately
-  has no blocking readiness step, and re-growing one on the first screen would
+  has no hardware gate before a take (Present's readiness check only stops a
+  script that cannot be followed), and growing one on the first screen would
   be the same mistake in a friendlier place.
 
   Tone is load-bearing and easy to get wrong: on a genuine first launch the
@@ -23,7 +24,7 @@
   None of these states claim the rig WORKS. `microphoneGranted` records that a
   grant was once made, and enumerating a panel is not the same as having read
   from it, so the labels say the narrow thing each check actually proves
-  ("Access allowed", "Connected") rather than a green "Ready".
+  ("Previously allowed", "Connected") rather than a green "Ready".
 -->
 <script lang="ts">
   import { openSettingsWindow } from '../lib/open-settings';

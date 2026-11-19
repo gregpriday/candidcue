@@ -8,7 +8,9 @@
  * explicit adapter:
  *
  *  - fields with a Rust home are mapped bidirectionally (prompt mode,
- *    recogniser and language, presentation mode, display pin, fixed speed, …);
+ *    presentation mode, display pin, fixed speed, …). The recogniser and
+ *    language are read here but written only through
+ *    the speech-language command, which Rust guards against a running take;
  *  - UI-only presentation fields (per-display appearance, audio processing
  *    toggles, …) persist in a local overlay (localStorage) — they are
  *    frontend state, not the Rust document.

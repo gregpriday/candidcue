@@ -236,8 +236,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * The two screens this window still has.
    *
    * Settings and Calibration live in the Preferences window, which has no
-   * sidebar at all; its own Done control is the way out. Only a take hides
-   * the rail here, and it does so because a presenter is reading.
+   * sidebar at all; its own Done control is the way out. The rail shows only
+   * for Library and Editor (and the workspace setting can hide it there), so a
+   * take and Welcome have none.
    */
   const showSidebar = $derived($route.name === 'library' || $route.name === 'editor');
 
@@ -560,7 +561,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
          *
          * Live's own exits un-present, but this guard is the path for every
          * OTHER way out of a take: a shortcut, a sidebar click, anything that
-         * navigates while a session is live. Un-presenting bare leaves a reverse
+         * navigates while a session is live. Stopping the session without
+         * un-presenting left the window borderless with no titlebar, so this
+         * must restore the window too. Un-presenting bare leaves a reverse
          * transition artifact — `clearSession()` unmounts the stage, so the
          * shrinking window shows the light editor arriving in pieces.
          *

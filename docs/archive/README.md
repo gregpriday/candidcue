@@ -54,15 +54,11 @@ Some citations have no document to land on:
 - **Named anchors** such as `§parts` and `§practice` are topic tags, not
   sections.
 - **Review-item numbers** such as `§152` match no document.
-- A few comments on the retired coaching code still use the numbering of the
-  **Coaching Rail specification**, which was deleted because the feature is
-  gone.
 
 ## What was deleted rather than archived
 
 Three documents describing features that no longer exist were removed instead
-of archived. No file names them, and apart from the coaching comments above,
-no comment uses their numbering:
+of archived. No file names them, and no comment uses their numbering:
 
 - the Coaching Rail and Live Delivery Intelligence specification
 - the Realtime Speaking Score technical report

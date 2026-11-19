@@ -3,9 +3,9 @@
 
   Kept behind a disclosure so the calm default UI is untouched. The movement
   records are always available — they are the answer to the only question a
-  presenter asks about a teleprompter that moved oddly. The full timeline
-  (assist dispositions, budget breaches) appears when developer
-  diagnostics are switched on in Settings.
+  presenter asks about a teleprompter that moved oddly. The recent timeline
+  (the latest entries) appears when developer diagnostics are switched on in
+  Settings.
 
   Text is redacted: records carry ids, scores, states, and timings — never
   script or transcript content.

@@ -3,10 +3,11 @@
   chooses the model (SpeechLanguagePicker) and says whether it is installed and
   warm. There is no key to store and no provider to choose.
 
-  This screen is the ONLY place a take is configured — the display, the
-  microphone, the type. Present takes what is set here (lib/start-take.ts) and
-  asks none of it again: asking twice means one of the two answers silently
-  stops mattering.
+  This screen is where a take is configured — the display, the microphone,
+  the type. Present takes what is set here (lib/start-take.ts) and asks none
+  of it again: asking twice means one of the two answers silently stops
+  mattering. Present's menu only picks a variant of the take (its shape, the
+  camera-above-screen take, a practice).
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
@@ -850,7 +851,8 @@
          * answer "what will this rig look like on that display?". Sizing it to
          * whatever shape a reader-mode take would use would answer a different
          * question about a different window. A take never opens a stage window
-         * at all; Present reshapes the control window in place.
+         * at all; Present reshapes the control window, moving it to the take's
+         * panel when that is another one.
          */
         fullscreen: true,
       });
@@ -2046,7 +2048,7 @@
   /**
    * Adopt a grant this machine has already made.
    *
-   * THE ONLY WEBVIEW THIS APP SHIPS IN CANNOT ANSWER THE QUESTION ABOVE.
+   * THE MACOS WEBVIEW CANNOT ANSWER THE QUESTION ABOVE.
    * `navigator.permissions.query({ name: 'microphone' })` is not implemented in
    * WKWebView, so the watcher reports 'unsupported' every single launch, the
    * 'granted' branch never runs, and the screen asks a returning user to click

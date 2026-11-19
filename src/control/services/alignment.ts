@@ -115,11 +115,13 @@ export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
 }
 
 /**
- * Begin aligning `compiled` against the transcription session `generation`.
+ * Begin aligning `compiled` for the take whose session generation is
+ * `generation`.
  *
- * The generation ties the two together so a frame from a recogniser session
- * that has already been replaced can never reach a newer engine — Rust checks it on
- * every frame, and this is where the pairing is established.
+ * That generation is a label: Rust echoes it onto every snapshot, and the
+ * renderer drops snapshots that carry another one. What keeps a replaced
+ * recogniser's frames out of a newer engine is a separate stream generation
+ * Rust owns and binds when the recogniser starts.
  */
 export async function startAlignment(
   generation: number,

@@ -66,8 +66,9 @@ export interface ControlPresentationState {
    *
    * This is what a take should be calibrated against, and the reason is that
    * `mmPerCssPx` is the whole basis of the angular model. Where the window
-   * lands is decided in Rust — the pinned panel when it is connected, otherwise
-   * the monitor the window is on — so a take sized from the PIN rather than
+   * lands is decided in Rust — for a prompter take, the pinned panel when it is
+   * connected, otherwise the monitor the window is on — so a take sized from
+   * the PIN rather than
    * from this answer would, with the pin unplugged, be measured in the wrong
    * panel's millimetres: a confidently wrong physical size rather than a near
    * miss.

@@ -145,7 +145,7 @@ export interface CommandActions {
   closeScript(): void;
   closeWindow(): void;
   present(mode?: 'prompter' | 'reader'): void;
-  /** Rehearse in a window: voice following on, nothing reported. */
+  /** Rehearse in a window, in the default session mode, with no summary. */
   practise(): void;
   find(): void;
   findNext(): void;

@@ -1576,9 +1576,8 @@
       <!--
         A status LIGHT plus text, not a pill.
         This is a continuous health state — is the prompter showing? — which is
-        exactly the category drawn as a light and a word. It also
-        keeps its place and its width as the state changes, so the toolbar does
-        not shuffle while the stage is coming up.
+        exactly the category drawn as a light and a word. It keeps its place
+        in the toolbar as the state changes.
       -->
       <span
         class="stage-state"
@@ -2284,8 +2283,7 @@
   /*
    * The prompter's state: a light and a word.
    *
-   * A fixed-width dot beside text that changes, so the toolbar's geometry is
-   * the same whichever of the three states is showing — and the state is never
+   * A fixed-width dot beside text that changes, and the state is never
    * carried by colour alone, because the words say it too.
    */
   .stage-state {

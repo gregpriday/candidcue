@@ -5,9 +5,10 @@
  *
  * Motion is not computed here, but a take's motion is fed from this store:
  * `Live.svelte` embeds `StageApp` in this window and hands it this store's
- * copy of each alignment snapshot. A take summary built here can therefore
- * never disagree with what the presenter saw — both are derived from the same
- * published snapshots.
+ * copy of each alignment snapshot. The take summary is built from the same
+ * published snapshots, so it reports the run the stage was fed — though the
+ * stage may aim at the observed position while the summary records the
+ * confirmed one.
  */
 import { derived, get, writable } from 'svelte/store';
 import type {
@@ -399,10 +400,12 @@ export interface SessionState {
   connection: 'connected' | 'reconnecting' | 'offline';
   micState: 'live' | 'muted' | 'disconnected';
   /**
-   * The INPUT is the thing that failed — unplugged, silent, or refused — as
-   * opposed to the recogniser session failing, which also leaves `micState` at
-   * 'disconnected'. Only this one is fixable by choosing another device, so it
-   * is what gates the Live screen's input picker. Offering a microphone switch
+   * The INPUT is the thing that failed — unplugged or silent — as opposed to
+   * the recogniser session failing, which also leaves `micState` at
+   * 'disconnected'. A permission refusal is `microphoneRefused` instead, and
+   * leaves this false. Only a failed input is fixable by choosing another
+   * device, so this (with `usingFallbackInput`) is what gates the Live
+   * screen's input picker. Offering a microphone switch
    * as the cure for a missing speech model would be the same
    * unfollowable-instruction defect in a new place.
    */
@@ -954,7 +957,7 @@ export interface StartSessionInput {
    * thing that is right.
    */
   presentationMode?: PresentationMode;
-  /** A rehearsal: the whole document, and no report at the end. */
+  /** A rehearsal: it may be bounded to a part, and no summary at the end. */
   practice?: boolean;
   /** #238. Opened under the camera above this screen; see `cameraAboveScreen`. */
   cameraAboveScreen?: boolean;
@@ -1099,8 +1102,8 @@ export function startLiveSession(input: StartSessionInput): string {
   /*
    * Starting a take IS starting to prompt.
    *
-   * The driver pauses the aligner the instant it is built, and a paused engine
-   * discards every transcript event before it looks at a token. When only a
+   * The driver is built gated: it publishes no snapshot (manual anchors
+   * aside) until `start()` opens it. When only a
    * second, separate Start button resumed it, real takes recorded and
    * transcribed while the text stood still — "Words heard: 26" beside "0 of 26
    * words (0%)", four takes running.
@@ -1363,8 +1366,8 @@ export function startLiveSession(input: StartSessionInput): string {
         }
         // The remedy named here is one the Live screen can actually perform —
         // `switchMicrophone` below drives the pipeline's input switch, and the
-        // take controls grow an input picker while `micState` is
-        // 'disconnected'.
+        // take controls grow an input picker while the input is lost or a
+        // fallback is in use.
         /*
          * No toast: `micState: 'disconnected'` is what the take controls
          * render, and they grow the input picker that fixes it. The toast said
@@ -2476,14 +2479,10 @@ const followActions = {
    * under is still recovered, because the pass re-measures; a map the declared
    * inputs say is fine gets no stronger answer than that.
    *
-   * And the only caller cannot be reached during a take. It is
-   * `smoothFollow.requestLayoutRebuild()`, raised from the `rebuild_layout`
-   * action on the `invalid_line_map` notice, which `FollowStatePanel`
-   * renders — and that panel sits in the `{:else}` arm of
-   * `{#if $session.active}` in src/control/routes/Live.svelte, i.e. the arm
-   * that is NOT shown while a session is running. So this half of the recovery
-   * is pre-positioned for when the panel becomes reachable, not something a
-   * presenter can press mid-take today.
+   * Its caller is `smoothFollow.requestLayoutRebuild()`, raised from the
+   * `rebuild_layout` action on the `invalid_line_map` notice. `FollowStatePanel`
+   * renders that notice both in Live's console arm and in the take-controls
+   * drawer, so a presenter can reach it mid-take.
    */
   rebuildStageLayout(): void {
     state.update((s) =>

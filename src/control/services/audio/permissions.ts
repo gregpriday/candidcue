@@ -191,7 +191,7 @@ function isBusy(code: AppErrorCode): boolean {
   return code === 'MIC_DEVICE_LOST';
 }
 
-/** Stop every track and drop references. */
+/** Stop every track. The caller drops its own reference to the stream. */
 export function releaseStream(stream: MediaStreamLike | null | undefined): void {
   if (!stream) return;
   for (const track of stream.getTracks()) {
