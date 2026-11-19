@@ -5,7 +5,8 @@
  *   node scripts/perf-compare.mjs bench/perf/mac-studio-m4-max.json bench/perf/runs/<new>.json
  *
  * Exit 0: every series within its threshold. Exit 1: a series regressed at
- * its p50 or p95, or the candidate has an invalid pair. Exit 2: the two
+ * its p50 or p95, a series the baseline has is missing, or the candidate has
+ * an invalid pair. Exit 2: the two
  * cannot be compared (another Mac, scenario or fixture) or a file is
  * unreadable. It never writes either file: replacing a baseline is a
  * decision, made by copying a recording over it and committing that.
@@ -22,6 +23,7 @@ if (!basePath || !candidatePath) {
 let base;
 let candidate;
 try {
+  // Shape is checked by compareReports (exit 2); this only has to parse.
   base = JSON.parse(readFileSync(basePath, 'utf8'));
   candidate = JSON.parse(readFileSync(candidatePath, 'utf8'));
 } catch (err) {
@@ -32,9 +34,10 @@ try {
 const result = compareReports(base, candidate);
 process.stdout.write(formatComparison(result));
 if (!result.comparable) process.exit(2);
-if (result.regressions.length > 0 || result.invalidPairs.length > 0) {
+if (!result.passed) {
   process.stdout.write(
-    `\n${result.regressions.length} series regressed, ${result.invalidPairs.length} invalid pair(s)\n`,
+    `\n${result.regressions.length} series regressed, ${result.missing.length} missing, ` +
+      `${result.invalidPairs.length} invalid pair(s)\n`,
   );
   process.exit(1);
 }

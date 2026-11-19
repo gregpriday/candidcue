@@ -23,10 +23,10 @@
  * with nothing else building or testing: everything here is wall-clock, and a
  * busy machine is a slower machine.
  */
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { accessSync, constants, existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -59,11 +59,22 @@ const PROFILE_DIRS = [
 ];
 const TRACE = join(LIBRARY, 'Application Support', IDENTIFIER, 'logs', 'client-trace.log');
 
+/**
+ * One recording per user at a time. The identity, not the checkout, owns the
+ * profile: a second runner from another worktree would otherwise delete the
+ * first one's profile mid-pair, or read its trace.
+ */
+const LOCK = join(tmpdir(), `${IDENTIFIER}.perf-run.lock`);
+
+/** Any checkout's benchmark build, running: the bundle name is the same everywhere. */
+const RUNNING_PATTERN = 'Speaking Glass Perf\\.app/Contents/MacOS/';
+
 function args(argv) {
   const out = { pairs: 10, label: null, app: DEFAULT_APP, out: null };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const value = argv[i + 1];
+    if (value === undefined || value.startsWith('--')) throw new Error(`${key} needs a value`);
     if (key === '--pairs') out.pairs = Number(value);
     else if (key === '--label') out.label = value;
     else if (key === '--app') out.app = value;
@@ -81,7 +92,7 @@ function args(argv) {
 
 function sh(cmd, argv) {
   try {
-    return execFileSync(cmd, argv, { encoding: 'utf8' }).trim();
+    return execFileSync(cmd, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return null;
   }
@@ -133,13 +144,58 @@ function assets() {
   };
 }
 
+/** The bundle's executable, checked BEFORE anything is deleted. */
 function binaryOf(app) {
   const exe = sh('plutil', ['-extract', 'CFBundleExecutable', 'raw', join(app, 'Contents', 'Info.plist')]);
   const id = sh('plutil', ['-extract', 'CFBundleIdentifier', 'raw', join(app, 'Contents', 'Info.plist')]);
   if (id !== IDENTIFIER) {
     throw new Error(`${app} is ${id ?? 'not an app bundle'}, not ${IDENTIFIER}: build it with bench/perf/tauri.perf.conf.json`);
   }
-  return join(app, 'Contents', 'MacOS', exe);
+  if (!exe || exe.includes('/') || exe === '.' || exe === '..') throw new Error(`${app} names no usable executable`);
+  const binary = join(app, 'Contents', 'MacOS', exe);
+  try {
+    if (!statSync(binary).isFile()) throw new Error('not a file');
+    accessSync(binary, constants.X_OK);
+  } catch {
+    throw new Error(`${binary} is not an executable file`);
+  }
+  return binary;
+}
+
+/** Is any benchmark build running, from any checkout? A failed probe is a refusal. */
+function benchmarkRunning() {
+  const probe = spawnSync('pgrep', ['-f', RUNNING_PATTERN], { encoding: 'utf8' });
+  if (probe.status === 1) return false;
+  if (probe.status === 0) return true;
+  throw new Error(`could not check for a running benchmark app (pgrep exited ${probe.status ?? probe.signal})`);
+}
+
+function takeLock() {
+  try {
+    const fd = openSync(LOCK, 'wx');
+    writeFileSync(fd, `${process.pid}\n`);
+    closeSync(fd);
+  } catch {
+    const holder = Number(readFileSync(LOCK, 'utf8').trim());
+    let alive = false;
+    try {
+      process.kill(holder, 0);
+      alive = true;
+    } catch {
+      alive = false;
+    }
+    if (alive) throw new Error(`another recording (pid ${holder}) holds ${LOCK}`);
+    rmSync(LOCK, { force: true });
+    return takeLock();
+  }
+  const release = () => rmSync(LOCK, { force: true });
+  process.on('exit', release);
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      release();
+      process.exit(130);
+    });
+  }
 }
 
 function clearProfile() {
@@ -151,19 +207,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** One process: spawn, wait for it to exit by itself, read its records. */
 async function launch(binary) {
   rmSync(TRACE, { force: true });
+  // The benchmark's own state and nothing inherited that changes it: a
+  // models-folder override would make Welcome read models from outside the
+  // profile.
+  const env = { ...process.env, SPEAKING_GLASS_PERF_SCENARIO: '1' };
+  delete env.SPEAKING_GLASS_MODELS_DIR;
   const spawnedAt = performance.timeOrigin + performance.now();
-  const child = spawn(binary, [], {
-    env: { ...process.env, SPEAKING_GLASS_PERF_SCENARIO: '1' },
-    stdio: ['ignore', 'ignore', 'ignore'],
-  });
+  const child = spawn(binary, [], { env, stdio: ['ignore', 'ignore', 'ignore'] });
   const exit = await new Promise((resolveExit) => {
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGKILL');
-      resolveExit('timeout');
     }, LAUNCH_TIMEOUT_MS);
+    // Only once the process is really gone is its trace complete, killed or not.
     child.on('exit', (code, signal) => {
       clearTimeout(timer);
-      resolveExit(signal ?? code);
+      resolveExit(timedOut ? 'timeout' : (signal ?? code));
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolveExit(`a spawn error (${err.message})`);
     });
   });
   const records = existsSync(TRACE) ? parseTrace(readFileSync(TRACE, 'utf8')) : [];
@@ -175,7 +239,8 @@ async function main() {
   if (process.platform !== 'darwin') throw new Error('the recording is defined for a Mac (WKWebView)');
   const opts = args(process.argv.slice(2));
   const binary = binaryOf(resolve(ROOT, opts.app));
-  if (sh('pgrep', ['-f', binary]) !== null) throw new Error('the benchmark app is already running; quit it first');
+  takeLock();
+  if (benchmarkRunning()) throw new Error('a benchmark app is already running; quit it first');
 
   const fixture = readFileSync(join(ROOT, FIXTURE));
   const report = {
@@ -205,6 +270,7 @@ async function main() {
     await sleep(SETTLE_MS);
     const assembled = assemblePair({
       pair,
+      fixtureSha256: report.scenario.fixtureSha256,
       firstUse: firstUse.records,
       relaunch: relaunch.records,
       spawnedAt: { firstUse: firstUse.spawnedAt, relaunch: relaunch.spawnedAt },

@@ -258,6 +258,9 @@ const RESOLVE_AS = [
   '/index.svelte',
 ];
 
+/** Vite's import queries; see `resolvesFrom`. */
+const VITE_QUERY = /\?(?:raw|url|inline|worker|sharedworker)$/;
+
 /**
  * Does a relative specifier resolve to an actual MODULE?
  *
@@ -269,10 +272,11 @@ const RESOLVE_AS = [
  * `/index.*` suffixes below finds a real file inside it.
  */
 function resolvesFrom(fromFile, spec) {
-  // A Vite query (`?raw`, `?url`) changes how a file is loaded, not which
+  // One of Vite's own import queries changes how a file is loaded, not which
   // file: `huge.md?raw` still needs `huge.md` to be there, and it is checked
-  // exactly like any other path once the query is off.
-  const base = resolve(dirname(join(ROOT, fromFile)), spec.replace(/\?[a-z]+$/, ''));
+  // exactly like any other path once the query is off. Only those: an
+  // unknown query is left on, so it fails to resolve as it would at runtime.
+  const base = resolve(dirname(join(ROOT, fromFile)), spec.replace(VITE_QUERY, ''));
   return RESOLVE_AS.some((suffix) => {
     const candidate = base + suffix;
     try {

@@ -33,6 +33,8 @@ export interface FrameTail {
 
 export interface LaunchTimes {
   spawnToReadyMs: number | null;
+  /** Last eager script's arrival → the entry's first statement; null without Resource Timing. */
+  bundleEvaluateMs: number | null;
   spawnToNavigationMs: number | null;
   navigationToEntryMs: number | null;
   entryToMountedMs: number | null;
@@ -46,7 +48,13 @@ export interface Pair {
   launches: { cold: LaunchTimes | null; warm: LaunchTimes | null };
   opens: { ms: number | null; words: unknown }[];
   presents: { ms: number | null; outcome: unknown }[];
-  takes: { outcome: unknown; durationMs: number | null; displacementPx: number | null; deltas: number[] }[];
+  takes: {
+    outcome: unknown;
+    durationMs: number | null;
+    displacementPx: number | null;
+    longestStillMs: number | null;
+    deltas: number[];
+  }[];
   env: PerfRecord | null;
 }
 
@@ -74,9 +82,11 @@ export interface ComparisonRow {
 
 export interface Comparison {
   comparable: boolean;
+  /** Comparable, nothing regressed, nothing missing, no invalid candidate pair. */
+  passed: boolean;
   reasons: string[];
   rows: ComparisonRow[];
-  missing?: string[];
+  missing: string[];
   regressions: string[];
   invalidPairs: { pair: number; problems: string[] }[];
 }
@@ -92,6 +102,8 @@ export declare function assemblePair(input: {
   firstUse: PerfRecord[];
   relaunch: PerfRecord[];
   spawnedAt: { firstUse: number; relaunch: number };
+  /** The checkout's fixture digest, checked against the one the app reports. */
+  fixtureSha256?: string | null;
 }): Pair;
 export declare function seriesOf(report: Pick<Report, 'pairs'>): Record<string, number[]>;
 export declare function incompatibilities(base: Report, candidate: Report): string[];

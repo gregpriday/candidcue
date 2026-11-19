@@ -61,6 +61,9 @@ const WAIT_TIMEOUT_MS = 30_000;
 /** Frame intervals per record: 200 × at most 8 characters stays under 2,000. */
 const DELTAS_PER_RECORD = 200;
 
+/** Longest the rolling script may sit still before the take is a stall. */
+const STILL_LIMIT_MS = 1_000;
+
 /** Must match `FINISHED_EVENT` in `src-tauri/src/perf.rs`. */
 const FINISHED_EVENT = 'perf://finished';
 
@@ -69,6 +72,14 @@ type PerfRecord = { kind: string } & Record<string, unknown>;
 async function report(record: PerfRecord): Promise<void> {
   const line = JSON.stringify({ v: 1, ...record });
   await ipcInvoke('log_client_diagnostic', { scope: 'perf', line });
+}
+
+/**
+ * Where the scenario is, before each step that waits on something. A run
+ * that hangs leaves its last step in the trace instead of only "timeout".
+ */
+async function progress(step: string): Promise<void> {
+  await report({ kind: 'step', step });
 }
 
 class StepError extends Error {
@@ -109,6 +120,19 @@ function paintedWhen(step: string, holds: () => boolean, timeoutMs = WAIT_TIMEOU
       }
       requestAnimationFrame((painted) => {
         if (done) return;
+        // Still true in the frame that paints it, or it was a flicker and the
+        // wait goes on: a predicate that held for one callback and then let go
+        // is not something anyone saw.
+        let still = false;
+        try {
+          still = holds();
+        } catch {
+          still = false;
+        }
+        if (!still) {
+          requestAnimationFrame(poll);
+          return;
+        }
         done = true;
         clearTimeout(timer);
         resolve(painted);
@@ -123,6 +147,7 @@ function visible(el: Element | null): boolean {
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   if (rect.bottom <= 0 || rect.top >= window.innerHeight) return false;
+  if (rect.right <= 0 || rect.left >= window.innerWidth) return false;
   return getComputedStyle(el).visibility !== 'hidden';
 }
 
@@ -195,7 +220,37 @@ async function recordLaunch(phase: 'first-use' | 'relaunch'): Promise<void> {
     entryMs,
     mountedMs,
     readyMs,
+    scriptsFetchedMs: scriptsFetchedBefore(entryMs),
   });
+}
+
+/**
+ * When the last script the entry waited for had arrived, from Resource
+ * Timing: the latest `responseEnd` of a script that finished before `entry`.
+ * From there to `entry` is evaluating the control bundle, measured from a
+ * milestone that does not depend on when WebKit stamps navigation start
+ * (bench/perf/README.md). Null when the engine reports no script resources,
+ * and the series is then simply absent.
+ */
+function scriptsFetchedBefore(entryMs: number): number | null {
+  let latest: number | null = null;
+  for (const entry of performance.getEntriesByType('resource') as PerformanceResourceTiming[]) {
+    if (entry.initiatorType !== 'script' && entry.initiatorType !== 'link') continue;
+    if (!/\.js(?:$|\?)/.test(entry.name) || entry.responseEnd <= 0 || entry.responseEnd > entryMs) continue;
+    latest = latest === null ? entry.responseEnd : Math.max(latest, entry.responseEnd);
+  }
+  return latest;
+}
+
+/** Hex SHA-256 of the fixture this build embeds, so a stale bundle is caught. */
+async function fixtureDigest(): Promise<string | null> {
+  try {
+    const bytes = new TextEncoder().encode(fixtureSource);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
 }
 
 async function recordEnvironment(): Promise<void> {
@@ -211,6 +266,7 @@ async function recordEnvironment(): Promise<void> {
     presentationMode: s.stage.presentationMode,
     sessionMode: s.general.defaultSessionMode,
     wordsPerMinute: s.teleprompter.fixedSpeedWpm,
+    fixtureSha256: await fixtureDigest(),
   });
 }
 
@@ -255,11 +311,23 @@ async function presentAndRoll(ordinal: number, id: string): Promise<void> {
   const startedAt = performance.now();
   button.click();
   const readableAt = await paintedWhen(`present ${ordinal}`, firstLineReadable);
-  await report({ kind: 'present', ordinal, ms: readableAt - startedAt, outcome: 'readable' });
+  // A stage that could not measure its script reveals it anyway, unplaced.
+  // That is a reading of a different thing, so it is recorded as such and
+  // the pair is not valid.
+  const degraded = document.querySelector<HTMLElement>('.script-layer')?.dataset.degraded === 'true';
+  await report({
+    kind: 'present',
+    ordinal,
+    ms: readableAt - startedAt,
+    outcome: degraded ? 'degraded' : 'readable',
+  });
 
+  await progress(`take ${ordinal}: roll`);
   toggleAutoScroll();
   await paintedWhen(`take ${ordinal}: rolling`, () => get(autoScrollLive).running);
+  await progress(`take ${ordinal}: sample`);
   const take = await sampleFrames(TAKE_MS);
+  await progress(`take ${ordinal}: sampled ${take.outcome}`);
   toggleAutoScroll();
   for (let part = 0; part * DELTAS_PER_RECORD < take.deltas.length || part === 0; part++) {
     await report({
@@ -277,8 +345,10 @@ async function presentAndRoll(ordinal: number, id: string): Promise<void> {
     durationMs: take.durationMs,
     frameCount: take.deltas.length,
     displacementPx: take.displacementPx,
+    longestStillMs: take.longestStillMs,
   });
 
+  await progress(`end ${ordinal}`);
   if (!emitShortcut('stop-session')) throw new StepError(`end ${ordinal}`, 'stop-session was not taken');
   await paintedWhen(`end ${ordinal}: summary`, () => doneButton() !== null);
   doneButton()?.click();
@@ -314,16 +384,31 @@ function doneButton(): HTMLButtonElement | null {
  */
 function sampleFrames(
   durationMs: number,
-): Promise<{ deltas: number[]; durationMs: number; displacementPx: number; outcome: string }> {
+): Promise<{
+  deltas: number[];
+  durationMs: number;
+  displacementPx: number;
+  outcome: string;
+  longestStillMs: number;
+}> {
   return new Promise((resolve) => {
     const deltas: number[] = [];
-    let hidden = false;
+    // From the state now, not only from changes: a document already hidden
+    // when sampling starts, and shown again before it ends, fires only a
+    // change back to visible.
+    let hidden = document.visibilityState !== 'visible';
     const onVisibility = (): void => {
       if (document.visibilityState !== 'visible') hidden = true;
     };
     document.addEventListener('visibilitychange', onVisibility);
     const startOffset = scrollOffset();
-    let first: number | null = null;
+    // The script has to keep moving, not just have moved: a renderer whose
+    // loop died a second in would leave positive displacement and perfect
+    // frame intervals from this loop, and pass. At 130 wpm it moves about
+    // 11 px a second, so any still stretch over a second is a stall.
+    let lastOffset = startOffset;
+    let lastMovedAt: number | null = null;
+    let longestStillMs = 0;
     let last: number | null = null;
     let finished = false;
     let rafId = 0;
@@ -338,6 +423,7 @@ function sampleFrames(
         durationMs: first === null ? 0 : endedAt - first,
         displacementPx: startOffset === null || endOffset === null ? 0 : Math.abs(endOffset - startOffset),
         outcome,
+        longestStillMs: Math.round(longestStillMs),
       });
     };
     const watchdog = setTimeout(() => {
@@ -348,11 +434,18 @@ function sampleFrames(
       if (first === null) first = now;
       else if (last !== null) deltas.push(Math.round((now - last) * 100) / 100);
       last = now;
+      const offset = scrollOffset();
+      if (lastMovedAt === null || offset !== lastOffset) {
+        lastMovedAt = now;
+        lastOffset = offset;
+      } else {
+        longestStillMs = Math.max(longestStillMs, now - lastMovedAt);
+      }
       if (now - first < durationMs && !hidden) {
         rafId = requestAnimationFrame(frame);
         return;
       }
-      finish(now, hidden ? 'hidden' : 'ok');
+      finish(now, hidden ? 'hidden' : longestStillMs > STILL_LIMIT_MS ? 'stopped moving' : 'ok');
     };
     rafId = requestAnimationFrame(frame);
   });

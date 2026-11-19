@@ -8,8 +8,8 @@
  * tail. This file is the other half: a distribution, recorded on a named Mac
  * from the packaged app (`scripts/perf-run.mjs`), compared against another
  * distribution by its median AND its 95th percentile, with every maximum
- * shown. One slow launch in twenty moves the p95 and the max here; it would
- * have vanished into a minimum.
+ * shown. Two slow launches in twenty move the p95 here (one moves the max);
+ * either would have vanished into a minimum.
  *
  * Pure: no filesystem, no clock, no process. The runner and the comparison
  * CLI own those, and `tests/unit/perf-report.test.ts` drives everything here
@@ -104,18 +104,28 @@ function only(records, kind, predicate = () => true) {
  * says why. An invalid pair stays in the report — a launch that timed out is
  * a finding, not noise — and is kept out of every series.
  */
-export function assemblePair({ pair, firstUse, relaunch, spawnedAt }) {
+export function assemblePair({ pair, firstUse, relaunch, spawnedAt, fixtureSha256 = null }) {
   const problems = [];
   const launch = (records, phase, spawned) => {
     const found = only(records, 'launch', (r) => r.phase === phase);
+    const done = only(records, 'done', (d) => d.phase === phase).length;
+    if (done !== 1) problems.push(`${phase}: ${done === 0 ? 'no done record' : `${done} done records`}`);
     if (found.length !== 1) {
       problems.push(`${phase}: ${found.length} launch records`);
       return null;
     }
     const r = found[0];
-    if (!only(records, 'done', (d) => d.phase === phase).length) problems.push(`${phase}: no done record`);
+    // Every mark finite and in the order the page reaches them; anything else
+    // would turn into an invented interval below.
+    const marks = [r.timeOrigin, r.entryMs, r.mountedMs, r.readyMs, spawned];
+    if (!marks.every(finite) || !(0 <= r.entryMs && r.entryMs <= r.mountedMs && r.mountedMs <= r.readyMs)) {
+      problems.push(`${phase}: launch marks missing or out of order`);
+      return null;
+    }
+    const fetched = finite(r.scriptsFetchedMs) && r.scriptsFetchedMs <= r.entryMs ? r.scriptsFetchedMs : null;
     return {
       spawnToReadyMs: round(r.timeOrigin + r.readyMs - spawned),
+      bundleEvaluateMs: fetched === null ? null : round(r.entryMs - fetched),
       spawnToNavigationMs: round(r.timeOrigin - spawned),
       navigationToEntryMs: round(r.entryMs),
       entryToMountedMs: round(r.mountedMs - r.entryMs),
@@ -135,8 +145,13 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt }) {
     }
     return found;
   };
-  const opens = ordinals('open').map((r) => ({ ms: round(r.ms), words: r.words }));
-  const presents = ordinals('present').map((r) => {
+  const timed = (kind) =>
+    ordinals(kind).map((r) => {
+      if (!finite(r.ms) || r.ms < 0) problems.push(`${kind} ${r.ordinal}: no time`);
+      return r;
+    });
+  const opens = timed('open').map((r) => ({ ms: round(r.ms), words: r.words }));
+  const presents = timed('present').map((r) => {
     if (r.outcome !== 'readable') problems.push(`present ${r.ordinal}: ${r.outcome}`);
     return { ms: round(r.ms), outcome: r.outcome };
   });
@@ -147,7 +162,11 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt }) {
     if (chunks.length !== parts || chunks.some((c, i) => c.part !== i + 1 || c.parts !== parts)) {
       problems.push(`take ${r.ordinal}: frame chunks incomplete (${chunks.length} of ${parts})`);
     }
-    const deltas = chunks.flatMap((c) => c.deltas);
+    if (chunks.some((c) => !Array.isArray(c.deltas) || !c.deltas.every(finite))) {
+      problems.push(`take ${r.ordinal}: a frame chunk is not a list of intervals`);
+    }
+    const deltas = chunks.flatMap((c) => (Array.isArray(c.deltas) ? c.deltas.filter(finite) : []));
+    if (deltas.length === 0) problems.push(`take ${r.ordinal}: no frame intervals`);
     if (deltas.length !== r.frameCount) {
       problems.push(`take ${r.ordinal}: ${deltas.length} frame intervals, the page counted ${r.frameCount}`);
     }
@@ -156,10 +175,18 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt }) {
       outcome: r.outcome,
       durationMs: round(r.durationMs),
       displacementPx: round(r.displacementPx),
+      longestStillMs: round(r.longestStillMs),
       deltas,
     };
   });
-  const env = only(relaunch, 'env')[0] ?? only(firstUse, 'env')[0] ?? null;
+  const envs = only(relaunch, 'env');
+  if (envs.length !== 1) problems.push(`relaunch: ${envs.length} env records`);
+  const env = envs[0] ?? null;
+  // The fixture the BUILD embeds, against the one the runner hashed: an old
+  // bundle run from a newer checkout would otherwise claim the new fixture.
+  if (fixtureSha256 !== null && typeof env?.fixtureSha256 === 'string' && env.fixtureSha256 !== fixtureSha256) {
+    problems.push('the app embeds a different fixture from the checkout');
+  }
   // Before `valid` is read: each of these adds its own problems.
   const launches = {
     cold: launch(firstUse, 'first-use', spawnedAt.firstUse),
@@ -175,6 +202,10 @@ export function assemblePair({ pair, firstUse, relaunch, spawnedAt }) {
     takes,
     env,
   };
+}
+
+function finite(v) {
+  return typeof v === 'number' && Number.isFinite(v);
 }
 
 function round(ms) {
@@ -205,10 +236,13 @@ export function seriesOf(report) {
       // (bench/perf/README.md). It stays in the report; it is not compared.
       // Derived here, from fields every recording has, so a recording made
       // before a series existed still compares on it.
-      const sum = (a, b) => (a === null || a === undefined || b === null || b === undefined ? null : round(a + b));
+      const sum = (a, b) => (finite(a) && finite(b) ? round(a + b) : null);
+      const diff = (a, b) => (finite(a) && finite(b) ? round(a - b) : null);
       push(`launch.${temp}.spawn-to-ready`, l?.spawnToReadyMs);
       push(`launch.${temp}.spawn-to-entry`, sum(l?.spawnToNavigationMs, l?.navigationToEntryMs));
-      push(`launch.${temp}.entry-to-ready`, sum(l?.navigationToReadyMs, l === null || l === undefined ? null : -l.navigationToEntryMs));
+      push(`launch.${temp}.entry-to-ready`, diff(l?.navigationToReadyMs, l?.navigationToEntryMs));
+      // The bundle alone: last eager script arrived → entry's first statement.
+      push(`launch.${temp}.bundle-evaluate`, l?.bundleEvaluateMs);
     }
     ['cold', 'warm'].forEach((temp, i) => {
       push(`open.${temp}`, pair.opens[i]?.ms);
@@ -257,9 +291,27 @@ function thresholdFor(name, thresholds) {
   return thresholds[family] ?? DEFAULT_THRESHOLDS[family] ?? { relative: 0.2, absolute: 0 };
 }
 
+/** Not a regression at exact equality: `0.1 + 0.2` must not cross `0.3`. */
+const EPSILON = 1e-6;
+
 /** Reasons two reports cannot be compared at all. Empty when they can. */
 export function incompatibilities(base, candidate) {
   const reasons = [];
+  for (const [name, r] of [
+    ['baseline', base],
+    ['candidate', candidate],
+  ]) {
+    if (r === null || typeof r !== 'object' || !Array.isArray(r.pairs)) {
+      reasons.push(`the ${name} is not a perf report`);
+      return reasons;
+    }
+  }
+  if (!base.pairs.some((p) => p.valid)) reasons.push('the baseline has no valid pairs');
+  for (const [family, t] of Object.entries(base.thresholds ?? {})) {
+    if (!finite(t?.relative) || !finite(t?.absolute) || t.relative < 0 || t.absolute < 0) {
+      reasons.push(`the baseline's ${family} threshold is not two non-negative numbers`);
+    }
+  }
   if (base.schema !== candidate.schema) reasons.push(`schema ${base.schema} vs ${candidate.schema}`);
   if (base.scenario?.id !== candidate.scenario?.id) {
     reasons.push(`scenario ${base.scenario?.id} vs ${candidate.scenario?.id}`);
@@ -289,7 +341,9 @@ export function incompatibilities(base, candidate) {
  */
 export function compareReports(base, candidate) {
   const reasons = incompatibilities(base, candidate);
-  if (reasons.length) return { comparable: false, reasons, rows: [], regressions: [], invalidPairs: [] };
+  if (reasons.length) {
+    return { comparable: false, passed: false, reasons, rows: [], missing: [], regressions: [], invalidPairs: [] };
+  }
   const thresholds = { ...DEFAULT_THRESHOLDS, ...(base.thresholds ?? {}) };
   const a = seriesOf(base);
   const b = seriesOf(candidate);
@@ -300,18 +354,22 @@ export function compareReports(base, candidate) {
     const t = thresholdFor(name, thresholds);
     const limit = (v) => v * (1 + t.relative) + t.absolute;
     const crossed = [];
-    if (sb.p50 > limit(sa.p50)) crossed.push('p50');
-    if (sb.p95 > limit(sa.p95)) crossed.push('p95');
+    if (sb.p50 > limit(sa.p50) + EPSILON) crossed.push('p50');
+    if (sb.p95 > limit(sa.p95) + EPSILON) crossed.push('p95');
     rows.push({ name, base: sa, candidate: sb, threshold: t, crossed });
   }
+  // A series the baseline measures and the candidate does not is a FAILURE,
+  // not a skipped row: a candidate with no pairs at all would otherwise pass.
   const missing = Object.keys(a).filter((n) => !(n in b));
   const invalidPairs = candidate.pairs.filter((p) => !p.valid).map((p) => ({ pair: p.pair, problems: p.problems }));
+  const regressions = rows.filter((r) => r.crossed.length > 0).map((r) => r.name);
   return {
     comparable: true,
+    passed: regressions.length === 0 && missing.length === 0 && invalidPairs.length === 0,
     reasons: [],
     rows,
     missing,
-    regressions: rows.filter((r) => r.crossed.length > 0).map((r) => r.name),
+    regressions,
     invalidPairs,
   };
 }
@@ -338,7 +396,7 @@ export function formatComparison(result) {
       ].join(' '),
     );
   }
-  for (const name of result.missing ?? []) lines.push(`${name.padEnd(34)} missing from the candidate`);
+  for (const name of result.missing ?? []) lines.push(`${name.padEnd(34)} MISSING from the candidate`);
   for (const p of result.invalidPairs) lines.push(`pair ${p.pair} INVALID: ${p.problems.join('; ')}`);
   return `${lines.join('\n')}\n`;
 }
@@ -349,7 +407,17 @@ export function formatComparison(result) {
  * line would make it a file nobody can read or review.
  */
 export function serialiseReport(report) {
-  return `${JSON.stringify(report, null, 1).replace(/\[\s*(-?[\d.e+-]+(?:,\s*-?[\d.e+-]+)*)\s*\]/g, (_, body) =>
-    `[${body.split(/,\s*/).join(',')}]`,
-  )}\n`;
+  // Structural, not a regex over the text: number arrays are swapped for
+  // tokens before stringifying and back after, so a string that happens to
+  // contain "[1, 2]" is never rewritten.
+  const arrays = [];
+  const text = JSON.stringify(
+    report,
+    (_key, value) =>
+      Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'number')
+        ? `\u0000numbers:${arrays.push(JSON.stringify(value)) - 1}`
+        : value,
+    1,
+  );
+  return `${text.replace(/"\\u0000numbers:(\d+)"/g, (_, i) => arrays[Number(i)])}\n`;
 }

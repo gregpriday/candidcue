@@ -12,6 +12,8 @@
  * and its fixture — is in `scenario.ts`, which only an armed launch loads.
  */
 import { tick } from 'svelte';
+import { emit } from '@tauri-apps/api/event';
+import { ipcInvoke } from '../../services/ipc';
 
 declare global {
   interface Window {
@@ -66,8 +68,18 @@ export function perfShellReady(): void {
     await nextFrame();
     await nextFrame();
     perfMark('ready');
-    const { runScenario } = await import('./scenario');
-    await runScenario();
+    try {
+      const { runScenario } = await import('./scenario');
+      await runScenario();
+    } catch (err) {
+      // The scenario reports its own failures; this is the one it cannot:
+      // its chunk did not load. Said in the trace, then the same orderly
+      // exit, so the runner records a broken pair rather than a hang.
+      const message = err instanceof Error ? err.message : String(err);
+      const line = JSON.stringify({ v: 1, kind: 'error', step: 'load scenario', message: message.slice(0, 500) });
+      await ipcInvoke('log_client_diagnostic', { scope: 'perf', line }).catch(() => {});
+      await emit('perf://finished').catch(() => {});
+    }
   })();
 }
 

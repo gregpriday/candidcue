@@ -6,6 +6,10 @@
  * judges are recorded on a Mac by `scripts/perf-run.mjs` and these tests only
  * prove what the comparison does with them.
  */
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   assemblePair,
@@ -62,6 +66,8 @@ describe('parsing the client trace', () => {
   it('takes perf lines, skips other scopes and broken JSON', () => {
     const text = [
       '2026-11-19T00:00:00Z [realtime] #1 +3ms begin',
+      '2026-11-19T00:00:00Z [realtime] {"kind":"launch","phase":"first-use"}',
+      '2026-11-19T00:00:00Z [perf] {"kind": nope}',
       '2026-11-19T00:00:01Z [perf] {"v":1,"kind":"launch","phase":"first-use"}',
       '2026-11-19T00:00:02Z [perf] {"v":1,"kind":"frames","ordinal":1,"deltas":[16.',
       '2026-11-19T00:00:03Z [perf] {"v":1,"kind":"done","phase":"first-use"}',
@@ -81,7 +87,16 @@ function firstUse(): PerfRecord[] {
 function relaunch(overrides: { frames?: number[]; presentOutcome?: string; extra?: PerfRecord[] } = {}): PerfRecord[] {
   const deltas = overrides.frames ?? [16.7, 16.7, 16.6, 33.4];
   return [
-    { kind: 'launch', phase: 'relaunch', timeOrigin: 2_000_150, entryMs: 30, mountedMs: 50, readyMs: 150 },
+    {
+      kind: 'launch',
+      phase: 'relaunch',
+      timeOrigin: 2_000_150,
+      entryMs: 30,
+      mountedMs: 50,
+      readyMs: 150,
+      scriptsFetchedMs: 12,
+    },
+    { kind: 'env', fixtureSha256: 'abc' },
     { kind: 'open', ordinal: 1, ms: 420, words: 5073 },
     { kind: 'open', ordinal: 2, ms: 180, words: 5073 },
     { kind: 'present', ordinal: 1, ms: 600, outcome: overrides.presentOutcome ?? 'readable' },
@@ -242,7 +257,147 @@ describe('serialising a report', () => {
     const r = report(pairs(2));
     const text = serialiseReport(r);
     expect(text).toContain('[16.7,16.7,16.6,33.4]');
+    // Structural: a string that merely looks like a number list is left alone.
+    const withProse = serialiseReport({ ...r, note: 'scenario said [1, 2]' });
+    expect(JSON.parse(withProse).note).toBe('scenario said [1, 2]');
     expect(text.endsWith('\n')).toBe(true);
     expect(JSON.parse(text)).toEqual(JSON.parse(JSON.stringify(r)));
+  });
+});
+
+describe('what a pair refuses', () => {
+  const broken = (records: PerfRecord[], first: PerfRecord[] = firstUse()) =>
+    assemblePair({ pair: 1, firstUse: first, relaunch: records, spawnedAt, fixtureSha256: 'abc' });
+
+  it('a frame chunk without intervals, rather than counting it as a frame', () => {
+    const records = relaunch().map((r) =>
+      r.kind === 'frames' && r.ordinal === 2 ? { kind: 'frames', ordinal: 2, part: 1, parts: 1 } : r,
+    );
+    expect(broken(records).problems).toContain('take 2: a frame chunk is not a list of intervals');
+  });
+
+  it('launch marks out of order, rather than inventing an interval from them', () => {
+    const first = firstUse().map((r) => (r.kind === 'launch' ? { ...r, readyMs: 10 } : r));
+    expect(broken(relaunch(), first).problems).toContain('first-use: launch marks missing or out of order');
+  });
+
+  it('a duplicated done record', () => {
+    expect(broken(relaunch({ extra: [{ kind: 'done', phase: 'relaunch' }] })).problems).toContain('relaunch: 2 done records');
+  });
+
+  it('a build that embeds a different fixture from the checkout', () => {
+    const records = relaunch().map((r) => (r.kind === 'env' ? { ...r, fixtureSha256: 'stale' } : r));
+    expect(broken(records).problems).toContain('the app embeds a different fixture from the checkout');
+  });
+
+  it('a relaunch with no environment record', () => {
+    expect(broken(relaunch().filter((r) => r.kind !== 'env')).problems).toContain('relaunch: 0 env records');
+  });
+
+  it('a take that stopped moving', () => {
+    const records = relaunch().map((r) => (r.kind === 'take' && r.ordinal === 1 ? { ...r, outcome: 'stopped moving' } : r));
+    expect(broken(records).problems).toContain('take 1: stopped moving');
+  });
+});
+
+describe('the bundle interval', () => {
+  it('is entry minus the last eager script arriving, when the engine reports one', () => {
+    const series = seriesOf(report(pairs(2)));
+    expect(series['launch.warm.bundle-evaluate']).toEqual([18, 18]);
+    // The first-use launch reported no script resources: absent, not zero.
+    expect(series['launch.cold.bundle-evaluate']).toBeUndefined();
+  });
+
+  it('catches a bundle that got slower to evaluate, which spawn-to-entry absorbs', () => {
+    const slower = pairs(5);
+    for (const p of slower) {
+      const warm = p.launches.warm;
+      if (warm === null) throw new Error('fixture');
+      p.launches.warm = { ...warm, bundleEvaluateMs: (warm.bundleEvaluateMs ?? 0) + 60 };
+    }
+    expect(compareReports(report(pairs(5)), report(slower)).regressions).toContain('launch.warm.bundle-evaluate');
+  });
+});
+
+describe('verdicts the first tests did not pin down', () => {
+  it('fails a shift of the whole distribution at the p50, not only the p95', () => {
+    const shifted = pairs(20);
+    for (const p of shifted) p.opens[0] = { ms: 1000, words: 5073 };
+    const row = compareReports(report(pairs(20)), report(shifted)).rows.find((r) => r.name === 'open.cold');
+    expect(row?.crossed).toEqual(['p50', 'p95']);
+  });
+
+  it('lets a single spike reach the maximum without failing the comparison', () => {
+    const spiked = pairs(20);
+    const first = spiked[0];
+    if (first === undefined) throw new Error('fixture');
+    first.opens[0] = { ms: 5000, words: 5073 };
+    const result = compareReports(report(pairs(20)), report(spiked));
+    expect(result.rows.find((r) => r.name === 'open.cold')?.candidate.max).toBe(5000);
+    expect(result.passed).toBe(true);
+  });
+
+  it('holds a take\'s worst frame to its own allowance, wider than the percentiles\'', () => {
+    // 50 ms: past the frame percentiles' limit (33.4 × 1.25 + 4 = 45.75), inside
+    // the worst frame's (33.4 × 1.5 + 8 = 58.1).
+    const result = compareReports(report(pairs(5)), report(pairs(5, [16.7, 16.7, 16.6, 50])));
+    expect(result.regressions).toContain('frames.cold.p99');
+    expect(result.regressions).not.toContain('frames.cold.max');
+  });
+
+  it('does not fail on floating-point equality at the limit', () => {
+    const base = pairs(5);
+    for (const p of base) p.opens[0] = { ms: 300.5, words: 5073 };
+    const candidate = pairs(5);
+    for (const p of candidate) p.opens[0] = { ms: 400.6, words: 5073 };
+    const thresholds = { open: { relative: 0.2, absolute: 40 } };
+    expect(compareReports(report(base, { thresholds }), report(candidate)).regressions).not.toContain('open.cold');
+  });
+
+  it('fails a candidate with no measurements at all', () => {
+    const result = compareReports(report(pairs(5)), report([]));
+    expect(result.passed).toBe(false);
+    expect(result.missing).toContain('open.cold');
+  });
+
+  it('refuses a baseline with no valid pairs, a malformed report, or an unusable threshold', () => {
+    const broken = assemblePair({ pair: 1, firstUse: [], relaunch: [], spawnedAt });
+    expect(compareReports(report([broken]), report(pairs(2))).reasons).toContain('the baseline has no valid pairs');
+    expect(compareReports(report(pairs(2)), { pairs: null } as unknown as Report).comparable).toBe(false);
+    const thresholds = { open: { relative: 0.2 } } as unknown as Report['thresholds'];
+    expect(compareReports(report(pairs(2), { thresholds }), report(pairs(2))).reasons).toContain(
+      "the baseline's open threshold is not two non-negative numbers",
+    );
+  });
+
+  it('refuses another machine on the model alone and on the chip alone', () => {
+    const base = report(pairs(2));
+    expect(compareReports(base, report(pairs(2), { machine: { model: 'Mac15,3', chip: 'Apple M4 Max' } })).comparable).toBe(false);
+    expect(compareReports(base, report(pairs(2), { machine: { model: 'Mac16,9', chip: 'Apple M3' } })).comparable).toBe(false);
+  });
+});
+
+describe('the comparison CLI', () => {
+  const run = (base: unknown, candidate: unknown): number | null => {
+    const dir = mkdtempSync(join(tmpdir(), 'perf-compare-'));
+    try {
+      writeFileSync(join(dir, 'base.json'), JSON.stringify(base));
+      writeFileSync(join(dir, 'candidate.json'), JSON.stringify(candidate));
+      return spawnSync(process.execPath, ['scripts/perf-compare.mjs', join(dir, 'base.json'), join(dir, 'candidate.json')], {
+        encoding: 'utf8',
+      }).status;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('exits 0 on a pass, 1 on a regression, a missing series or an invalid pair, 2 when incomparable', () => {
+    expect(run(report(pairs(3)), report(pairs(3)))).toBe(0);
+    expect(run(report(pairs(3)), report(pairs(3, [16.7, 80, 90, 120])))).toBe(1);
+    expect(run(report(pairs(3)), report([]))).toBe(1);
+    const broken = assemblePair({ pair: 4, firstUse: [], relaunch: relaunch(), spawnedAt });
+    expect(run(report(pairs(3)), report([...pairs(3), broken]))).toBe(1);
+    expect(run(report(pairs(3)), report(pairs(3), { scenario: { id: 'other', fixtureSha256: 'abc' } }))).toBe(2);
+    expect(run(report(pairs(3)), { pairs: null })).toBe(2);
   });
 });
