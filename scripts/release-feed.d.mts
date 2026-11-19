@@ -69,6 +69,7 @@ export declare function writeOnce(
   options?: NetworkOptions,
 ): Promise<{ unpublished: string[]; published: string[] }>;
 export declare function checkOrigin(stageDir: string, publicUrl: string): void;
+export declare function originReport(publicUrl: string, options: { fromVariable: boolean }): string[];
 export declare function newestStable(tags: readonly string[]): string | null;
 export declare function rustLines(text: string): string[];
 export declare const IMMUTABLE_CACHE_CONTROL: string;
