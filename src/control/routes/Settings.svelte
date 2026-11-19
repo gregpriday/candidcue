@@ -54,6 +54,7 @@
   import {
     describeError,
     recentErrorDiagnostics,
+    withoutTakeAdvice,
     type ErrorDiagnosticEntry,
   } from '../services/errors';
   import { BackendUnavailableError, isTauriRuntime } from '../services/ipc';
@@ -97,7 +98,11 @@
     type ReaderTheme,
   } from '../services/settings-types';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
-  import { SESSION_MODE_LABELS, sessionModeLabel } from '../../shared/take-vocabulary';
+  import {
+    OFFERED_SESSION_MODES,
+    SESSION_MODE_LABELS,
+    sessionModeLabel,
+  } from '../../shared/take-vocabulary';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -1825,15 +1830,12 @@
   /**
    * The failure as this screen shows it.
    *
-   * The recogniser's messages are written for a take, and several end with
-   * what to press during one ("In a take, press A to start or stop
-   * auto-scroll…"). That is the wrong advice in Settings, where nothing is
-   * scrolling; the rest of the sentence is still the diagnosis.
+   * The recogniser's messages carry what to press during a take. That is the
+   * wrong advice in Settings, where nothing is scrolling; the fault and the
+   * repair are still the diagnosis, and `withoutTakeAdvice` keeps just those.
    */
   const micTestErrorText = $derived(
-    micTestError
-      ?.replace(/\s*In a take, press A to start or stop auto-scroll(?:, then [^.]*)?\./, '')
-      .trim() ?? null,
+    micTestError === null ? null : withoutTakeAdvice(micTestError),
   );
   /** The failure says to fix it in Speech, so offer the way there. */
   const micTestNeedsSpeech = $derived(
@@ -2708,7 +2710,7 @@
             mode with the readout's own label, so the button and the value it
             produces say the same words.
           -->
-          {#if $settings.general.defaultSessionMode === 'voice'}
+          {#if OFFERED_SESSION_MODES.includes($settings.general.defaultSessionMode)}
             <SettingReadout
               layout="row"
               label="Session mode"
