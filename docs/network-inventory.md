@@ -27,7 +27,7 @@ Everything below is the **current** behaviour of a stock build, not a plan.
 | Application update download | **Only when the user installs** | The user chooses Install and Restart on the update notice. Never during a take — Rust refuses it | A `GET` of the payload the manifest names, with the same headers: the user's IP address and `User-Agent: SpeakingGlass/<version>`, nothing else. The payload is verified against the minisign public key compiled into the app before anything is installed | `updates.speakingglass.com` (the release pipeline publishes payloads beside the manifests) | Install and Restart, Later, or nothing; a copy that cannot replace itself (a Linux `.deb`) is offered the download page instead |
 | Analytics / product telemetry | **None** | — | — | — | — |
 | Automatic crash-report upload | **None** | — | — | — | Crashes leave local log lines, which go nowhere unless the user exports a support bundle |
-| Licence checks / registration | **None** | Registration is honour-system; nothing verifies it | — | — | — |
+| Licence checks / registration | **None** | None. Speaking Glass is free and MIT-licensed, with no licence or account to check | — | — | — |
 | Speech recognition | **On device** | A take, or the microphone test | Nothing leaves the machine | — | Start and stop |
 | Alignment / following | **On device** | A take | Nothing leaves the machine | — | — |
 | Support-bundle upload | **Never automatic** | The user exports a folder and chooses what to do with it | Whatever the bundle contains, to whoever the user sends it to | The user's own support channel | Explicit, and the bundle can be inspected before it is sent |
