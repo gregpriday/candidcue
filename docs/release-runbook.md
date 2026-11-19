@@ -281,44 +281,72 @@ only the two key secrets are replaced. The owner's checklist:
   GitHub-hosted runners have no fixed address. Keep the page open after
   creating it, because the Secret Access Key is shown only once.
 - [ ] Before it goes into GitHub, check its reach from a shell, with the
-  settings publishing uses. Every call here reads; none writes:
+  settings publishing uses. Replace the three `<…>` placeholders first: `E`
+  is the `R2_ENDPOINT` value, `B` the `SPEAKING_GLASS_R2_BUCKET` value, and
+  the third another bucket that exists on the same account, such as
+  Daintree's update bucket. The parentheses run it in a subshell, so the
+  keys are gone when it ends however it ends. Every call reads; none
+  writes:
 
   ```bash
-  printf 'Access Key ID: '; read -rs AWS_ACCESS_KEY_ID; echo
-  printf 'Secret Access Key: '; read -rs AWS_SECRET_ACCESS_KEY; echo
-  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION=auto \
-    AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
-    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
-  E='https://<account id>.r2.cloudflarestorage.com'  # the R2_ENDPOINT value
-  B='<release bucket>'                               # the SPEAKING_GLASS_R2_BUCKET value
-  aws s3api list-objects-v2 --bucket "$B" --prefix releases/ --max-keys 1 --endpoint-url "$E"
-  aws s3api list-objects-v2 --bucket '<another bucket>' --max-keys 1 --endpoint-url "$E"
-  aws s3api list-buckets --endpoint-url "$E"
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  (
+    unset AWS_SESSION_TOKEN AWS_PROFILE
+    printf 'Access Key ID: '; read -rs AWS_ACCESS_KEY_ID; echo
+    printf 'Secret Access Key: '; read -rs AWS_SECRET_ACCESS_KEY; echo
+    [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ] || exit 1
+    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION=auto \
+      AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+      AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+    E='https://<account id>.r2.cloudflarestorage.com'
+    B='<release bucket>'
+    aws s3api list-objects-v2 --bucket "$B" --prefix releases/ --max-keys 1 --endpoint-url "$E"
+    aws s3api list-objects-v2 --bucket '<another bucket>' --max-keys 1 --endpoint-url "$E"
+    aws s3api list-buckets --endpoint-url "$E"
+  )
   ```
 
   The first must succeed: it lists one key under `releases/`, or none
-  before the first release. The second must fail with `AccessDenied`, which
-  is the scope itself. Name a bucket that exists, such as Daintree's update
-  bucket: `NoSuchBucket` means the name is wrong and proves nothing. The
-  third must fail with `AccessDenied` too; a token that lists the account's
-  buckets has Admin permissions.
-- [ ] No read proves a write, so check the permission itself: the token's
-  row under Manage API tokens says Object Read & Write, not Object Read
-  only, and names that one bucket.
+  before the first release. The second must fail with `AccessDenied`: the
+  token does not reach that bucket. `NoSuchBucket` there proves nothing;
+  check the bucket's name and the endpoint. The third must fail with
+  `AccessDenied` too. A token that lists the account's buckets has Admin
+  permissions, but a denial does not prove the scope, because an Object
+  Read & Write token applied to every bucket is denied as well.
+- [ ] So check the scope where it is set, and the write with it, since no
+  read proves a write: the token's row under Manage API tokens shows
+  Object Read & Write, not Object Read only, applied to that one bucket
+  and no other.
 - [ ] Replace the two secrets where the other two R2 secrets live, keeping
-  the four together (above): `gh secret set R2_ACCESS_KEY_ID` and
-  `gh secret set R2_SECRET_ACCESS_KEY` prompt for each value, so neither
-  reaches shell history. If they live on the environments, set both on
-  `release-stable` and on `release-prerelease` (`--env`). `gh secret list`
-  (with `--env` for each environment) then shows both updated today, beside
-  `R2_ENDPOINT` and `SPEAKING_GLASS_R2_BUCKET`.
-- [ ] The first real publish after the swap (§5) proves the write. A dry run
-  does not reach R2. In it, `Every publishing credential must be present`
-  lists all four present, and `Upload the release files` and both read-backs
-  pass. A token that cannot write fails at `Upload the release files`,
-  before the feed is touched: fix the token and re-run only the `publish`
-  job.
+  the four together (above), and finish both before tagging a release.
+  `gh secret set` prompts for each value, so neither reaches shell
+  history. At repository level:
+
+  ```bash
+  gh secret set R2_ACCESS_KEY_ID
+  gh secret set R2_SECRET_ACCESS_KEY
+  gh secret list
+  ```
+
+  On the environments instead, set both on each of them (a repository-level
+  `gh secret set` would leave the environment's old keys in force, since an
+  environment secret overrides a repository one):
+
+  ```bash
+  for env in release-stable release-prerelease; do
+    gh secret set R2_ACCESS_KEY_ID --env "$env"
+    gh secret set R2_SECRET_ACCESS_KEY --env "$env"
+    gh secret list --env "$env"
+  done
+  ```
+
+  Each list shows both keys updated today, beside `R2_ENDPOINT` and
+  `SPEAKING_GLASS_R2_BUCKET`.
+- [ ] The first real publish after the swap (§5) proves the write; a dry run
+  does not reach R2. In that publish, `Every publishing credential must be
+  present` lists all four present, and `Upload the release files` and both
+  read-backs pass. A token that cannot write fails at `Upload the release
+  files`, before the feed is touched: fix the token and re-run only the
+  `publish` job.
 
 After the swap no release depends on the account-level token the old keys
 came from, so rolling or deleting it no longer touches publishing.
