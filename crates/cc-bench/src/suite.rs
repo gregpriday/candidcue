@@ -60,6 +60,77 @@ pub struct SuiteResult {
     pub config: AlignmentConfig,
     pub table: Vec<BenchEntry>,
     pub runs: Vec<RunMetrics>,
+    /// The language gate's rows, computed over the scoring fixtures alone.
+    ///
+    /// Only captured Tier B writes it, and `None` on every result saved before
+    /// it existed — which the gate refuses rather than reading `table`, since
+    /// `table` is aggregated over every fixture including the diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoring: Option<ScoringTable>,
+}
+
+/// Gate rows aggregated over the scoring fixtures only.
+///
+/// `table` answers "how did this corpus do", which includes diagnostic
+/// fixtures such as `fuzzy-follow`. The language gate is defined over the core
+/// fixtures, and diagnostics move it: `gate.unread_never_spoken` is a
+/// macro-average, so three runs that score ~0 dilute it by 18/21. A gate value
+/// therefore has to be aggregated from the core runs' own samples, which only
+/// exist while the tier is running — a saved file keeps per-run summaries, not
+/// the raw pools the percentile rows need.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoringTable {
+    /// The fixtures the rows were aggregated over, by manifest name.
+    pub runs: Vec<String>,
+    pub table: Vec<BenchEntry>,
+}
+
+/// The Tier B rows the language gate reads, from one set of runs.
+///
+/// The ordinary table and the scoring table both come from here, so the two
+/// cannot aggregate the same metric differently.
+pub(crate) struct LiveGateRows {
+    pub within5: f64,
+    pub ahead_worst: f64,
+    pub dim_p50_ms: f64,
+    pub dim_never: f64,
+}
+
+impl LiveGateRows {
+    pub(crate) fn of<'a>(runs: impl IntoIterator<Item = &'a RunMetrics>) -> Self {
+        let mut hits = 0usize;
+        let mut eligible = 0usize;
+        let mut ahead_worst = f64::NEG_INFINITY;
+        let mut dim: Vec<f64> = Vec::new();
+        let mut dim_never = 0.0f64;
+        for r in runs {
+            // Every eligible sample pushes one `abs_err`, and `within5_hits`
+            // counts those within 5 — so this is the pooled rate, not a mean
+            // of per-run rates.
+            hits += r.within5_hits;
+            eligible += r.eligible_samples;
+            if let Some(worst) = r.ahead_worst {
+                ahead_worst = ahead_worst.max(worst);
+            }
+            dim.extend_from_slice(&r.dim_samples_ms);
+            dim_never += r.dim_never as f64;
+        }
+        LiveGateRows {
+            within5: hits as f64 / eligible.max(1) as f64 * 100.0,
+            ahead_worst: if ahead_worst.is_finite() { ahead_worst } else { f64::NAN },
+            dim_p50_ms: percentile(&mut dim, 50.0),
+            dim_never,
+        }
+    }
+
+    fn entries(&self) -> Vec<BenchEntry> {
+        vec![
+            entry("live.within5", self.within5, "%", "higher"),
+            entry("live.ahead_worst", self.ahead_worst, "atoms", "lower"),
+            entry("live.dim_p50_ms", self.dim_p50_ms, "ms", "lower"),
+            entry("live.dim_never", self.dim_never, "count", "lower"),
+        ]
+    }
 }
 
 fn pct_of(hits: usize, eligible: usize) -> f64 {
@@ -159,6 +230,7 @@ pub fn run_tier_a(
         config: config.clone(),
         table,
         runs,
+        scoring: None,
     })
 }
 
@@ -797,11 +869,11 @@ pub fn run_tier_b(
 
     // Tier-B table: the live end-to-end numbers.
     let mut table = Vec::new();
+    let gate = LiveGateRows::of(&runs);
     let n = pooled_abs.len().max(1) as f64;
     let within2 = pooled_abs.iter().filter(|v| **v <= 2.0).count() as f64 / n * 100.0;
-    let within5 = pooled_abs.iter().filter(|v| **v <= 5.0).count() as f64 / n * 100.0;
     table.push(entry("live.within2", within2, "%", "higher"));
-    table.push(entry("live.within5", within5, "%", "higher"));
+    table.push(entry("live.within5", gate.within5, "%", "higher"));
     table.push(entry(
         "live.p95_abs",
         percentile(&mut pooled_abs, 95.0),
@@ -867,16 +939,7 @@ pub fn run_tier_b(
         "atoms",
         "lower",
     ));
-    let live_ahead_worst = runs
-        .iter()
-        .filter_map(|r| r.ahead_worst)
-        .fold(f64::NEG_INFINITY, f64::max);
-    table.push(entry(
-        "live.ahead_worst",
-        if live_ahead_worst.is_finite() { live_ahead_worst } else { f64::NAN },
-        "atoms",
-        "lower",
-    ));
+    table.push(entry("live.ahead_worst", gate.ahead_worst, "atoms", "lower"));
     let mut recoveries: Vec<f64> = runs
         .iter()
         .flat_map(|r| &r.recoveries)
@@ -924,24 +987,14 @@ pub fn run_tier_b(
     // Empty pools report NaN rather than 0. A run that never locked contributes
     // nothing here, and 0 ms would read as instant rather than as absent.
     let mut dim_all: Vec<f64> = runs.iter().flat_map(|r| r.dim_samples_ms.clone()).collect();
-    table.push(entry(
-        "live.dim_p50_ms",
-        percentile(&mut dim_all.clone(), 50.0),
-        "ms",
-        "lower",
-    ));
+    table.push(entry("live.dim_p50_ms", gate.dim_p50_ms, "ms", "lower"));
     table.push(entry(
         "live.dim_p95_ms",
         percentile(&mut dim_all, 95.0),
         "ms",
         "lower",
     ));
-    table.push(entry(
-        "live.dim_never",
-        runs.iter().map(|r| r.dim_never as f64).sum::<f64>(),
-        "count",
-        "lower",
-    ));
+    table.push(entry("live.dim_never", gate.dim_never, "count", "lower"));
     table.push(entry(
         "live.wer",
         if wer_words == 0 { 0.0 } else { wer_weighted / wer_words as f64 },
@@ -981,11 +1034,22 @@ pub fn run_tier_b(
             .map(|metric| entry(metric.name, metric.value, metric.unit, metric.better)),
     );
 
+    // The same rows again, over the scoring fixtures alone — see `ScoringTable`.
+    let scoring_runs: Vec<&RunMetrics> = runs
+        .iter()
+        .filter(|r| crate::language_gate::is_scoring_run(&r.run))
+        .collect();
+    let scoring = ScoringTable {
+        runs: scoring_runs.iter().map(|r| r.run.clone()).collect(),
+        table: LiveGateRows::of(scoring_runs.iter().copied()).entries(),
+    };
+
     Ok(SuiteResult {
         label: label.to_string(),
         config: config.clone(),
         table,
         runs,
+        scoring: Some(scoring),
     })
 }
 

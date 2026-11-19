@@ -2292,10 +2292,11 @@ describe('the notes this tree would actually publish', () => {
     expect(extracted.output, 'and where it goes').toContain(new URL(base!).hostname);
     expect(extracted.output, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
 
-    // The two documented degraded analyses must be listed as limitations,
-    // never implied to work.
-    expect(extracted.output).toMatch(/choppy/i);
-    expect(extracted.output).toMatch(/variety score/i);
+    // The delivery analysis (choppy-delivery detection, the variety score) was
+    // removed with the coaching era. Notes that still list it as a limitation
+    // describe a product that no longer exists.
+    expect(extracted.output).not.toMatch(/choppy/i);
+    expect(extracted.output).not.toMatch(/variety score/i);
   });
 
   /*

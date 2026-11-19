@@ -1,8 +1,9 @@
 # Changelog
 
 Release notes for Speaking Glass. The release workflow publishes the section
-matching the tag it is building, so **a release with no section here does not
-ship** — see `scripts/release-notes.mjs`.
+matching the tag it is building (a release candidate such as `v0.1.0-rc.1`
+reads the `v0.1.0` section unless it has its own), so **a release with no
+section here does not ship** — see `scripts/release-notes.mjs`.
 
 Each version gets a `## v<version>` heading, newest first. Write for somebody
 deciding whether to install it, not for somebody reading the diff.
@@ -29,16 +30,15 @@ engine decides where in the script you are.
 - **Linux, 64-bit**, as an AppImage or a `.deb`, built on Ubuntu 22.04 and
   needing that release's libraries or newer (WebKitGTK 4.1). Tested under X11;
   Wayland is untested.
-- **A microphone**, and **a second display** for prompter mode. Reader mode
-  works on one screen.
+- **A microphone**, and **a second display** for a prompter rig. A reading
+  window, or a full-screen prompter on the same screen, works on one display.
 
 ### Speech recognition
 
-- **English only.** The engine carries normalisation profiles for other
-  languages, but English is the only one this build has been measured to
-  follow, and unmeasured languages are absent rather than offered.
-- **On-device.** No account, no API key, no audio upload. Your voice and your
-  script never leave the machine.
+- **English only.** English is the only language the alignment engine
+  normalises and the only one it has been measured to follow.
+- **On-device.** No account, no API key, no audio upload. Recognition runs on
+  your computer, so your voice and your script are not sent anywhere.
 - **The model is a separate download.** It is not in the installer. Install it
   from the Welcome screen or from Settings › Speech — about 128 MB to download
   and 162 MB on disk once unpacked, verified against a pinned digest.
@@ -56,10 +56,11 @@ engine decides where in the script you are.
 Speaking Glass checks for updates by itself: shortly after it opens and every six
 hours while it runs. When one is available it says so in the main window and
 installs it only when you choose **Install and Restart**. It never prompts,
-downloads or restarts during a take, and never draws on the glass. Every update
+installs or restarts during a take, and never draws on the glass. Every update
 is signed, and Speaking Glass refuses one that does not verify against the key it
 was built with. Turn the automatic check off in Settings; **Help › Check for
-Updates…** still works when you want it. On Linux, the AppImage updates itself;
+Updates…** still works when you want it. On Linux, the AppImage installs
+updates itself;
 a `.deb` install is pointed at the download page instead.
 
 ### Your data and the network
@@ -68,35 +69,35 @@ a `.deb` install is pointed at the download page instead.
   calibrations and session history are in a local database. There is no cloud
   copy and no server-side recovery.
 - **No telemetry.** No analytics, no crash upload, no account and no licence
-  check. Speaking Glass talks to the network for two things only: downloading the
-  speech model when you ask it to, and the update check, which sends nothing
-  but the request itself (the app's version, platform and architecture) to
-  `updates.speakingglass.com`.
-- **Back up your own work.** **Export all data** writes a checked, restorable
-  archive of your scripts, their revisions and images, settings, calibrations
-  and session history.
+  check. Speaking Glass talks to the network for three things only:
+  downloading the speech model when you ask it to; the update check, which
+  sends nothing but the request itself (the app's version, release channel,
+  platform and architecture) to `updates.speakingglass.com`; and downloading an
+  update when you choose to install one. The
+  [network inventory](https://github.com/gregpriday/candidcue/blob/HEAD/docs/network-inventory.md)
+  lists exactly what each request sends.
+- **Back up your own work.** **Export all data** writes a checksummed backup
+  folder of your scripts, their revisions and images, settings, calibrations
+  and session history. A complete export can be restored from Settings.
 
 ### Known limitations
 
 - Voice following is English only.
-- The speech model is downloaded separately, on first use.
+- The speech model is a separate download, which you start yourself.
 - No cloud backup or sync.
 - The Windows build is not code-signed.
-- Dragging the reader-mode window to a display with different optics mid-take
+- Dragging a reading window to a display with different optics mid-take
   keeps the opening display's text scale until the take ends.
-- Choppy-delivery detection does not report: the analysis deliberately emits no
-  pause evidence rather than manufacturing findings it cannot support.
-- The variety score omits tempo variation, terminal rush and emphasis contrast,
-  and runs in a documented degraded mode as a result.
 
 ### Reporting problems
 
 **Security issues** go to a private channel, not a public issue: open a
 [private advisory](https://github.com/gregpriday/candidcue/security/advisories/new)
 or email [greg@siteorigin.com](mailto:greg@siteorigin.com). The full policy is
-in [SECURITY.md](https://github.com/gregpriday/candidcue/blob/main/.github/SECURITY.md).
+in [SECURITY.md](https://github.com/gregpriday/candidcue/blob/HEAD/.github/SECURITY.md).
 
 **Everything else** goes to
-[GitHub Issues](https://github.com/gregpriday/candidcue/issues). It helps to
+[GitHub Issues](https://github.com/gregpriday/candidcue/issues);
+**Help › Report a Problem** opens GitHub's new-issue form in your browser. It helps to
 include the version (About Speaking Glass, or Settings), your operating system, your
 microphone and display setup, and what the prompter actually did.

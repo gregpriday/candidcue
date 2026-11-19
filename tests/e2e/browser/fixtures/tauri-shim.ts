@@ -39,6 +39,12 @@ export interface ShimConfig {
   /** Mark the welcome screen as already seen so boot lands on the Library. */
   welcomed?: boolean;
   seedScripts?: ShimScriptSeed[];
+  /**
+   * Session rows `list_sessions` answers with, newest first, as Rust lists
+   * them. Filtered by the requested script and capped at `limit`, so a spec
+   * cannot pass while the Editor asks for the wrong script's history.
+   */
+  sessionHistory?: Array<{ scriptId: string } & Record<string, unknown>>;
   /** Speech-engine status returned by get_speech_engine_status. */
   engineStatus?: Record<string, unknown>;
   /**
@@ -153,6 +159,20 @@ export interface ShimConfig {
   bootStatus?: Record<string, unknown>;
   /** What `list_database_backups` answers — newest first, as Rust sorts them. */
   databaseBackups?: Array<Record<string, unknown>>;
+  /**
+   * What `get_legacy_library_notice` answers (#454): the CandidCue library this
+   * launch could not copy (`kind: 'failed'`) or gave up on (`'abandoned'`).
+   * Unset, there was nothing to say, as on a clean install.
+   */
+  legacyLibraryNotice?: Record<string, unknown>;
+  /**
+   * Commands whose replies are held from BEFORE the app boots, until the spec
+   * releases them with `__E2E__.setHeld(command, false)`. `setHeld` itself is
+   * only callable after navigation, by which time the boot has asked.
+   */
+  heldAtBoot?: string[];
+  /** `general.openTo` in the settings document: where a launch lands. */
+  openTo?: 'library' | 'last_script';
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -270,7 +290,7 @@ function shimBody(config: ShimConfig): void {
     value: {
       schemaVersion: 1,
       general: {
-        openTo: 'library',
+        openTo: config.openTo ?? 'library',
       },
       ...(config.following ? { following: config.following } : {}),
       stageBehavior: {
@@ -501,6 +521,16 @@ function shimBody(config: ShimConfig): void {
       }
       return delivered;
     },
+    /**
+     * Test seam: change a script's saved source behind the editor's back, as
+     * an edit from another app would. The editor keeps the text it loaded.
+     */
+    setScriptSource(id: string, source: string) {
+      const doc = store.get(id);
+      if (!doc) throw new Error(`setScriptSource: no script ${id}`);
+      doc.source = source;
+      doc.scriptRevision += 1;
+    },
     reset() {
       this.calls = [];
       this.settled = [];
@@ -514,6 +544,7 @@ function shimBody(config: ShimConfig): void {
   if (config.listDisplaysDelayMs !== undefined) {
     control.delay['list_displays'] = config.listDisplaysDelayMs;
   }
+  for (const command of config.heldAtBoot ?? []) control.held[command] = true;
   (window as unknown as { __E2E__: typeof control }).__E2E__ = control;
 
   /**
@@ -762,6 +793,13 @@ function shimBody(config: ShimConfig): void {
       // Nothing was repaired at startup. `null` is the ordinary answer here,
       // and the shell treats it as "nothing to report".
       case 'get_startup_findings':
+        return null;
+
+      // The CandidCue library notice (#454). Read as often as it is asked,
+      // like Rust's; the reveal takes no path and opens nothing here.
+      case 'get_legacy_library_notice':
+        return config.legacyLibraryNotice ?? null;
+      case 'reveal_legacy_library':
         return null;
 
       case 'get_settings':
@@ -1126,8 +1164,14 @@ function shimBody(config: ShimConfig): void {
       case 'list_revisions':
         return [];
 
-      case 'list_sessions':
-        return [];
+      case 'list_sessions': {
+        const scriptId = args?.['scriptId'] as string | null | undefined;
+        const limit = args?.['limit'] as number | null | undefined;
+        const rows = (config.sessionHistory ?? []).filter(
+          (row) => scriptId === null || scriptId === undefined || row.scriptId === scriptId,
+        );
+        return typeof limit === 'number' ? rows.slice(0, limit) : rows;
+      }
 
       /*
        * §29 alignment. Rust owns the engine and publishes its snapshots on

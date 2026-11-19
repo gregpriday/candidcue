@@ -199,6 +199,13 @@ pub async fn export_all_data(
     // 2. The canonical scripts tree — sources, revisions, assets.
     let scripts_copied = write_scripts_tree(paths, &staging, &mut sections, &mut warnings);
 
+    // 2a. Every script the snapshot indexes has its text in the staged tree.
+    //
+    // Counting folders and checksumming whatever files exist cannot notice a
+    // script whose `script.md` was already gone: it exported as complete and
+    // restored as a Library entry that cannot be opened (#446).
+    check_staged_script_bodies(&staging, &mut sections, &mut warnings).await;
+
     // 3. Durable settings, as JSON beside the database.
     //
     // Redundant with the database snapshot when that succeeded, and that is
@@ -384,6 +391,164 @@ fn write_scripts_tree(
             0
         }
     }
+}
+
+/// Mark the scripts section incomplete when the staged snapshot indexes a
+/// script whose text did not reach the staged tree.
+///
+/// Only meaningful when both the snapshot and the copy succeeded: a failed
+/// section has already made the export incomplete and said why.
+async fn check_staged_script_bodies(
+    staging: &Path,
+    sections: &mut [ExportSection],
+    warnings: &mut Vec<String>,
+) {
+    let succeeded = |name: &str| sections.iter().any(|s| s.name == name && s.complete);
+    if !succeeded("database") || !succeeded("scripts") {
+        return;
+    }
+    let problem = match scripts_without_text(&staging.join(DATABASE_NAME), &staging.join(SCRIPTS_DIR)).await {
+        Ok(IndexedScripts { missing, .. }) if missing.is_empty() => return,
+        Ok(IndexedScripts { missing, .. }) => format!(
+            "{} {} no text (script.md) to export, so {} cannot be opened after a restore: {}",
+            missing.len(),
+            if missing.len() == 1 { "script has" } else { "scripts have" },
+            if missing.len() == 1 { "it" } else { "they" },
+            describe_scripts(&missing)
+        ),
+        Err(err) => format!("could not check that every script's text was exported: {err}"),
+    };
+    warnings.push(problem.clone());
+    if let Some(section) = sections.iter_mut().find(|s| s.name == "scripts") {
+        section.complete = false;
+        section.problem = Some(problem);
+    }
+}
+
+/// One script a database indexes: its id (the folder name) and its title.
+type IndexedScript = (String, String);
+
+/// What a database indexes, measured against a scripts tree.
+struct IndexedScripts {
+    /// Every script row.
+    total: u32,
+    /// The rows whose canonical text is not in the tree, by title.
+    missing: Vec<IndexedScript>,
+}
+
+/// The scripts `database` indexes, and which of them have no canonical text
+/// at `<scripts_root>/<id>/script.md`.
+///
+/// The database is opened read-only AND immutable: it is a file inside an
+/// export (or a staged one), and SQLite must not leave `-wal`, `-shm` or
+/// `-journal` files beside it — a restore refuses any file its manifest does
+/// not list, and a check that put one there would break the export it checked.
+///
+/// A failure to open or query is an error, never an empty library: a database
+/// that cannot say what it indexes cannot vouch for a backup.
+async fn scripts_without_text(
+    database: &Path,
+    scripts_root: &Path,
+) -> Result<IndexedScripts, String> {
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+    use sqlx::{ConnectOptions, Connection, Row};
+
+    let mut connection: SqliteConnection = SqliteConnectOptions::new()
+        .filename(database)
+        .create_if_missing(false)
+        .read_only(true)
+        .immutable(true)
+        .connect()
+        .await
+        .map_err(|e| e.to_string())?;
+    let rows = sqlx::query("SELECT id, title FROM scripts ORDER BY title COLLATE NOCASE, id")
+        .fetch_all(&mut connection)
+        .await;
+    /*
+     * One connection, closed and awaited here rather than a pool. A pool's
+     * `close()` can return while the connection is still on its way back to
+     * it, and on Windows SQLite holds its file without delete sharing — so the
+     * restore's later copy, or the export's rename, could meet a handle this
+     * check had already finished with.
+     */
+    let closed = connection.close().await;
+    let rows = rows.map_err(|e| e.to_string())?;
+    closed.map_err(|e| e.to_string())?;
+
+    let folders = real_entries(scripts_root);
+    let mut missing = Vec::new();
+    for row in &rows {
+        let id: String = row.try_get("id").map_err(|e| e.to_string())?;
+        let title: String = row.try_get("title").map_err(|e| e.to_string())?;
+        if !has_canonical_text(scripts_root, &folders, &id) {
+            missing.push((id, title));
+        }
+    }
+    Ok(IndexedScripts { total: rows.len() as u32, missing })
+}
+
+/// The entries of `dir` by their exact names, each with its own type — links
+/// are reported as links, never as what they point at. Empty when `dir` is not
+/// a real directory.
+fn real_entries(dir: &Path) -> std::collections::HashMap<std::ffi::OsString, std::fs::FileType> {
+    let is_real_dir = std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir());
+    if !is_real_dir {
+        return std::collections::HashMap::new();
+    }
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| Some((entry.file_name(), entry.file_type().ok()?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether `<scripts_root>/<id>/script.md` is text the app can open: an id the
+/// app accepts, and real directories down to a regular file, by exact name.
+///
+/// Every level is checked without following links, because `copy_tree` skips
+/// symbolic links — a script folder that is a link to a folder holding a
+/// perfectly good `script.md` would verify here and arrive as nothing. Names
+/// are matched exactly rather than looked up, because an export may sit on a
+/// case-insensitive volume: `SCRIPT.MD` would be found there and restored
+/// under that name onto a volume where the app looks for `script.md`. And an
+/// id that is not a canonical UUID is skipped by the app's own reconciliation,
+/// so its script cannot be opened whatever is on disk.
+fn has_canonical_text(
+    scripts_root: &Path,
+    folders: &std::collections::HashMap<std::ffi::OsString, std::fs::FileType>,
+    id: &str,
+) -> bool {
+    use crate::scripts::ScriptId;
+
+    let Ok(script_id) = ScriptId::parse(id) else {
+        return false;
+    };
+    let name = std::ffi::OsStr::new(script_id.as_str());
+    if !folders.get(name).is_some_and(|kind| kind.is_dir()) {
+        return false;
+    }
+    real_entries(&scripts_root.join(name))
+        .get(std::ffi::OsStr::new("script.md"))
+        .is_some_and(|kind| kind.is_file())
+}
+
+/// "“Keynote” (3f2c…), “Opening” (9a1b…)", every script named in full: the
+/// list is what tells the user which ones to go and find.
+fn describe_scripts(scripts: &[IndexedScript]) -> String {
+    scripts
+        .iter()
+        .map(|(id, title)| {
+            if title.trim().is_empty() {
+                format!("untitled ({id})")
+            } else {
+                format!("“{}” ({id})", title.trim())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 async fn write_settings_document(
@@ -590,11 +755,9 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
         ));
     }
 
-    verify_export_contents(export_root, &manifest)?;
-
-    let scripts_in_export = std::fs::read_dir(export_root.join(SCRIPTS_DIR))
-        .map(|entries| entries.count())
-        .unwrap_or(0) as u32;
+    // Counted from the exported database's rows, each now known to have its
+    // text: a folder count would include a folder no script owns.
+    let scripts_in_export = verify_export_contents(export_root, &manifest).await?;
 
     // Absolute, so the next launch can find it whatever the working directory
     // is by then.
@@ -708,7 +871,7 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             "The export scheduled for restore is marked incomplete; nothing was changed.",
         ));
     }
-    verify_export_contents(&export_root, &manifest)?;
+    verify_export_contents(&export_root, &manifest).await?;
     // Checked present by `verify_export_contents`; it lands under today's name.
     let exported_database = exported_database_name(&manifest)
         .ok_or_else(|| AppError::Internal("a verified export names no database".into()))?;
@@ -1331,6 +1494,14 @@ fn read_and_validate_manifest(export_root: &Path) -> Result<ExportManifest, AppE
     Ok(manifest)
 }
 
+/// The name the database carries in this export: today's, or the one an
+/// export from before the rename used.
+fn exported_database_name(manifest: &ExportManifest) -> Option<&'static str> {
+    [DATABASE_NAME, LEGACY_DATABASE_NAME]
+        .into_iter()
+        .find(|name| manifest.files.iter().any(|file| file.path == *name))
+}
+
 /// Everything the restore is about to copy must be listed, intact, and inside
 /// the export.
 ///
@@ -1345,15 +1516,12 @@ fn read_and_validate_manifest(export_root: &Path) -> Result<ExportManifest, AppE
 /// but `settings.json` would let an unchecksummed database and any number of
 /// extra script files through, which is the shape of a hostile or damaged
 /// export rather than a hypothetical.
-/// The name the database carries in this export: today's, or the one an
-/// export from before the rename used.
-fn exported_database_name(manifest: &ExportManifest) -> Option<&'static str> {
-    [DATABASE_NAME, LEGACY_DATABASE_NAME]
-        .into_iter()
-        .find(|name| manifest.files.iter().any(|file| file.path == *name))
-}
-
-fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Result<(), AppError> {
+///
+/// And whole: every script the exported database indexes has its text in the
+/// exported tree. An export written before the exporter checked that (#446)
+/// says `complete: true`, lists only the files that existed and verifies
+/// cleanly, and restoring it puts back a script that cannot be opened.
+async fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Result<u32, AppError> {
     if manifest.files.is_empty() {
         return Err(AppError::invalid_input(
             "That export's manifest lists no files, so there is nothing to verify or restore.",
@@ -1421,7 +1589,31 @@ fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Resu
             )));
         }
     }
-    Ok(())
+
+    // Whole: every script the database indexes has its text. The database is
+    // read in place, immutably, so the check adds no file to the export.
+    let database = exported_database_name(manifest)
+        .ok_or_else(|| AppError::Internal("a verified export names no database".into()))?;
+    let IndexedScripts { total, missing } =
+        scripts_without_text(&export_root.join(database), &export_root.join(SCRIPTS_DIR))
+            .await
+        .map_err(|e| {
+            AppError::invalid_input(format!(
+                "That export's database could not be read to check its scripts ({e}), so it \
+                 will not be restored."
+            ))
+        })?;
+    if !missing.is_empty() {
+        return Err(AppError::invalid_input(format!(
+            "That export is missing the text of {} {} — restoring it would bring back {} that \
+             cannot be opened, so it will not be restored: {}",
+            missing.len(),
+            if missing.len() == 1 { "script" } else { "scripts" },
+            if missing.len() == 1 { "a script" } else { "scripts" },
+            describe_scripts(&missing)
+        )));
+    }
+    Ok(total)
 }
 
 /* ----------------------------------------------------------------- rebuild */

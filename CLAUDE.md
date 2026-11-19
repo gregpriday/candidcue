@@ -1,13 +1,17 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) and every other coding
+agent working in this repository; `AGENTS.md` points here. Human contributors
+start with `CONTRIBUTING.md`.
 
 ## What this is
 
 A voice-following teleprompter. You write Markdown in the **control** window;
 pressing Present reshapes that window into the prompter on your chosen display
-(single-window is the supported production path — `src/control/lib/start-take.ts`
-— with the separate **stage** window kept for preview and compatibility); an
+or into a reading window (single-window is the production path —
+`src/control/lib/start-take.ts` — and
+the separate **stage** window is opened only for Settings' preview and "Show
+test" and for Calibrate); an
 on-device model transcribes your speech; a deterministic Rust engine decides
 where in the script you are and scrolls the prompter to match. Nothing on the glass is model-generated
 — the model only transcribes, and it never leaves the machine.
@@ -18,18 +22,18 @@ Tauri 2 + Svelte 5 (runes) + TypeScript frontend, Rust core, SQLite.
 
 ```bash
 pnpm install
-pnpm dev                # the real app: control + stage windows, on the first
+pnpm dev                # the real app (the control window), on the first
                         # free port from 1420 up (scripts/dev.mjs)
 pnpm tauri dev          # the same app, but pinned to 1420 — fails if it is taken
 pnpm dev:vite           # frontend only in a browser (uses the mock backend)
 
 pnpm check              # svelte-check — the authoritative typecheck
-pnpm test               # node vitest (~2000 tests): src/**/*.test.ts + tests/{unit,integration,e2e}
+pnpm test               # node vitest (the bulk): src/**/*.test.ts + tests/{unit,integration,e2e}
 pnpm test:dom           # jsdom vitest, tests/dom/** only (separate config)
 pnpm test:all           # both vitest projects
 pnpm test:e2e           # Playwright against the Vite dev server
-cd src-tauri && cargo test
-cd crates && cargo test  # separate workspace: cc-align / cc-stt / cc-bench
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path crates/Cargo.toml  # separate workspace: cc-align / cc-stt / cc-bench
 ```
 
 Single test file / single test:
@@ -77,13 +81,10 @@ slot, held small (no incremental, line-table debuginfo) and cleared past a cap
 by `.spotexec/cargo.sh`. Editing `.spotexec/Dockerfile` rebuilds the image on
 the next run; the scripts beside it do not.
 
-Opt-in live tests (skip cleanly without the flag + key, so the normal suite
-never hits the network):
-
-```bash
-# (The live-STT smoke test is gone: transcription is on-device, so cc-bench
-# replays real speech through the real recogniser offline instead.)
-```
+No test reaches a remote host (the model downloader's tests serve their own
+archive over loopback). Transcription is on-device, so there is no live smoke
+test: `cc-bench capture-local` runs fixture audio through the real recogniser,
+and Tier B/C replay the captured event logs offline.
 
 Alignment benchmarks (`bench/README.md` has the full story):
 
@@ -95,12 +96,15 @@ cargo run --release -p cc-bench -- inspect starter skip_forward   # per-event de
 # Tier C: the RENDERED stage — opacity and placement, not engine position.
 cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-local --layouts 60hz --label mine
 cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-local --focus-lead 0   # as shipped
-cargo run --release -p cc-bench -- difficulty | metamorphic | robustness --budget 2000
+cargo run --release -p cc-bench -- difficulty
+cargo run --release -p cc-bench -- metamorphic
+cargo run --release -p cc-bench -- robustness --budget 2000
 ```
 
 `bench/runs*/` `events.jsonl` and `gold.json` are in **Git LFS**. Without a fetch
-they are ~130-byte pointers and a Tier B/C run simply finds no events rather than
-failing loudly — check `git lfs ls-files` first if a corpus looks empty.
+they are ~130-byte pointers and a replay fails — on `gold.json` with a bare JSON
+parse error that does not name the file, on `events.jsonl` with one that does.
+Run `git lfs pull` (`git lfs ls-files` lists what should be there).
 
 There is no lint script and no ESLint/Prettier config in the tree. Conventions:
 single quotes, no Prettier. Do **not** run `cargo fmt` — the tree predates it
@@ -140,7 +144,8 @@ to break and both have bitten:
   never unconditionally to control — otherwise ⌘W with Settings in front closes
   the document window behind it. Over a window that answers no commands (the
   stage), only the handful in `CONTEXT_FREE_COMMANDS` are forwarded and the
-  rest are dropped;
+  rest are dropped. The one deliberate exception is Help › Check for Updates…,
+  which always goes to control, where the update notice lives;
 - the menu's enabled state is pushed by whichever window is in front, and
   re-pushed on focus (`installMenuStateOnFocus`), because one menu is shared by
   two windows and the last push wins.
@@ -161,10 +166,10 @@ so the credential store went with it.
 
 Speech-to-text is `src-tauri/src/speech/`: a sherpa-onnx streaming Zipformer
 transducer (x-asr 480 ms, INT8, punctuated) over ~161 MB of ONNX graphs. The
-graphs are **not in the bundle** — `bundle.resources` is empty and a stock build
-ships zero model bytes. `cc_stt::local::ModelFiles::detect` works out how a
-model archive names its graphs — upstream is not consistent and there is no
-manifest. Renderer captures PCM → `push_transcription_audio` over IPC → a
+graphs are **not in the bundle** — `bundle.resources` carries only the licence
+and notices files, and a stock build ships zero model bytes.
+`cc_stt::local::ModelFiles::detect` works out how a model archive names its
+graphs — upstream is not consistent and the archive carries no manifest. Renderer captures PCM → `push_transcription_audio` over IPC → a
 dedicated OS thread owns the decoder → frames come back as events. The thread is
 not optional: ONNX inference is blocking CPU work, and on the async runtime it
 would starve every other command for the length of a take.
@@ -217,20 +222,30 @@ matched there.
 One snapshot field is **dim-only and must stay that way**: `provisionalToken` is
 a reversible frontier fed by fuzzy/phonetic evidence, and it is allowed to lead
 precisely because shading can be taken back and scroll cannot. In the renderer it
-reaches `cursorTokenIndex` and nothing else; wiring it into motion, `observed` or
-`confirmed` would let a spelling guess move the document. `provisionalRetracted`
+reaches the dim frontier (`cursorTokenIndex` and its retraction latch in
+`ScriptLayer.svelte`), which also places the Wash cue's phrase highlight, and
+never a scroll target; wiring it into motion, `observed` or `confirmed` would
+let a spelling guess move the document. `provisionalRetracted`
 is a **one-shot** — the engine clears it after the snapshot that carries it, so
 treat it as an event, not a state. As of 2026-07-30 the gate never opens on the
 recorded corpus (`bench/README.md`, "The reversible dim frontier") — the
 mechanism is proven only in `cc-bench`'s own harness, so do not describe it as
 working on real takes.
 
-### The motion path skips control
+### One snapshot, two consumers
 
-Rust publishes alignment snapshots **directly to the stage window**. Control is
-out of the motion path entirely and receives its own copy only so it can report
-on what happened — which is why a take summary can never disagree with what the
-presenter saw.
+`align/mod.rs::publish` emits every alignment snapshot twice: to the stage
+window (`stage://alignment-snapshot`) and to control (`align://snapshot`). The
+production take renders entirely in the control window — `Live.svelte` embeds
+`StageApp` in the control window and hands it control's own copy
+(`$session.snapshot`) through its `embedded` prop (an `EmbeddedStageBridge`),
+so motion runs in the control webview. The separate stage window, which still
+receives the direct emit, exists only for Settings' preview and "Show test" and
+for Calibrate (a preview can still be open beside a take, independently).
+Motion and the take summary share control's alignment feed: the renderer
+validates and animates it, and the summary reports confirmed progress from the
+same snapshots. (An Auto-scroll take that reaches the end is recorded through a
+separate `auto_scroll_end` intent, not a snapshot.)
 
 Stage-side motion lives in `src/stage/motion/`: a persistent jerk-limited
 follower (`controller.ts`, pure — the caller supplies `dt`, no rAF, no DOM) fed
@@ -274,7 +289,8 @@ Two separate things, both in `src/styles/tokens.css`:
 
 ### How a prompter take is sized
 
-A prompter fills the panel pinned in Settings › Prompter — Present moves the
+A prompter fills the panel pinned in Settings › Prompter display and rigs —
+Present moves the
 control window onto it (`windows/present.rs`; the current monitor is the
 fallback when nothing is pinned or the pin is unplugged) — and its type is
 sized by **visual angle**, not pixels (`src/shared/optics.ts`). The profile that
@@ -284,7 +300,9 @@ the **automatic** profile, rebuilt from the landed panel on every Present
 (`shared/optical-discovery.ts::automaticProfile` — hardware table for the two
 Elgato models, otherwise the panel's own EDID millimetres, which Rust reads
 via `windows/panel_size.rs` into `DisplayDescriptor.physicalSizeMm`); else the
-flat 64px fallback, which only an unidentifiable panel gets now. The automatic
+flat fallback font size from Settings (64px by default), which only a panel
+with no usable optics gets now. (A rig can also pin a CSS-pixel size under
+Advanced, which overrides the visual-angle sizing.) The automatic
 profile is never stored — its `rigName` is `AUTOMATIC_RIG_NAME` (a name the
 wizard refuses) and that is how the appearance sheet and Live tell it from a
 calibrated rig. A stored rig that is not chosen is deliberately never adopted.
@@ -293,13 +311,16 @@ Prompter" check never fires there; the 9-inch is identified by its 1024x600
 grid and everything else by millimetres. EDID lies in known ways, so
 `plausible_panel_mm` refuses `0x0`, the `160x90` placeholder, any size whose
 aspect disagrees with the pixel grid, and the 72-DPI estimate CoreGraphics
-substitutes when a display has no EDID; `cargo test --lib windows::panel_size --
---ignored --nocapture` prints what the connected panels actually report.
+substitutes when a display has no EDID;
+`cargo test --manifest-path src-tauri/Cargo.toml --lib windows::panel_size -- --ignored --nocapture`
+prints what the connected panels actually report.
 
 ### Stage event protocol
 
-`src/shared/contracts/stage.ts` is the complete surface between control/Rust and
-the stage. Event names use the `stage://` convention and are mirrored verbatim
+`src/shared/contracts/stage.ts` is the complete event surface between
+control/Rust and the stage. (In a take, `Live.svelte` also drives the embedded
+stage through the `EmbeddedStageBridge` prop: alignment, follow pause, blanking,
+exit.) Event names use the `stage://` convention and are mirrored verbatim
 in `src-tauri/src/windows/mod.rs::events`; a Rust test `include_str!`s the
 TypeScript file to assert the two stay in sync, so **keep the string literals
 grep-able**.
@@ -324,19 +345,27 @@ absent (plain-browser dev), so inside Tauri all errors propagate as real
 
 ```
 src/shared/       compiler (markdown/), contracts/, optics, line-break — no I/O, node-testable
-src/control/      routes/ (Editor, Live, Settings, Calibrate, Library, Welcome),
+src/control/      routes/ (Editor, Live, Settings, Calibrate, Library, Welcome,
+                  Recovery),
                   stores/ (session.ts and smooth-follow.ts are the big ones),
                   services/ (ipc, voice-session, stage-envelope, audio/, stt/)
-src/stage/        StageApp/StageDock, motion/, renderer/
+src/stage/        StageApp/StageDock, motion/, renderer/ — embedded in Live for a
+                  take, and the separate stage window's page
+src/preferences/  the Settings window's entry (hosts src/control/routes/Settings
+                  and Calibrate)
+src/identify/     the "which panel is display 2?" overlay
 src/workers/      compiler Web Worker
 src-tauri/src/    app.rs (command registry), commands/, windows/, align/, speech/,
                   coordinator/ (window generations, session, stage handshake),
-                  database/, scripts/, assets/, sessions/, settings/
-src-tauri/models/ dev-only recogniser fetch target (gitignored, never bundled)
+                  database/, scripts/, assets/, sessions/, settings/, backup/,
+                  updater.rs, legacy_data.rs (the CandidCue data-folder copy)
+src-tauri/models/ the model catalogue (compiled into Rust) and attribution; the
+                  downloaded model files are gitignored and never bundled
 crates/           cc-align (engine), cc-stt (STT protocol + on-device
                   recogniser), cc-bench
 bench/            fixture scripts, immutable captured replay runs, results
-docs/             specifications
+docs/             current notes (network inventory, updates, release runbook,
+                  reader mode, rig test protocol); archive/ holds retired specs
 ```
 
 ## Testing layers, and what each proves
@@ -485,7 +514,9 @@ Wayland, or on two real monitors. What is different there:
   into place before the builder (a read-only `VACUUM INTO` snapshot of the
   database, then the logs and model seals renamed inside the copy), under an
   OS file lock the process then holds; a copied folder carries
-  `.candidcue-folder-copied`, and an unmarked one is retried next launch. A
+  `.candidcue-folder-copied`, and an unmarked one is retried next launch unless
+  the new folder already holds scripts or a recovery under way (that work is
+  kept, and the copy is not made). A
   `candidcue.sqlite3` export and a `.candidcue` bundle still restore and import. The old name survives on purpose in a few places: the SQL
   migrations (sqlx checksums them, so never edit one), the bench corpora and
   their fixture scripts (the recorded audio says "CandidCue"), `docs/archive/`,
@@ -496,19 +527,17 @@ Wayland, or on two real monitors. What is different there:
   script can be opened at all (production was unaffected, which hid it). The
   resolver throws rather than silently skipping the alias — don't "fix" that by
   making it optional.
-- `docs/` specs describe an earlier design that included live coaching and an
-  OpenAI semantic sidecar. Both were removed. Where a spec mentions coaching, a
-  second model, or OpenAI, **the code is the authority** — see
-  `src-tauri/src/speech/` for what actually happens now. The same applies to
-  every mention of Inworld, the hosted STT service the app used to stream takes
-  to: **no code talks to it and none can**. What survives is measurement — the
+- `docs/archive/` holds the specifications the app was first designed from,
+  kept because code comments still cite their `§` numbers. They describe live
+  coaching, an OpenAI semantic sidecar and a two-window take, all removed;
+  where one disagrees with the code, **the code is the authority**. The same
+  applies to every mention of Inworld, the hosted STT service the app used to
+  stream takes to: **no code talks to it and none can**. What survives is
+  measurement — the
   frozen corpora under `bench/runs/` and `bench/runs-inworld-new/` that the
   on-device model was judged against, plus the prose in `bench/REPORT.md` that
   records the comparison. Those replay offline through `cc-stt`'s own event
   protocol; nothing re-captures them.
-- Two known honest gaps, documented in the README: `pauseLocation` is not
-  supplied to the cadence lane (choppy-delivery detection cannot fire), and the
-  variety score runs in its documented degraded mode.
 - The asset-protocol scope in `tauri.conf.json` allows only
   `$APPDATA/scripts/*/assets/*`, with a `deny` floor over script bodies,
   revisions, the database and logs. `deny` beats both `allow` and any runtime

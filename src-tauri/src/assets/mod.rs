@@ -435,6 +435,65 @@ impl<'a> AssetMentions<'a> {
     }
 }
 
+/// The app's own images a script's text mentions (#450): every SHA-256 stem
+/// in it, read the way [`AssetMentions`] reads a URL, in lower case, first
+/// mention first, each with every image extension written after it where one
+/// can be read (`.png`, `\.png`, `&period;png`).
+///
+/// This is the export's selection turned round. Markdown export copies the
+/// files whose stem the text mentions into a folder beside it, and every file
+/// the app stores is named after its hash (`import_image`), so the stems the
+/// text mentions are exactly the files an import should look for there. It
+/// reads the text, not its Markdown structure, for the reason `AssetMentions`
+/// gives: a reference definition whose destination sits on the next line is
+/// still a mention, and a name in a code block costs one extra file, never a
+/// lost one.
+///
+/// Reading a URL drops whitespace, so what follows an extension runs on into
+/// the next words (`png` then `Next paragraph` reads `pngnextparagraph`): an
+/// extension counts when it starts what follows the dot.
+pub(crate) fn hash_named_images(source: &str) -> Vec<(String, Vec<&'static str>)> {
+    const EXTENSIONS: [&str; 4] = ["png", "jpg", "gif", "webp"];
+    let text = as_a_url_reads(source);
+    let bytes = text.as_bytes();
+    let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    let mut found: Vec<(String, Vec<&'static str>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if !hex(bytes[at]) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && hex(bytes[at]) {
+            at += 1;
+        }
+        if at - start != 64 {
+            continue;
+        }
+        let stem = &text[start..at];
+        let after = &text[at..];
+        let extension = ["\\.", ".", "&period;"]
+            .into_iter()
+            .find(|dot| after.starts_with(dot))
+            .and_then(|dot| {
+                let rest = &after[dot.len()..];
+                EXTENSIONS.into_iter().find(|e| rest.starts_with(e))
+            });
+        let i = *index.entry(stem.to_string()).or_insert_with(|| {
+            found.push((stem.to_string(), Vec::new()));
+            found.len() - 1
+        });
+        if let Some(extension) = extension {
+            if !found[i].1.contains(&extension) {
+                found[i].1.push(extension);
+            }
+        }
+    }
+    found
+}
+
 /// `source` with numeric character references decoded, whitespace and
 /// control characters removed, and ASCII in lower case. `&Tab;` and
 /// `&NewLine;` are the named references that decode to a character this then

@@ -35,6 +35,8 @@
   import { speechModelReadiness } from './stores/speech-model-readiness';
   import TakeReadinessSheet from './components/TakeReadinessSheet.svelte';
   import UpdateNotice from './components/UpdateNotice.svelte';
+  import { getLegacyLibraryNotice } from './services/legacy-library';
+  import { setLegacyLibraryNotice } from './stores/legacy-library';
   import { createUpdateController } from './stores/updates';
   import { checkForUpdate, installUpdate, listenForUpdateProgress } from './services/updates';
   import {
@@ -97,7 +99,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
   import { pendingConfirm, requestConfirm } from './stores/confirm';
-  import { editor, editorHasUnsavedWork, saveNow } from './stores/editor';
+  import { editor, editorHasUnsavedWork, saveDocument, saveNow } from './stores/editor';
   import {
     duplicateScript,
     library,
@@ -129,7 +131,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     openSyntaxReference,
     syntaxReferenceOpen,
   } from './stores/syntax-reference';
-  import { showToast } from './stores/toasts';
+  import { dismissToastByKey, showToast } from './stores/toasts';
 
   let ready = $state(false);
   let shortcutsOpen = $state(false);
@@ -171,6 +173,17 @@ import { rememberReaderFrame } from './lib/reader-frame';
     bringToFront: () => void focusAppWindow('control'),
   });
   const updateNotice = updates.notice;
+
+  /** How long the boot waits for the CandidCue library notice (#454). */
+  const LEGACY_NOTICE_WAIT_MS = 2000;
+  const LEGACY_NOTICE_TOAST = 'legacy-library';
+
+  // The editor-launch pointer is for the desk: a take takes it down.
+  $effect(() => {
+    if ($session.active || $takeStarting || $presentingPhase !== 'off') {
+      dismissToastByKey(LEGACY_NOTICE_TOAST);
+    }
+  });
   let stopUpdateSchedule: (() => void) | null = null;
   /**
    * Files are over the window right now (§20.2).
@@ -683,6 +696,17 @@ import { rememberReaderFrame } from './lib/reader-frame';
         setPresentingPhase('off');
 
         /*
+         * Whether the CandidCue library was left behind at launch (#454).
+         * Asked beside the boot status. The app waits for it before its first
+         * route, so Welcome has it on its first paint: the sample there is a
+         * script, and a script here is what ends the automatic copy. The
+         * recovery screen does NOT wait for it: nothing may stand between a
+         * damaged database and its repairs. A notice that cannot be read is
+         * no notice.
+         */
+        const legacyNotice = getLegacyLibraryNotice().catch(() => null);
+
+        /*
          * Did the database come up? Asked FIRST, before anything reads it.
          *
          * `database::init` failing used to abort Tauri's setup hook, which
@@ -711,7 +735,30 @@ import { rememberReaderFrame } from './lib/reader-frame';
         if (!boot.databaseReady) {
           if (disposed) return;
           recoveryStatus = boot;
+          void legacyNotice.then((notice) => {
+            if (!disposed) setLegacyLibraryNotice(notice);
+          });
           return;
+        }
+        /*
+         * Bounded: the notice is worth a short wait, never a launch. A reply
+         * that does not come in time is treated as no notice.
+         */
+        let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+        const legacy = await Promise.race([
+          legacyNotice,
+          new Promise<null>((resolve) => {
+            noticeTimer = setTimeout(() => resolve(null), LEGACY_NOTICE_WAIT_MS);
+          }),
+        ]);
+        clearTimeout(noticeTimer);
+        if (disposed) return;
+        setLegacyLibraryNotice(legacy);
+        // A reply that missed the deadline still says it, wherever the user is.
+        if (legacy === null) {
+          void legacyNotice.then((late) => {
+            if (!disposed && late !== null) setLegacyLibraryNotice(late);
+          });
         }
 
         const status = await initAppStatus();
@@ -795,6 +842,22 @@ import { rememberReaderFrame } from './lib/reader-frame';
             // log still hold the report.
           });
 
+        /*
+         * The CandidCue library notice is drawn by Welcome and the Library
+         * (#454). A launch that opens a script instead is pointed there once,
+         * by a notice that goes by itself: one that stayed would follow the
+         * user into a take, and an action here would land on whichever
+         * Library view was last open, Trash included, where the card is not.
+         */
+        const firstRoute = get(route).name;
+        if (legacy !== null && firstRoute !== 'welcome' && firstRoute !== 'library') {
+          showToast(
+            'Your CandidCue scripts are not in this library: All Scripts in the Library says where they are.',
+            'info',
+            { durationMs: 12_000, key: LEGACY_NOTICE_TOAST },
+          );
+        }
+
         if (settingsWarning !== null) {
           showToast(
             `Speaking Glass could not load your settings, so this launch is using defaults. ${settingsWarning}`,
@@ -841,7 +904,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
          */
         name: 'flush-editor',
         run: async () => {
-          await saveNow();
+          // With the title still being typed, if it is (#449): quitting moves
+          // no focus, so nothing else would commit it.
+          await saveDocument();
           if (!editorHasUnsavedWork()) return;
 
           const { scriptId, source } = get(editor);
@@ -1012,7 +1077,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   const commandActions: CommandActions = {
     newScript: () => void createAndOpenScript('new'),
     importMarkdown: () => void importMarkdown(),
-    save: () => void saveNow(),
+    save: () => void saveDocument(),
     duplicate: (scriptId) => void duplicateScript(scriptId),
     rename: () => dispatchRouteCommand('file.rename-script'),
     exportMarkdown: (scriptId) => {

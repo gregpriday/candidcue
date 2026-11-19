@@ -137,10 +137,12 @@ describe('the shell wires the steps that matter', () => {
     expect(take).toBeLessThan(frame);
   });
 
-  it('actually calls saveNow, not merely names a step after it', () => {
+  it('actually saves, not merely names a step after it', () => {
     const steps = appSource.slice(appSource.indexOf('installShutdownHandshake('));
     const flushStep = steps.slice(steps.indexOf("name: 'flush-editor'"), steps.indexOf("name: 'end-take'"));
-    expect(flushStep).toMatch(/saveNow\(\)/);
+    // `saveDocument`, not `saveNow`: a quit moves no focus, so it is the flush
+    // that has to take a title the caret is still in (#449).
+    expect(flushStep).toMatch(/await saveDocument\(\)/);
   });
 
   it('parks the text somewhere when the save did not actually land', () => {

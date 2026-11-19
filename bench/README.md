@@ -481,7 +481,9 @@ numbers: the corridor is a proposal with evidence behind it, and moving the
 motion path is the one change nothing on this machine can verify.
 
 `--focus-lead 0` scores the stage as it actually ships, which is how to price the
-proposal. On `runs-local` at the `60hz` layout:
+proposal. On `runs-local` at the `60hz` layout, as measured on 2026-07-30 over
+all 21 directories — the three `fuzzy-follow` diagnostics included, so these are
+not the language gate's core-only numbers:
 
 | | as shipped | + 3-atom corridor |
 |---|---|---|
@@ -687,7 +689,15 @@ engines, named `family__plan__engine`. The count is fixed rather than a floor
 because `live.dim_never` is an absolute count, and 1-in-18 against 1-in-9 is not
 a comparison. Diagnostic fixtures may sit alongside the core — English carries
 three `fuzzy-follow` runs, so `bench/runs-local` has 21 directories for an
-18-run core — but are excluded from scoring.
+18-run core — but are excluded from scoring: from the fixture count AND from
+every gated value. Captured `tier-b` and `tier-c` write a `scoring` table beside
+their ordinary one, aggregated over the core fixtures alone, and the gate reads
+only that. It has to be computed while the tier runs, because Tier C's
+`time.lag_p50` and `recover.readable_p50` pool raw samples a saved result does
+not keep. The difference is not
+small: the three English diagnostics score ~0 unread exposure and ~12% readable
+availability, so averaging them in took `gate.unread_never_spoken` from 3.067
+to 2.629 and `outcome.readable_availability` from 81.1% to 71.2%.
 
 The eight families are `brands`, `figures`, `longform`, `names`,
 `product-update`, `refrain`, `starter` and `technical`, and all eight must be
@@ -721,23 +731,36 @@ failure. A language is not required to match English — different model, differ
 recording — but it may not be materially worse on the axes that decide whether a
 presenter can use it.
 
-What the command actually checks: the corpus is 18 scoring runs covering all
-eight families, the Tier C evidence is the lone `60hz` layout, every gated metric
-is present and a possible measurement, and each clears its limit. What it does
+The English column is the 18 scoring fixtures of `bench/runs-local`, replayed at
+`ee5174fd` (2026-11-19) with `--layouts 60hz --focus-lead 0`. The first version
+of the bar was anchored to the same replays averaged over all 21 directories,
+which is how English came to fail its own safety row once the diagnostics were
+taken out: on the core it measured 3.385 then and 3.067 now, against a 3.0
+ceiling set from the diluted 2.903. The unread and availability limits were
+re-anchored with the proportional headroom the original bar chose (3.34% above
+English, 1.69% below); the other six anchors barely moved and their limits did
+not change.
+
+What the command actually checks: both results carry a scoring table, those
+tables cover the same 18 scoring runs (each once) across all eight families,
+both tiers were replayed under the same alignment config, the Tier C evidence is
+the lone `60hz` layout, every gated metric is present and a possible
+measurement, and each clears its limit. A result saved before scoring tables
+existed is refused; re-run the tier. What it does
 **not** check is in "Known gaps" below — most importantly, it takes the operator's
 word for which language produced the results.
 
 <!-- BEGIN LANGUAGE GATE TABLE (generated — see language_gate::render_bar_markdown) -->
 | Tier | Metric | English | Ship bar |
 |---|---|---:|---:|
-| Tier B | `live.ahead_worst` | 6.700 atoms | <= 7.000 |
-| Tier B | `live.within5` | 94.030 % | >= 90.000 |
+| Tier B | `live.ahead_worst` | 6.976 atoms | <= 7.000 |
+| Tier B | `live.within5` | 95.554 % | >= 90.000 |
 | Tier B | `live.dim_p50_ms` | 500.000 ms | <= 750.000 |
-| Tier B | `live.dim_never` | 1.000 count | <= 1.000 |
-| Tier C | `gate.unread_never_spoken` | 2.903 word·s | <= 3.000 |
-| Tier C | `outcome.readable_availability` | 71.200 % | >= 70.000 |
-| Tier C | `time.lag_p50` | 697.000 ms | <= 800.000 |
-| Tier C | `recover.readable_p50` | 2738.000 ms | <= 3000.000 |
+| Tier B | `live.dim_never` | 0.000 count | <= 1.000 |
+| Tier C | `gate.unread_never_spoken` | 3.067 word·s | <= 3.170 |
+| Tier C | `outcome.readable_availability` | 81.129 % | >= 79.760 |
+| Tier C | `time.lag_p50` | 708.542 ms | <= 800.000 |
+| Tier C | `recover.readable_p50` | 2737.500 ms | <= 3000.000 |
 <!-- END LANGUAGE GATE TABLE -->
 
 Judge depth, not frequency. `live.ahead_worst` is how far the display actually
@@ -783,8 +806,9 @@ and not in the product.
 - **`focus_lead_atoms` is not verifiable from a saved Tier C result.** The gate
   refuses anything other than a lone `60hz` layout, which catches a whole-sweep
   run, but `Layout` is not serialised — so a 60 Hz run made with a non-zero
-  focus lead would pass. That matters: focus lead moves
-  `outcome.readable_availability` from 71.2% to 75.8%.
+  focus lead would pass. That matters: focus lead moved
+  `outcome.readable_availability` from 71.2% to 75.8% (all 21 directories,
+  2026-07-30).
 - **`compute_weight` measures word length in UTF-8 bytes**, so an accented word
   reads as longer than it is and can cross the `>= 8` threshold early. Changing
   it would move English weights, so it is deferred rather than silently altered.

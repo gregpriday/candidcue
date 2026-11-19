@@ -88,6 +88,8 @@ commands.allow = [
   "reveal_data_folder",
   "write_unsaved_recovery",
   "get_startup_findings",
+  "get_legacy_library_notice",
+  "reveal_legacy_library",
   "clear_cache",
   "get_system_diagnostics",
   "export_support_bundle",

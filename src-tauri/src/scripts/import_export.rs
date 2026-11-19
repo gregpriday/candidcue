@@ -26,6 +26,10 @@ const MAX_BUNDLE_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_BUNDLE_ASSET_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_BUNDLE_TOTAL_BYTES: u64 = 600 * 1024 * 1024;
 const MAX_BUNDLE_FILE_COUNT: usize = 256;
+/// How many entries of the folder beside an imported Markdown file are listed
+/// to find its images (#450). Past that, names the text writes as images are
+/// looked up directly, a bounded number of times.
+const MAX_LISTED_BESIDE: usize = 4096;
 
 /// Already-authorized import parameters.
 ///
@@ -150,43 +154,51 @@ fn validate_declared_assets(
     }
 
     for (name, bytes) in actual {
-        let (stem, extension) = name
-            .rsplit_once('.')
-            .ok_or_else(|| AppError::validation("A bundle asset has no file extension."))?;
-        let extension = extension.to_ascii_lowercase();
-        if !ALLOWED_BUNDLE_ASSET_EXTENSIONS.contains(&extension.as_str()) {
-            return Err(AppError::validation(format!(
-                "The bundle contains an unsupported asset type: {name}"
-            )));
-        }
-        // Bind the name to the content: an entry called `<hash>.png` must
-        // actually hash to `<hash>`, so a bundle cannot ship one image under
-        // another's identity.
-        if stem.len() != 64 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(AppError::validation(format!(
-                "Bundle assets must be named after their content hash: {name}"
-            )));
-        }
-        if !sha256_hex(bytes).eq_ignore_ascii_case(stem) {
-            return Err(AppError::validation(format!(
-                "A bundle asset does not match its content hash: {name}"
-            )));
-        }
-        // And the bytes must really be the image type the extension claims.
-        let sniffed = crate::assets::sniff_mime(bytes)
-            .ok_or_else(|| AppError::validation(format!("{name} is not a supported image.")))?;
-        if crate::assets::extension_for_mime(sniffed) != extension {
-            return Err(AppError::validation(format!(
-                "{name} is not the image type its name claims."
-            )));
-        }
-        // Magic bytes are a four-byte prefix. The payload must also survive a
-        // real decode under dimension limits, so a bundle cannot drop a
-        // decompression bomb — or arbitrary bytes behind a PNG header — into a
-        // managed asset directory.
-        crate::assets::validate_image_payload(bytes, sniffed)
-            .map_err(|e| AppError::validation(format!("{name} is not a usable image.")).with_log(format!("{e}")))?;
+        validate_asset_image(name, bytes)?;
     }
+    Ok(())
+}
+
+/// What every imported image must be, whether it arrives in a bundle or
+/// beside a Markdown file (#450): named `<sha256>.<ext>` after its own bytes,
+/// for an image type the app decodes, and actually that image.
+fn validate_asset_image(name: &str, bytes: &[u8]) -> Result<(), AppError> {
+    let (stem, extension) = name
+        .rsplit_once('.')
+        .ok_or_else(|| AppError::validation("A bundle asset has no file extension."))?;
+    let extension = extension.to_ascii_lowercase();
+    if !ALLOWED_BUNDLE_ASSET_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(AppError::validation(format!(
+            "The bundle contains an unsupported asset type: {name}"
+        )));
+    }
+    // Bind the name to the content: an entry called `<hash>.png` must
+    // actually hash to `<hash>`, so a bundle cannot ship one image under
+    // another's identity.
+    if stem.len() != 64 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::validation(format!(
+            "Bundle assets must be named after their content hash: {name}"
+        )));
+    }
+    if !sha256_hex(bytes).eq_ignore_ascii_case(stem) {
+        return Err(AppError::validation(format!(
+            "A bundle asset does not match its content hash: {name}"
+        )));
+    }
+    // And the bytes must really be the image type the extension claims.
+    let sniffed = crate::assets::sniff_mime(bytes)
+        .ok_or_else(|| AppError::validation(format!("{name} is not a supported image.")))?;
+    if crate::assets::extension_for_mime(sniffed) != extension {
+        return Err(AppError::validation(format!(
+            "{name} is not the image type its name claims."
+        )));
+    }
+    // Magic bytes are a four-byte prefix. The payload must also survive a
+    // real decode under dimension limits, so a bundle cannot drop a
+    // decompression bomb — or arbitrary bytes behind a PNG header — into a
+    // managed asset directory.
+    crate::assets::validate_image_payload(bytes, sniffed)
+        .map_err(|e| AppError::validation(format!("{name} is not a usable image.")).with_log(format!("{e}")))?;
     Ok(())
 }
 
@@ -215,6 +227,235 @@ fn checked_import_source(path: &Path) -> Result<PathBuf, AppError> {
         return Err(AppError::unsafe_path("Only files can be imported."));
     }
     Ok(resolved)
+}
+
+/// The images a Markdown export left beside the file being imported (#450).
+///
+/// Markdown export writes the text unchanged and copies the images it shows
+/// into an `assets` folder next to it, under the same `<sha256>.<ext>` names
+/// the text uses. Importing the text alone used to report success with every
+/// one of those images unresolvable. So each image name the text mentions is
+/// looked for in that one folder, put through the checks a bundle image gets,
+/// and brought in; what cannot be is returned by its reference, for a warning.
+///
+/// The folder is the picked file's own `assets` and nothing else: the text
+/// chooses a file name, never a directory, and neither the folder nor the
+/// file may be a link. Limits are the bundle's.
+struct ImagesBeside {
+    found: Vec<(String, Vec<u8>)>,
+    omitted: Vec<String>,
+}
+
+fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
+    let mut found: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut omitted: Vec<String> = Vec::new();
+
+    let wanted = crate::assets::hash_named_images(source);
+    if !wanted.is_empty() {
+        let folder = source_path.parent().map(|parent| parent.join("assets"));
+        let canonical_folder = folder.as_deref().and_then(|folder| {
+            let meta = fs::symlink_metadata(folder).ok()?;
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                return None;
+            }
+            folder.canonicalize().ok()
+        });
+        // One listing of the folder answers which names are there, so a text
+        // full of hashes costs no lookups for files that are not. Only when
+        // the listing could not be read in full is a name the text writes as
+        // an image looked up directly, and a bounded number of times.
+        let mut listing_complete = false;
+        let listed: std::collections::HashSet<String> = match &canonical_folder {
+            Some(_) => folder
+                .as_deref()
+                .and_then(|folder| fs::read_dir(folder).ok())
+                .map(|entries| {
+                    let mut names = std::collections::HashSet::new();
+                    listing_complete = true;
+                    // Every entry counts toward the cap, named in UTF-8 or not.
+                    for (seen, entry) in entries.enumerate() {
+                        if seen >= MAX_LISTED_BESIDE {
+                            listing_complete = false;
+                            break;
+                        }
+                        let Ok(entry) = entry else {
+                            listing_complete = false;
+                            continue;
+                        };
+                        if let Ok(name) = entry.file_name().into_string() {
+                            names.insert(name);
+                        }
+                    }
+                    names
+                })
+                .unwrap_or_default(),
+            None => std::collections::HashSet::new(),
+        };
+        let mut unlisted_lookups = 0;
+        let mut read_total: u64 = 0;
+        for (stem, written) in wanted {
+            // Every file the export would have copied for this stem — it
+            // picked by stem alone — whatever extension the text wrote.
+            let mut brought_in: Vec<&str> = Vec::new();
+            for extension in ALLOWED_BUNDLE_ASSET_EXTENSIONS {
+                let name = format!("{stem}.{extension}");
+                if !listed.contains(&name) {
+                    if listing_complete
+                        || !written.contains(&extension)
+                        || unlisted_lookups >= MAX_BUNDLE_FILE_COUNT
+                    {
+                        continue;
+                    }
+                    unlisted_lookups += 1;
+                }
+                let (Some(folder), Some(canonical)) = (&folder, &canonical_folder) else { break };
+                if found.len() >= MAX_BUNDLE_FILE_COUNT || read_total >= MAX_BUNDLE_TOTAL_BYTES {
+                    break;
+                }
+                let limit = MAX_BUNDLE_ASSET_BYTES.min(MAX_BUNDLE_TOTAL_BYTES - read_total);
+                let (bytes, read) = read_image_beside(folder, canonical, &name, limit);
+                // Every byte read counts, kept or not: the limit is on what
+                // the import reads.
+                read_total += read;
+                if let Some(bytes) = bytes.filter(|b| validate_asset_image(&name, b).is_ok()) {
+                    found.push((name, bytes));
+                    brought_in.push(extension);
+                }
+            }
+            // A name the text wrote as an image resolves only under that
+            // name, so each one not brought in is reported. A bare hash with
+            // no extension is as likely a checksum in the prose, and is not.
+            for extension in &written {
+                if !brought_in.contains(extension) {
+                    omitted.push(format!("assets/{stem}.{extension}"));
+                }
+            }
+        }
+    }
+
+    // A local image under `assets/` that is not named the way the app names
+    // its own was never one of its exports, and is not imported, but the
+    // text still shows it, so it is named too.
+    let mut named: std::collections::HashSet<String> = omitted.iter().cloned().collect();
+    for reference in authored_asset_references(source) {
+        if named.insert(reference.clone()) {
+            omitted.push(reference);
+        }
+    }
+    ImagesBeside { found, omitted }
+}
+
+/// One image file from the folder beside an imported Markdown file, or `None`
+/// if it is missing, not a plain file, a link, outside that folder, or over
+/// `limit` bytes; with how many bytes were read either way. The checks are
+/// repeated on the opened handle, and the open neither follows a link nor
+/// waits on a fifo, so a file swapped in after the first look is refused
+/// rather than read.
+fn read_image_beside(
+    folder: &Path,
+    canonical_folder: &Path,
+    name: &str,
+    limit: u64,
+) -> (Option<Vec<u8>>, u64) {
+    let path = folder.join(name);
+    let Ok(meta) = fs::symlink_metadata(&path) else { return (None, 0) };
+    if meta.file_type().is_symlink() || !meta.is_file() || meta.len() > limit {
+        return (None, 0);
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT: open a link itself, so the type
+        // check below sees it, rather than whatever it points at.
+        options.custom_flags(0x0020_0000);
+    }
+    let Ok(file) = options.open(&path) else { return (None, 0) };
+    match file.metadata() {
+        Ok(opened) if !opened.file_type().is_symlink() && opened.is_file() => {}
+        _ => return (None, 0),
+    }
+    if path.canonicalize().ok().as_deref().and_then(Path::parent) != Some(canonical_folder) {
+        return (None, 0);
+    }
+    let mut bytes = Vec::new();
+    let outcome = file.take(limit + 1).read_to_end(&mut bytes);
+    let read = bytes.len() as u64;
+    if outcome.is_err() || read > limit {
+        return (None, read);
+    }
+    (Some(bytes), read)
+}
+
+/// `assets/…` image references in the text whose file is not named after a
+/// hash: written by hand, so never one of the app's exports. They resolve to
+/// nothing in an imported script, before #450 and after it. A reference
+/// inside a remote or absolute URL is not a local image at all.
+fn authored_asset_references(source: &str) -> Vec<String> {
+    const IMAGE_EXTENSIONS: [&str; 12] = [
+        "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "heic", "tif", "tiff", "ico",
+    ];
+    const DELIMITERS: &str = "()[]<>\"'`|*?#";
+    let mut references: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // One pass over the text's tokens, so the scan stays linear however the
+    // text is built.
+    for token in source.split(|c: char| c.is_whitespace() || DELIMITERS.contains(c)) {
+        let Some(at) = token.find("assets/") else { continue };
+        // `[p]:assets/x.png` is a definition, not a scheme.
+        let prefix = token[..at].trim_start_matches(':');
+        if prefix.contains(':') || prefix.starts_with('/') {
+            continue;
+        }
+        let reference = &token[at..];
+        let leaf = reference.rsplit('/').next().unwrap_or_default();
+        let Some((stem, extension)) = leaf.rsplit_once('.') else { continue };
+        if !IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        // The app's own names, however escaped, are `hash_named_images`'s.
+        let stem = stem.trim_end_matches('\\');
+        if stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        if seen.insert(reference) {
+            references.push(reference.to_string());
+        }
+    }
+    references
+}
+
+/// One warning naming the images an import left behind, and what keeps them.
+/// It is a toast, so it names a few, each cut short if it is long.
+fn omitted_images_warning(omitted: &[String]) -> Option<String> {
+    const NAMED: usize = 5;
+    const LONGEST: usize = 80;
+    if omitted.is_empty() {
+        return None;
+    }
+    let mut named = omitted
+        .iter()
+        .take(NAMED)
+        .map(|reference| match reference.char_indices().nth(LONGEST) {
+            Some((cut, _)) => format!("{}…", &reference[..cut]),
+            None => reference.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if omitted.len() > NAMED {
+        named.push_str(&format!(" and {} more", omitted.len() - NAMED));
+    }
+    Some(format!(
+        "{} image(s) could not be imported from the assets folder beside this file: {named}. \
+         Export the original script as a .speakingglass bundle to keep its images with it.",
+        omitted.len()
+    ))
 }
 
 /// Where an export may land. The parent directory is canonicalized, so a
@@ -321,6 +562,12 @@ pub async fn import_script(
             } else {
                 raw
             };
+            // Read before the script exists, so nothing here needs undoing.
+            let beside = if extension == "txt" {
+                ImagesBeside { found: Vec::new(), omitted: Vec::new() }
+            } else {
+                images_beside(&source_path, &source)
+            };
             let title = options.title.unwrap_or_else(|| title_from_path(&source_path));
             let summary = repo::create_script(
                 pool,
@@ -332,15 +579,27 @@ pub async fn import_script(
                 },
             )
             .await?;
-            // Spec §21.4: revision on first save after import.
             let new_id = ScriptId::parse(&summary.id)?;
-            let words = spoken_text(&source, SpokenTextOptions::default()).word_count();
-            repo::create_revision_snapshot(pool, paths, &new_id, &source, "import", words)
-                .await?;
-            let _ = locks; // imports of flat files need no per-script lock: the id is fresh
+            // The bundle's own install: images, their rows and the script's
+            // references in one transaction, then the import revision
+            // (spec §21.4), and the whole import rolled back if any of it fails.
+            if let Err(err) = install_bundle_assets(pool, paths, &new_id, &beside.found, &source).await {
+                if let Err(cleanup) =
+                    repo::force_delete_partial_import(pool, paths, locks, &new_id).await
+                {
+                    tracing::error!(
+                        script_id = new_id.as_str(),
+                        error = %cleanup,
+                        "could not roll back a failed file import"
+                    );
+                }
+                return Err(err);
+            }
+            // Installing changes nothing a summary carries, and a read here
+            // could fail after the import has fully landed.
             Ok(ImportResult {
                 script: summary,
-                warnings: Vec::new(),
+                warnings: omitted_images_warning(&beside.omitted).into_iter().collect(),
             })
         }
         BUNDLE_EXTENSION | LEGACY_BUNDLE_EXTENSION => {

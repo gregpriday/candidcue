@@ -22,6 +22,16 @@ export interface CompiledState {
    * the store has anything to say about the script it is asking about.
    */
   scriptId: string | null;
+  /**
+   * The exact text `result` was compiled from, or null with no result.
+   *
+   * A request superseded by a newer one never reaches the store, so the result
+   * in hand can be of older text than the editor holds — and `editorRevision`
+   * cannot say whether that text is the same again (an edit undone). A reader
+   * that needs "is this a compile of the text on screen?" compares this.
+   * Optional so a hand-built state need not spell it; absent reads as unknown.
+   */
+  source?: string | null;
 }
 
 const state = writable<CompiledState>({
@@ -30,6 +40,7 @@ const state = writable<CompiledState>({
   result: null,
   error: null,
   scriptId: null,
+  source: null,
 });
 export const compiled = { subscribe: state.subscribe };
 
@@ -46,14 +57,14 @@ export async function requestCompile(
   try {
     const output = await compileScript(scriptId, source, options);
     if (editorRevision !== latestRequestedRevision || output.stale) return; // superseded
-    state.set({ status: 'ready', editorRevision, result: output, error: null, scriptId });
+    state.set({ status: 'ready', editorRevision, result: output, error: null, scriptId, source });
   } catch (err) {
     if (editorRevision !== latestRequestedRevision) return;
-    state.set({ status: 'error', editorRevision, result: null, error: String(err), scriptId });
+    state.set({ status: 'error', editorRevision, result: null, error: String(err), scriptId, source: null });
   }
 }
 
 export function resetCompiled(): void {
   latestRequestedRevision = -1;
-  state.set({ status: 'idle', editorRevision: -1, result: null, error: null, scriptId: null });
+  state.set({ status: 'idle', editorRevision: -1, result: null, error: null, scriptId: null, source: null });
 }

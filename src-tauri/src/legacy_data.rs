@@ -103,12 +103,15 @@ pub enum Outcome {
     NotNeeded,
     /// The old folder was copied into place. `raw_database` says why the
     /// database was copied as files rather than snapshotted, when it was;
-    /// `replaced` is where a fresh folder from an earlier failed copy went.
+    /// `replaced` is where a fresh folder from an earlier failed copy went;
+    /// `unsynced` says why the folder holding it could not be synced after it
+    /// was published, which leaves the copy in place but not yet durable.
     Copied {
         from: PathBuf,
         to: PathBuf,
         raw_database: Option<String>,
         replaced: Option<PathBuf>,
+        unsynced: Option<String>,
     },
     /// The copy failed or was refused. Nothing was published, the old folder
     /// is intact, and the next launch tries again.
@@ -123,7 +126,7 @@ impl Outcome {
     pub fn log(&self) {
         match self {
             Outcome::NotNeeded => {}
-            Outcome::Copied { from, to, raw_database, replaced } => {
+            Outcome::Copied { from, to, raw_database, replaced, unsynced } => {
                 tracing::info!(
                     from = %from.display(),
                     to = %to.display(),
@@ -140,6 +143,12 @@ impl Outcome {
                     tracing::warn!(
                         path = %replaced.display(),
                         "the folder an earlier launch started on was set aside, not deleted"
+                    );
+                }
+                if let Some(reason) = unsynced {
+                    tracing::warn!(
+                        reason = %reason,
+                        "the copied folder is in place, but its parent folder could not be synced"
                     );
                 }
             }
@@ -159,7 +168,73 @@ impl Outcome {
             ),
         }
     }
+
+    /// What the control window has to tell the user, when anything.
+    ///
+    /// Only the two outcomes that leave the old library behind. The log alone
+    /// was not enough for either: the window shows an empty library while the
+    /// old scripts are still on disk, and the obvious next step, trying the
+    /// sample on Welcome, is exactly what ends the retry.
+    pub fn notice(&self) -> Option<Notice> {
+        match self {
+            Outcome::NotNeeded | Outcome::Copied { .. } => None,
+            Outcome::Failed { from, error, .. } => Some(Notice::new(
+                NoticeKind::Failed,
+                from,
+                Some(error.to_string()),
+            )),
+            Outcome::Abandoned { from, .. } => Some(Notice::new(NoticeKind::Abandoned, from, None)),
+        }
+    }
 }
+
+/// Why the old library is not in the new folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoticeKind {
+    /// This launch could not copy it. The next one tries again, but only while
+    /// the new library holds no script.
+    Failed,
+    /// An earlier copy failed and the user has worked here since, so the new
+    /// folder was settled as it is. No launch will copy it again.
+    Abandoned,
+}
+
+/// A launch's [`Outcome`], as the control window reports it
+/// (`get_legacy_library_notice`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notice {
+    pub kind: NoticeKind,
+    /// Where the old library still is, for the window to show. Lossy, like
+    /// `BootStatusReport::data_directory`: a path that is not UTF-8 would
+    /// otherwise fail every serialization and take the whole notice with it.
+    #[serde(rename = "oldFolder")]
+    pub old_folder_text: String,
+    /// The same folder as the OS names it, for `reveal_legacy_library`. Never
+    /// sent: the window never sends a path back, so it never needs one.
+    #[serde(skip)]
+    pub old_folder: PathBuf,
+    /// Why the copy failed, for `Failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Notice {
+    fn new(kind: NoticeKind, old_folder: &Path, reason: Option<String>) -> Self {
+        Self {
+            kind,
+            old_folder_text: old_folder.to_string_lossy().into_owned(),
+            old_folder: old_folder.to_path_buf(),
+            reason,
+        }
+    }
+}
+
+/// The notice for this launch, held for the window to ask for. Managed in
+/// `setup` whatever the outcome, so the command never finds it missing.
+#[derive(Debug, Default)]
+pub struct LegacyLibrary(pub Option<Notice>);
 
 /// Copy the old folder into place, if there is one and the new one is not
 /// settled. Called before the Tauri builder.
@@ -275,14 +350,19 @@ fn copy(from: PathBuf, to: PathBuf, data_dir: &Path, identifier: &str, replace: 
             crate::util::rename(&staging, &to)?;
             None
         };
-        crate::util::sync_dir(data_dir).map_err(std::io::Error::other)?;
-        Ok((raw_database, replaced))
+        // Published: the copy and its marker are in place, so the next launch
+        // finds it settled whatever happens here. A sync that fails now is
+        // reported with the copy, not as a failed one, which it is not.
+        let unsynced = crate::util::sync_dir(data_dir).err().map(|err| err.to_string());
+        Ok((raw_database, replaced, unsynced))
     })();
     if std::fs::symlink_metadata(&staging).is_ok() {
         let _ = std::fs::remove_dir_all(&staging);
     }
     match result {
-        Ok((raw_database, replaced)) => Outcome::Copied { from, to, raw_database, replaced },
+        Ok((raw_database, replaced, unsynced)) => {
+            Outcome::Copied { from, to, raw_database, replaced, unsynced }
+        }
         Err(error) => Outcome::Failed { from, to, error },
     }
 }
@@ -778,6 +858,63 @@ mod tests {
             let outcome = run(data_dir.path());
             assert!(matches!(outcome, Outcome::NotNeeded), "{path}: said once, not every launch");
         }
+    }
+
+    #[test]
+    fn the_window_is_told_when_the_old_library_was_left_behind() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let old = legacy_folder(data_dir.path());
+        write(&old.join("restore-pending.json"), "{}");
+
+        // Refused: the window hears where the old library is, and why.
+        let notice = run(data_dir.path()).notice().expect("a refused copy is reported");
+        assert_eq!(notice.kind, NoticeKind::Failed);
+        assert_eq!(notice.old_folder, old);
+        assert!(notice.reason.as_deref().unwrap_or("").contains("restore-pending.json"));
+        let json = serde_json::to_value(&notice).unwrap();
+        assert_eq!(json["kind"], "failed");
+        assert_eq!(json["oldFolder"], old.to_string_lossy().as_ref());
+        assert_eq!(json["reason"], notice.reason.as_deref().unwrap(), "the reason crosses IPC");
+        assert!(json.get("old_folder").is_none());
+
+        // Work begun in the fresh folder settles it: said once, without a reason.
+        let new = fresh_folder(data_dir.path());
+        write(&new.join("scripts/xyz/script.md"), "# The sample\n");
+        let notice = run(data_dir.path()).notice().expect("an abandoned copy is reported");
+        assert_eq!(notice.kind, NoticeKind::Abandoned);
+        assert_eq!(notice.old_folder, old);
+        let json = serde_json::to_value(&notice).unwrap();
+        assert_eq!(json["kind"], "abandoned");
+        assert!(json.get("reason").is_none());
+        assert!(run(data_dir.path()).notice().is_none(), "and not again");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_whose_name_is_not_utf8_still_reaches_the_window() {
+        use std::os::unix::ffi::OsStrExt;
+        let from = Path::new(std::ffi::OsStr::from_bytes(b"/data/\xffold/com.candidcue.app"));
+        let outcome = Outcome::Failed {
+            from: from.to_path_buf(),
+            to: PathBuf::from("/data/new"),
+            error: std::io::Error::other("refused"),
+        };
+        let notice = outcome.notice().unwrap();
+        assert_eq!(notice.old_folder, from, "revealed as the OS names it");
+        let json = serde_json::to_value(&notice).expect("serializes whatever the path");
+        assert_eq!(json["oldFolder"], "/data/\u{fffd}old/com.candidcue.app");
+        assert_eq!(json["reason"], "refused");
+    }
+
+    #[test]
+    fn a_clean_install_or_a_successful_copy_tells_the_window_nothing() {
+        let data_dir = tempfile::tempdir().unwrap();
+        assert!(run(data_dir.path()).notice().is_none(), "no old folder");
+
+        legacy_folder(data_dir.path());
+        let outcome = run(data_dir.path());
+        assert!(matches!(outcome, Outcome::Copied { .. }), "{outcome:?}");
+        assert!(outcome.notice().is_none());
     }
 
     #[cfg(unix)]

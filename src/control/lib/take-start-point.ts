@@ -327,6 +327,63 @@ export function continueFrom(endTokenIndex: number | undefined, input: SnapInput
   return { ...snapped, kind: 'last_ending' };
 }
 
+/** What a session record says about where its take stopped. */
+export interface RecordedEnding {
+  /** The compiler's hash of the source the take was performed from. */
+  scriptSourceHash: string;
+  endTokenIndex?: number;
+}
+
+/**
+ * The record "From last ending" resumes from: the newest one with an ending.
+ *
+ * Records arrive newest first, as Rust lists them. A take abandoned before it
+ * recorded an end has nothing to offer and is skipped rather than read as zero.
+ *
+ * Deliberately NOT "the newest whose source still matches": after an edit that
+ * would quietly offer an OLDER take's ending as the last one. The newest ending
+ * is the last ending, and once the script has changed there is none to offer.
+ */
+export function newestEnding(records: readonly RecordedEnding[]): RecordedEnding | null {
+  const newest = records.find((r) => (r.endTokenIndex ?? 0) > 0);
+  return newest === undefined
+    ? null
+    : { scriptSourceHash: newest.scriptSourceHash, endTokenIndex: newest.endTokenIndex };
+}
+
+/** A last-ending start point, with the source it is valid against. */
+export interface LastEnding extends StartPoint {
+  sourceHash: string;
+}
+
+/**
+ * "From last ending", offered only against the source the take was read from
+ * (#448).
+ *
+ * An ending is a token offset, and an offset means nothing outside the
+ * document it was counted in: insert an introduction above the passage and the
+ * same number lands on whatever sentence now sits there, which the menu would
+ * then quote and launch as if it were the place the take stopped. Nothing kept
+ * with the session says which words those were, so the destination can only be
+ * established while the source is unchanged — byte for byte, by the compiler's
+ * own hash. Any other source withholds the row rather than guess. Undoing the
+ * edit brings it back.
+ *
+ * `sourceHash` travels with the point so the launch can check it once more
+ * against the compile the stage is built from: the script can still change
+ * between choosing the row and the take starting.
+ */
+export function lastEndingFor(
+  record: RecordedEnding | null | undefined,
+  sourceHash: string | null | undefined,
+  input: SnapInput,
+): LastEnding | null {
+  if (record === null || record === undefined) return null;
+  if (!sourceHash || record.scriptSourceHash !== sourceHash) return null;
+  const point = continueFrom(record.endTokenIndex, input);
+  return point === null ? null : { ...point, sourceHash };
+}
+
 /**
  * How the start point reads next to the Present button.
  *
