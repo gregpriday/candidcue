@@ -2092,7 +2092,10 @@ function envBlockOf(step: string): string {
     if (line.trim() === '' || line.search(/\S/) <= indent) break;
     lines.push(line);
   }
-  return lines.join('\n');
+  // Only the block's own keys: a mapping-shaped line nested inside one
+  // key's multi-line value (`CREDENTIALS: |`) is text, not a variable.
+  const own = lines[0]?.search(/\S/) ?? 0;
+  return lines.filter((line) => line.search(/\S/) === own).join('\n');
 }
 
 /** Every `NAME: ${{ <context>.<key> }}` a step's env block maps, as [NAME, key]. */
@@ -2112,6 +2115,13 @@ function expectEnforced(step: string, command: string, label: string) {
   expect(step, `${label}: a failed check must fail the job`).not.toContain('continue-on-error');
   const runs = [...step.matchAll(/^\s+run: (.*)$/gm)].map((match) => match[1]);
   expect(runs, label).toEqual([command]);
+  // And nothing folded onto it: YAML joins a deeper-indented next line
+  // (`|| true`) into the same plain scalar.
+  const lines = step.split('\n');
+  const at = lines.findIndex((line) => /^\s+run: /.test(line));
+  const indent = lines[at]!.search(/\S/);
+  const folded = lines.slice(at + 1).filter((line) => line.trim() !== '' && line.search(/\S/) > indent);
+  expect(folded, `${label}: the command must be the whole run value`).toEqual([]);
 }
 
 /** Each composite R2 input, and the repository secret every caller fills it from. */
@@ -2244,7 +2254,8 @@ describe('the files a release attaches beside the stage are declared once and ch
       RECEIVE_ACTION,
     );
     expect(check).toMatch(/^\s+shell: bash$/m);
-    expect(check).not.toMatch(/^\s+if:/m);
+    expect(check, 'the receipt check must run unconditionally').not.toMatch(/^\s+if:/m);
+    expect(check, 'a missing extra must fail the job').not.toContain('continue-on-error');
     expect(envBlockOf(check)).toMatch(/^\s+EXTRA_FILES: \$\{\{ inputs\.extra_files \}\}$/m);
   });
 });

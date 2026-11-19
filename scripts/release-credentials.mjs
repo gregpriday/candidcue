@@ -26,7 +26,8 @@
  * A missing credential is a failure in every run that reaches this, dry runs
  * included. There is deliberately no unsigned fallback: a dry run exists to
  * prove the signing and notarisation a release depends on, and CI already
- * builds and inspects every unsigned package (`ci.yml`).
+ * builds the unsigned macOS `.app`, Windows installer and Linux packages
+ * (`ci.yml`).
  *
  * R2 is checked by the publish job and not by the gates, because publishing is
  * the only job that names a GitHub Environment (`release-stable` /
@@ -81,7 +82,7 @@ function requiredFor(argv) {
       label: `the ${os} build`,
       names: REQUIRED.build[os],
       where: 'the repository settings',
-      after: 'This run stopped before building anything.',
+      after: 'This build attempt stopped before building anything.',
     };
   }
   if (kind === 'publish' && os === undefined) {

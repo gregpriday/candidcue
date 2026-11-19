@@ -127,7 +127,7 @@ describe('the release credential gate', () => {
     expect(output).toContain(
       '3 secrets that are not set: APPLE_SIGNING_IDENTITY, APPLE_API_ISSUER, TAURI_SIGNING_PRIVATE_KEY.',
     );
-    expect(output).toContain('This run stopped before building anything.');
+    expect(output).toContain('This build attempt stopped before building anything.');
   });
 
   it('tells a failed publish how to finish once the secrets are added', () => {
