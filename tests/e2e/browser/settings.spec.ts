@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { gotoSection, openPreferences } from './fixtures/preferences';
+import { VAD_SENSITIVITY_COPY } from '../../../src/control/services/settings-audio';
 
 /**
  * Settings round-trip journey, SHIM-BACKED.
@@ -123,21 +124,18 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
   }
   await expect(tuning).toHaveAttribute('open', '');
 
-  const slider = page.getByRole('slider', { name: 'Voice-detection sensitivity' });
+  // The words come from the shared copy module, so rewording the control is a
+  // change to settings-audio.ts alone.
+  const slider = page.getByRole('slider', { name: VAD_SENSITIVITY_COPY.label });
   await expect(slider).toBeVisible();
   // The shim's document predates the field, so the UI shows the A.6 neutral
   // rather than an extreme — and says which one it is.
   await expect(slider).toHaveValue('50');
-  await expect(page.getByText('Default', { exact: true })).toBeVisible();
+  await expect(page.getByText(VAD_SENSITIVITY_COPY.format(50), { exact: true })).toBeVisible();
 
-  /*
-   * The bound is in the copy: what the slider does NOT move is why it is safe
-   * to offer. It used to be "the pause that ends a sentence", which was the
-   * honest limit when a local detector decided turn boundaries. The recogniser
-   * decides its own turn boundaries, so this slider cannot gate a single byte — and a
-   * user who believes it can will turn it up and be no better off.
-   */
-  await expect(page.getByText(/recogniser hears everything/)).toBeVisible();
+  // The description the screen renders is the shared one, whose advice
+  // direction audio-settings-ipc-contract.test.ts holds against the VAD bounds.
+  await expect(page.getByText(VAD_SENSITIVITY_COPY.description, { exact: true })).toBeVisible();
 
   await slider.fill('80');
 

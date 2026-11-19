@@ -1,26 +1,29 @@
 /**
  * One vocabulary for a take (CCUX-001, CCUX-002), enforced at the source.
  *
- * ---------------------------------------------------------------------------
- * WHY A LINT AND NOT A CONVENTION
- * ---------------------------------------------------------------------------
- * `follow-language.ts` has carried an explicit contract since it was written:
- * the engine's decision codes are diagnostics vocabulary and must not become
- * user-facing copy. `FollowStatePanel` rendered them in a "Doing" row anyway,
- * during takes, for however long it took somebody to read both files at once.
- * A contract stated in prose beside the thing it governs is not enough, because
- * the violation happens in a different file.
+ * The promises, and only these:
  *
- * The same failure produced three names for one act — "Pause following" in the
- * control panel, "Follow my voice" on the stage dock, "Fixed speed" in the
- * summary — because each was written where it was rendered.
+ *  - presenter controls show movement STATE, and the engine's decision codes
+ *    stay in Follow diagnostics, where a decision can be read beside its
+ *    scores and timings (`follow-language.ts` owns that boundary);
+ *  - every concept on each of the three axes has a name, in one module, and
+ *    the places that show the session mode take it from there rather than
+ *    writing their own.
  *
- * So both rules are checked. They are narrow on purpose: broad copy lints get
- * switched off.
+ * What the names ARE is not under test. This file used to keep a list of
+ * retired button labels and the glossary's five current terms, so renaming a
+ * control meant editing a regex here as well as the label. The glossary module
+ * is the one place a label is written; changing it there is the whole change.
  */
 import { readFileSync, globSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  MICROPHONE_LABELS,
+  MOVEMENT_LABELS,
+  SESSION_MODE_LABELS,
+  TAKE_STATE_LABELS,
+} from '../../src/shared/take-vocabulary';
 
 const REPO_ROOT = join(__dirname, '../..');
 
@@ -43,9 +46,6 @@ const ROUTINE_UI = [
   (rel) =>
     !rel.includes('.test.') &&
     !/FollowDiagnostics\.svelte$/.test(rel) &&
-    // The module that DEFINES the vocabulary must name the retired labels in
-    // order to say what replaced them.
-    !/take-vocabulary\.ts$/.test(rel) &&
     // The diagnostics copy module owns the decision table by contract.
     !/follow-language\.ts$/.test(rel),
 );
@@ -53,10 +53,10 @@ const ROUTINE_UI = [
 /**
  * A file with its comments removed.
  *
- * Every rule below is about what gets RENDERED, and every one of these renames
- * is explained in a comment beside the control it renamed. A lint that failed
- * on its own justification would be switched off within the week, so the prose
- * is stripped before the code is judged.
+ * The rule below is about what gets RENDERED, and the comments around these
+ * components explain why the decision table was taken out of them. A lint that
+ * failed on its own justification would be switched off within the week, so
+ * the prose is stripped before the code is judged.
  */
 function codeOf(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), 'utf8')
@@ -94,73 +94,25 @@ describe('engine reasoning stays in diagnostics', () => {
 });
 
 describe('one name per concept', () => {
-  const VOCABULARY = join(REPO_ROOT, 'src/shared/take-vocabulary.ts');
-
-  /**
-   * Labels that were retired because they named the same act twice, or named
-   * the engine's job rather than the user's.
-   *
-   * Matched as whole quoted labels, not loose words: "Pause following" is
-   * retired, but a comment explaining WHY it was retired must stay legal or the
-   * reasoning has nowhere to live. Hence the quote anchors.
-   */
-  const RETIRED: Array<{ label: string; instead: string }> = [
-    { label: 'Pause following', instead: 'Hold text' },
-    { label: 'Resume following', instead: 'Follow voice' },
-    { label: 'Re-find me here', instead: 'Set my place' },
-    { label: 'Nudge back', instead: 'Previous sentence' },
-    { label: 'Nudge forward', instead: 'Next sentence' },
-    // The two the header cites as the motivating examples, which the first
-    // version of this list did not actually contain — so the live StageDock
-    // regression it was written about passed.
-    { label: 'Follow my voice', instead: 'Follow voice' },
-    { label: 'Fixed speed', instead: 'Roll at pace' },
-    { label: 'End session', instead: 'End take' },
-    { label: 'End Session', instead: 'End Take' },
-  ];
-
-  /*
-   * WHAT THIS MATCHER CAN AND CANNOT DO.
-   *
-   * It matches a retired label as an element's whole text (`>Label<`) or as a
-   * whole quoted string. That catches the way these labels are actually
-   * written, and it is trivially evaded by a template literal, a concatenation
-   * or an imported constant. That is accepted rather than papered over: the
-   * rule exists to catch the ordinary regression — somebody typing the old
-   * words back in — not to defeat somebody working around it. A lexer would
-   * catch more and would also be a second parser to maintain.
-   */
-  it('uses no retired label as rendered copy', () => {
-    const offenders: string[] = [];
-    for (const rel of ROUTINE_UI) {
-      const code = codeOf(rel);
-      for (const { label, instead } of RETIRED) {
-        if (code.includes(`>${label}<`) || code.includes(`'${label}'`) || code.includes(`"${label}"`)) {
-          offenders.push(`${rel}: "${label}" — say "${instead}"`);
-        }
-      }
-    }
-    expect(
-      offenders,
-      'A retired label is being rendered. The vocabulary lives in take-vocabulary.ts so the ' +
-        'stage, the control panel and the summary cannot drift into three names for one act.',
-    ).toEqual([]);
-  });
-
-  it('keeps the glossary itself complete', () => {
-    const source = readFileSync(VOCABULARY, 'utf8');
-    for (const term of ['Follow voice', 'Hold text', 'Roll at pace', 'Set my place', 'Listening']) {
-      expect(source, `the glossary must define ${term}`).toContain(term);
-    }
+  it('names every state on every axis, in the glossary', () => {
     /*
-     * All THREE axes, actually defined.
-     *
-     * The module's header claims a take/movement/microphone split, and the
-     * first version jumped straight to movement — the take axis was described
-     * and never written, so the header was documentation of an intention.
+     * The maps are typed `Record<Axis, string>`, so the compiler already
+     * refuses a missing state. What it cannot refuse is a blank label or two
+     * states on one axis sharing a name, which is the "three names for one
+     * act" defect turned inside out: one name for two acts.
      */
-    for (const axis of [/TakeState/, /MovementMode/, /MicrophoneState/, /SESSION_MODE_LABELS/]) {
-      expect(source).toMatch(axis);
+    for (const [axis, labels] of Object.entries({
+      TAKE_STATE_LABELS,
+      MOVEMENT_LABELS,
+      MICROPHONE_LABELS,
+      SESSION_MODE_LABELS,
+    })) {
+      const values = Object.values(labels as Record<string, string>);
+      expect(values.length, `${axis} defines no states`).toBeGreaterThan(1);
+      for (const label of values) {
+        expect(label.trim(), `${axis} has a blank label`).not.toBe('');
+      }
+      expect(new Set(values).size, `${axis} gives two states one name`).toBe(values.length);
     }
   });
 
@@ -168,8 +120,7 @@ describe('one name per concept', () => {
     // "Fixed speed" was the summary's word and "Roll at pace" the control's,
     // for the same take.
     for (const rel of ['src/control/components/SessionSummary.svelte', 'src/control/routes/Settings.svelte']) {
-      const source = readFileSync(join(REPO_ROOT, rel), 'utf8');
-      expect(source, `${rel} must label the mode from take-vocabulary`).toMatch(
+      expect(codeOf(rel), `${rel} must label the mode from take-vocabulary`).toMatch(
         /sessionModeLabel|SESSION_MODE_LABELS/,
       );
     }

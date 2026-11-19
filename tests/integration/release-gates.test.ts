@@ -2163,6 +2163,13 @@ describe('the release notes gate refuses what it exists to refuse', () => {
     expect(notesFor('# Changelog\n\n## v1.0.0\n').status).toBe(1);
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTODO: ${WRITTEN}\n`).status).toBe(1);
     expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTBD. ${WRITTEN}\n`).status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\nDRAFT. ${WRITTEN}\n`).status).toBe(1);
+  });
+
+  // A draft is something this app's users write, so the word is a release
+  // note; only the capitalised marker is a stub.
+  it('reads "draft" in ordinary prose as prose', () => {
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\nRecovers a draft script. ${WRITTEN}\n`).status).toBe(0);
   });
 
   /*
@@ -2227,6 +2234,12 @@ describe('the release notes gate refuses what it exists to refuse', () => {
   });
 });
 
+/*
+ * The promise: the section the release workflow publishes for this version
+ * exists, and every figure it quotes from the shipping configuration — the
+ * model's download and installed sizes, the minimum macOS version, the update
+ * host — is the figure that configuration declares. Wording is free.
+ */
 describe('the notes this tree would actually publish', () => {
   const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version;
 
@@ -2252,51 +2265,22 @@ describe('the notes this tree would actually publish', () => {
   });
 
   /*
-   * The contract, as a test. Each of these is a fact somebody needs before
-   * downloading: where it runs, what it needs, and what it does on its own.
+   * What the notes SAY is not under test. Release notes are prose, and a test
+   * that required particular words in them (it once required "probabilistic",
+   * "MIT", "English only" and a dozen more) turned every rewrite of the notes
+   * into a regex edit. What is under test is the handful of facts the notes
+   * quote from the shipping configuration, because those drift silently: the
+   * configuration changes and prose does not.
    */
-  it('states the contract a user needs before downloading', () => {
-    for (const fact of [
-      /macOS 12/,
-      /Apple Silicon and Intel/i,
-      /Windows 11/,
-      /Linux/,
-      /AppImage/,
-      /English only/i,
-      /separate download|not in the installer/i,
-      /no cloud/i,
-      /probabilistic/i,
-      /MIT/,
-    ]) {
-      expect(extracted.output, `the notes must state: ${fact}`).toMatch(fact);
-    }
-  });
-
-  /*
-   * The exclusions and the behaviours a user would not guess, stated rather
-   * than merely unclaimed. What a test CAN check is that each is present and
-   * specific — which is the thing that goes missing when notes are rewritten
-   * in a hurry. It cannot be a blacklist of overclaims.
-   */
-  it('states each exclusion and each automatic behaviour', () => {
-    expect(extracted.output, 'the unsigned Windows build must be explicit').toMatch(/not code-signed/i);
-    expect(extracted.output, 'and what SmartScreen will say about it').toMatch(/SmartScreen/);
-    expect(extracted.output, 'the update check must be disclosed').toMatch(/checks for updates/i);
-    expect(extracted.output, 'and that it never interrupts a take').toMatch(/never prompts[^.]*during a take/i);
-    expect(extracted.output, 'and that it can be turned off').toMatch(/automatic check off/i);
-    // The host the app actually polls, read from where it is compiled in, so
-    // the notes cannot keep naming an old one after the feed moves.
+  it('names the host the updater actually contacts', () => {
+    // Read from where it is compiled in, so the notes cannot keep naming an
+    // old host after the feed moves.
     const updater = readFileSync(join(REPO_ROOT, 'src-tauri/src/updater.rs'), 'utf8');
     const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(updater)?.[1];
     expect(base, 'UPDATE_BASE_URL could not be read out of updater.rs').toBeDefined();
-    expect(extracted.output, 'and where it goes').toContain(new URL(base!).hostname);
-    expect(extracted.output, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
-
-    // The delivery analysis (choppy-delivery detection, the variety score) was
-    // removed with the coaching era. Notes that still list it as a limitation
-    // describe a product that no longer exists.
-    expect(extracted.output).not.toMatch(/choppy/i);
-    expect(extracted.output).not.toMatch(/variety score/i);
+    expect(extracted.output, 'the notes must name the update host').toContain(
+      new URL(base!).hostname,
+    );
   });
 
   /*

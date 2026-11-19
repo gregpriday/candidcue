@@ -31,7 +31,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   audioToRustPatch,
   clampVadSensitivity,
+  vadAdviceClause,
   vadSensitivityFromRust,
+  VAD_SENSITIVITY_ADVICE,
   VAD_SENSITIVITY_COPY,
   VAD_SENSITIVITY_RANGE,
   type RustAudioSettings,
@@ -161,45 +163,19 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
   });
 
   /**
-   * The copy has to say what the slider does NOT move, because that bound is
-   * the reason it is safe to offer at all.
+   * …and its advice sends each symptom to the end of the slider that cures it.
    *
-   * The bound changed with the provider. It used to be "the pause that ends a
-   * sentence and how often audio is sent are the same at every position",
-   * which was the honest limit when a local detector decided turn boundaries.
-   * Now the recogniser endpoints server-side and this slider cannot gate a
-   * single byte — so the thing the copy must say is that it does not affect
-   * what gets transcribed. A user who believes this control can make the app
-   * hear them better will turn it up and be no better off.
-   */
-  it('says what stays fixed, and in no units anyone has to look up', () => {
-    const text = VAD_SENSITIVITY_COPY.description.toLowerCase();
-    expect(text).toMatch(/does not gate|not gate what/);
-    expect(text).toContain('recogniser hears everything');
-    expect(text).not.toContain(' db');
-  });
-
-  /**
-   * …and sends each symptom to the end of the slider that actually cures it.
+   * The shipped string once told a user with a noisy room to turn the
+   * sensitivity UP and a user whose quiet speech was being missed to turn it
+   * DOWN — both of which make the reported symptom worse (#120). An earlier
+   * guard checked only that "raise it if" and "lower it if" both appeared,
+   * which is true of the correct copy and of its exact inverse alike.
    *
-   * The assertion this replaced checked only that the words "raise it if" and
-   * "lower it if" both appeared somewhere. That is true of the correct copy and
-   * of its exact inverse alike, so it stayed green while the shipped string
-   * told a user with a noisy room to turn the sensitivity UP and a user whose
-   * quiet speech was being missed to turn it DOWN — both of which make the
-   * reported symptom worse (#120). The doc comment above the string had stated
-   * the direction correctly the whole time; prose and mapping simply drifted.
-   *
-   * The pairing is asserted on the literal phrases rather than parsed out of
-   * the sentence. Splitting English into clauses and reading the nearest verb
-   * looks more general, but it cannot see negation or a direction mentioned
-   * twice — "do not lower it if a fan…; do not raise it if quiet speech…"
-   * parses as correct advice. A reworded description SHOULD have to come back
-   * through this test, which is the lesson of #120 rather than an obstacle to it.
-   *
-   * What is derived at runtime is which phrase belongs where: `noiseFloorMargin`
-   * falls as sensitivity rises, so the high end is the easier trigger. Flip the
-   * bounds and this fails, pointing at the copy that now lies about them.
+   * So the pairing is data, `VAD_SENSITIVITY_ADVICE`, and this holds each
+   * symptom's direction against the VAD mapping itself: `noiseFloorMargin`
+   * falls as sensitivity rises, so the low end is the harder trigger. Swap the
+   * directions, or flip the bounds, and this fails. Reword a symptom or the
+   * sentence around it and it does not.
    */
   it('sends each symptom to the end of the slider that cures it', () => {
     const marginAt = (sensitivity: number): number => {
@@ -212,21 +188,34 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
       ).toBe(true);
       return margin as number;
     };
+    const endFor = (direction: 'lower' | 'raise'): number =>
+      direction === 'lower' ? VAD_SENSITIVITY_RANGE.min : VAD_SENSITIVITY_RANGE.max;
 
-    // Read off the mapping rather than assumed: a smaller margin triggers sooner.
-    expect(marginAt(0), 'sensitivity 1 must be the easier trigger').toBeGreaterThan(marginAt(1));
+    const { falseTriggers, missedSpeech } = VAD_SENSITIVITY_ADVICE;
+    expect(falseTriggers.direction, 'the two symptoms need opposite cures').not.toBe(
+      missedSpeech.direction,
+    );
+    // A false trigger is cured by the end with the larger margin (harder to
+    // trigger); missed speech by the end with the smaller one.
+    expect(
+      marginAt(endFor(falseTriggers.direction)),
+      'false triggers must be sent to the harder trigger',
+    ).toBeGreaterThan(marginAt(endFor(missedSpeech.direction)));
 
-    // So false triggering is cured at the LOW end, missed speech at the HIGH end.
-    expect(VAD_SENSITIVITY_COPY.description).toContain(
-      'Lower it if a fan or people nearby keep the indicator lit',
-    );
-    expect(VAD_SENSITIVITY_COPY.description).toContain(
-      'raise it if quiet speech does not register',
-    );
+    // And the screen says exactly that advice: the description is composed
+    // from the entries, not written beside them where it could drift.
+    const description = VAD_SENSITIVITY_COPY.description.toLowerCase();
+    for (const advice of [falseTriggers, missedSpeech]) {
+      expect(description).toContain(vadAdviceClause(advice).toLowerCase());
+    }
   });
 
   it('names the midpoint in the readout so the default is findable', () => {
-    expect(VAD_SENSITIVITY_COPY.format(50)).toBe('Default');
+    // The readout at the tuned default is a word rather than a number, and any
+    // other position reads as the percentage it is. Which word is the copy's.
+    const neutral = VAD_SENSITIVITY_RANGE.neutral * 100;
+    expect(VAD_SENSITIVITY_COPY.format(neutral)).not.toBe(`${neutral}%`);
+    expect(VAD_SENSITIVITY_COPY.format(neutral).trim()).not.toBe('');
     expect(VAD_SENSITIVITY_COPY.format(72)).toBe('72%');
   });
 });

@@ -111,13 +111,38 @@ export const RUST_OWNED_AUDIO_KEYS = ['vadSensitivity'] as const;
  * backwards once (#120) while this comment did not. Higher is MORE sensitive —
  * speech clears a lower bar — so quiet speech that never registers is fixed by
  * RAISING this, and a room that holds the meter open is fixed by LOWERING it.
- * The pairing is pinned in audio-settings-ipc-contract.test.ts against the
- * bounds themselves; keep them in step.
+ * That pairing is data (`VAD_SENSITIVITY_ADVICE`) rather than prose, so
+ * audio-settings-ipc-contract.test.ts can hold each symptom's direction against
+ * the bounds themselves while the sentences stay free to be reworded.
  */
+export const VAD_SENSITIVITY_ADVICE = {
+  /** The meter counts a room as speech: the cure is a harder trigger. */
+  falseTriggers: {
+    direction: 'lower',
+    symptom: 'a fan or people nearby keep the indicator lit after you have stopped',
+  },
+  /** The meter misses the presenter: the cure is an easier trigger. */
+  missedSpeech: {
+    direction: 'raise',
+    symptom: 'quiet speech does not register',
+  },
+} as const satisfies Record<string, { direction: 'lower' | 'raise'; symptom: string }>;
+
+/** One piece of advice, as the description says it: "lower it if …". */
+export function vadAdviceClause(advice: {
+  direction: 'lower' | 'raise';
+  symptom: string;
+}): string {
+  return `${advice.direction} it if ${advice.symptom}`;
+}
+
+const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
 export const VAD_SENSITIVITY_COPY = {
   label: 'Voice-detection sensitivity',
-  description:
-    'How easily the meter counts a sound as speech. Lower it if a fan or people nearby keep the indicator lit after you have stopped; raise it if quiet speech does not register. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.',
+  description: `How easily the meter counts a sound as speech. ${capitalise(
+    vadAdviceClause(VAD_SENSITIVITY_ADVICE.falseTriggers),
+  )}; ${vadAdviceClause(VAD_SENSITIVITY_ADVICE.missedSpeech)}. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.`,
   /** 50% is the tuned default, and the readout says so rather than hiding it. */
   format(percent: number): string {
     return percent === VAD_SENSITIVITY_RANGE.neutral * 100 ? 'Default' : `${percent}%`;
