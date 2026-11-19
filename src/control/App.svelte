@@ -35,6 +35,13 @@
   import { speechModelReadiness } from './stores/speech-model-readiness';
   import TakeReadinessSheet from './components/TakeReadinessSheet.svelte';
   import UpdateNotice from './components/UpdateNotice.svelte';
+  import LegacyLibraryNotice from './components/LegacyLibraryNotice.svelte';
+  import { getLegacyLibraryNotice, revealLegacyLibrary } from './services/legacy-library';
+  import {
+    dismissLegacyLibraryNotice,
+    legacyLibrary,
+    setLegacyLibraryNotice,
+  } from './stores/legacy-library';
   import { createUpdateController } from './stores/updates';
   import { checkForUpdate, installUpdate, listenForUpdateProgress } from './services/updates';
   import {
@@ -683,6 +690,16 @@ import { rememberReaderFrame } from './lib/reader-frame';
         setPresentingPhase('off');
 
         /*
+         * Whether the CandidCue library was left behind at launch (#454).
+         * Asked beside the boot status and settled before either way out of
+         * here, so the recovery screen can say it and Welcome has it on its
+         * first paint: the sample there is a script, and a script here is
+         * what ends the automatic copy. A notice that cannot be read is no
+         * notice; it never holds up the boot.
+         */
+        const legacyNotice = getLegacyLibraryNotice().catch(() => null);
+
+        /*
          * Did the database come up? Asked FIRST, before anything reads it.
          *
          * `database::init` failing used to abort Tauri's setup hook, which
@@ -708,8 +725,10 @@ import { rememberReaderFrame } from './lib/reader-frame';
             dataDirectory: '',
           }),
         );
+        const notice = await legacyNotice;
+        if (disposed) return;
+        setLegacyLibraryNotice(notice);
         if (!boot.databaseReady) {
-          if (disposed) return;
           recoveryStatus = boot;
           return;
         }
@@ -1496,6 +1515,21 @@ import { rememberReaderFrame } from './lib/reader-frame';
     there — can still be installed. `hidden` for the whole of a take: an update
     found then is held and appears when the take ends, never on the glass.
   -->
+  <!--
+    The CandidCue library notice (#454), floating everywhere but Welcome, which
+    shows it inline above the buttons that create a script. Hidden for a take
+    like the update card, and back when it ends.
+  -->
+  {#if $legacyLibrary.notice !== null && !$legacyLibrary.dismissed && !($session.active || $takeStarting || $presentingPhase !== 'off') && !(ready && recoveryStatus === null && $route.name === 'welcome')}
+    <LegacyLibraryNotice
+      notice={$legacyLibrary.notice}
+      placement="floating"
+      libraryOpen={recoveryStatus === null}
+      revealLabel={osCopy().revealInFileManager}
+      onreveal={revealLegacyLibrary}
+      ondismiss={dismissLegacyLibraryNotice}
+    />
+  {/if}
   <UpdateNotice
     notice={$updateNotice}
     hidden={$session.active || $takeStarting || $presentingPhase !== 'off'}

@@ -153,6 +153,12 @@ export interface ShimConfig {
   bootStatus?: Record<string, unknown>;
   /** What `list_database_backups` answers — newest first, as Rust sorts them. */
   databaseBackups?: Array<Record<string, unknown>>;
+  /**
+   * What `get_legacy_library_notice` answers (#454): the CandidCue library this
+   * launch could not copy (`kind: 'failed'`) or gave up on (`'abandoned'`).
+   * Unset, there was nothing to say, as on a clean install.
+   */
+  legacyLibraryNotice?: Record<string, unknown>;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -762,6 +768,13 @@ function shimBody(config: ShimConfig): void {
       // Nothing was repaired at startup. `null` is the ordinary answer here,
       // and the shell treats it as "nothing to report".
       case 'get_startup_findings':
+        return null;
+
+      // The CandidCue library notice (#454). Read as often as it is asked,
+      // like Rust's; the reveal takes no path and opens nothing here.
+      case 'get_legacy_library_notice':
+        return config.legacyLibraryNotice ?? null;
+      case 'reveal_legacy_library':
         return null;
 
       case 'get_settings':

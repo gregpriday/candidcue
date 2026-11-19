@@ -35,6 +35,10 @@
   import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill, { type PillTone } from '../components/StatusPill.svelte';
   import { createAndOpenScript, importMarkdown } from '../lib/app-actions';
+  import LegacyLibraryNotice from '../components/LegacyLibraryNotice.svelte';
+  import { revealLegacyLibrary } from '../services/legacy-library';
+  import { dismissLegacyLibraryNotice, legacyLibrary } from '../stores/legacy-library';
+  import { osCopy } from '../lib/os-copy';
   import { displayName, resolvePrompterDisplay } from '../lib/take-destination';
   import * as stageService from '../services/stage';
   import {
@@ -468,6 +472,21 @@
         named, and one press away. The stronger argument was about teaching the
         product, and a setup assistant's job is to get out of the way.
       -->
+      <!--
+        Above the buttons, because each of them puts a script in this library,
+        and a script here is what ends the automatic copy of the CandidCue one
+        (#454). The sample most of all: it sounds like a preview.
+      -->
+      {#if $legacyLibrary.notice !== null && !$legacyLibrary.dismissed}
+        <LegacyLibraryNotice
+          notice={$legacyLibrary.notice}
+          placement="inline"
+          libraryOpen={true}
+          revealLabel={osCopy().revealInFileManager}
+          onreveal={revealLegacyLibrary}
+          ondismiss={dismissLegacyLibraryNotice}
+        />
+      {/if}
       <div class="actions">
         <Button variant="primary" onclick={() => createAndOpenScript('new')}>
           Create your first script
