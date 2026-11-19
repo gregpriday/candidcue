@@ -579,11 +579,21 @@ fn check_scoring_runs<'a>(
     expected.sort_unstable();
     claimed.sort_unstable();
     if expected != claimed {
+        let absent = |from: &[&str], other: &[&str]| -> String {
+            from.iter()
+                .filter(|r| !other.contains(r))
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         anyhow::bail!(
             "the {tier} scoring table lists {} fixtures but the result scored {} \
-             non-diagnostic ones; the file has been altered since the tier wrote it",
+             non-diagnostic ones (listed but not scored: [{}]; scored but not \
+             listed: [{}]); the file has been altered since the tier wrote it",
             claimed.len(),
-            expected.len()
+            expected.len(),
+            absent(&claimed, &expected),
+            absent(&expected, &claimed)
         );
     }
     Ok(())
@@ -1167,7 +1177,12 @@ mod tests {
         // Same length, different fixture: a count comparison would miss it.
         let (b, mut c) = saved(&english_corpus(), &m, &m);
         c.scoring.as_mut().unwrap().runs[0] = "brands__exact__gemini".into();
-        assert!(refused_by(&b, &c).contains("Tier C scoring table"));
+        let err = refused_by(&b, &c);
+        assert!(err.contains("Tier C scoring table"), "{err}");
+        assert!(
+            err.contains("brands__exact__gemini") && err.contains("brands__exact__xai"),
+            "the refusal should name both sides of the substitution: {err}"
+        );
     }
 
     /// A fixture duplicated in one tier's directory is weighted twice there,
