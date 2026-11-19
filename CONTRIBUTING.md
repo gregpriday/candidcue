@@ -30,7 +30,8 @@ Two things are easy to miss:
 
 - **Git LFS.** The captured benchmark runs (`events.jsonl` and `gold.json`
   under `bench/runs*/`) are in Git LFS. Without `git lfs pull` they are small
-  pointer files, and a benchmark replay stops with an error naming one.
+  pointer files, and a benchmark replay fails, sometimes with a bare JSON
+  error that does not say which file is a pointer.
 - **Playwright browsers.** Run `pnpm exec playwright install chromium` once
   before `pnpm test:e2e` (on Linux, add `--with-deps` for the system
   libraries).
@@ -77,8 +78,8 @@ runs with `./node_modules/.bin/vitest run path/to/file.test.ts` (use the local
 binary, not `npx vitest`); a file under `tests/dom/` needs
 `--config vitest.dom.config.ts` as well. A single Playwright spec runs with
 `./node_modules/.bin/playwright test --config=playwright.config.ts <spec>`;
-`pnpm test:e2e -- <spec>` runs the whole suite. Playwright reuses a dev server
-already listening on its port (1420 by default), so if another checkout's
+`pnpm test:e2e -- <spec>` runs the whole suite. Outside CI, Playwright reuses a
+dev server already listening on its port (1420 by default), so if another checkout's
 server is running there, set `SPEAKING_GLASS_E2E_PORT` to a free port or the
 suite tests that checkout instead of yours. Add regression coverage next to
 the module you changed.

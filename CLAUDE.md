@@ -102,8 +102,9 @@ cargo run --release -p cc-bench -- robustness --budget 2000
 ```
 
 `bench/runs*/` `events.jsonl` and `gold.json` are in **Git LFS**. Without a fetch
-they are ~130-byte pointers, and a replay stops with an error naming the pointer
-file — run `git lfs pull` (`git lfs ls-files` lists what should be there).
+they are ~130-byte pointers and a replay fails — on `gold.json` with a bare JSON
+parse error that does not name the file, on `events.jsonl` with one that does.
+Run `git lfs pull` (`git lfs ls-files` lists what should be there).
 
 There is no lint script and no ESLint/Prettier config in the tree. Conventions:
 single quotes, no Prettier. Do **not** run `cargo fmt` — the tree predates it
@@ -242,8 +243,9 @@ so motion runs in the control webview. The separate stage window, which still
 receives the direct emit, exists only for Settings' preview and "Show test" and
 for Calibrate (a preview can still be open beside a take, independently).
 Motion and the take summary share control's alignment feed: the renderer
-validates and animates it, and the summary reports confirmed progress (or where
-Auto-scroll ended) from the same snapshots.
+validates and animates it, and the summary reports confirmed progress from the
+same snapshots. (An Auto-scroll take that reaches the end is recorded through a
+separate `auto_scroll_end` intent, not a snapshot.)
 
 Stage-side motion lives in `src/stage/motion/`: a persistent jerk-limited
 follower (`controller.ts`, pure — the caller supplies `dt`, no rAF, no DOM) fed
@@ -309,8 +311,9 @@ Prompter" check never fires there; the 9-inch is identified by its 1024x600
 grid and everything else by millimetres. EDID lies in known ways, so
 `plausible_panel_mm` refuses `0x0`, the `160x90` placeholder, any size whose
 aspect disagrees with the pixel grid, and the 72-DPI estimate CoreGraphics
-substitutes when a display has no EDID; `cargo test --lib windows::panel_size --
---ignored --nocapture` prints what the connected panels actually report.
+substitutes when a display has no EDID;
+`cargo test --manifest-path src-tauri/Cargo.toml --lib windows::panel_size -- --ignored --nocapture`
+prints what the connected panels actually report.
 
 ### Stage event protocol
 

@@ -135,7 +135,10 @@ you what to watch for.
 Speaking Glass was called CandidCue until October 2026. A build from before the
 rename kept its data in a `com.candidcue.app` folder. The first launch of
 Speaking Glass copies that folder to `com.speakingglass.app` and leaves the
-original alone, so delete the original yourself once no older checkout needs it.
+original alone. If `com.speakingglass.app` already holds scripts, or a restore
+is under way there, nothing is copied and the original keeps the only copy of
+the old data, so check that your scripts came across before you delete the
+original.
 
 ## Development
 
@@ -183,5 +186,5 @@ Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTI
 
 Report a bug or ask a question in
 [GitHub Issues](https://github.com/gregpriday/candidcue/issues); **Help › Report
-a Problem** opens a new issue there in your browser. Security
+a Problem** opens GitHub's new-issue form in your browser. Security
 reports go privately, through [`.github/SECURITY.md`](.github/SECURITY.md).

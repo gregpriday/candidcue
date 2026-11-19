@@ -98,6 +98,6 @@ in [SECURITY.md](https://github.com/gregpriday/candidcue/blob/HEAD/.github/SECUR
 
 **Everything else** goes to
 [GitHub Issues](https://github.com/gregpriday/candidcue/issues);
-**Help › Report a Problem** opens a new issue there in your browser. It helps to
+**Help › Report a Problem** opens GitHub's new-issue form in your browser. It helps to
 include the version (About Speaking Glass, or Settings), your operating system, your
 microphone and display setup, and what the prompter actually did.
