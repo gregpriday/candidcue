@@ -42,9 +42,10 @@ async fn selected_model(db: &Database) -> Result<&'static BundledModel, AppError
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechEngineStatus {
-    /// Whether the selected model's files are present and usable. False until
-    /// a model is downloaded from Settings › Speech, when its files are missing
-    /// or unusable, or when the selection cannot be read; `detail` says which.
+    /// Whether the selected model's files resolve and pass their checks. False
+    /// when no model is installed (Settings › Speech downloads one), when its
+    /// files are missing or unusable, or when the selection cannot be read;
+    /// `detail` says which.
     pub available: bool,
     /// Whether the model is resident in memory right now.
     pub loaded: bool,

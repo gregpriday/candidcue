@@ -338,11 +338,11 @@ pub fn run() {
             handle.manage(crate::speech::model_manager::SpeechModelManager::new());
 
             // Put back any model whose replacement was interrupted mid-commit
-            // (#152). It only puts a backup back (replacing an unusable target)
-            // and never sweeps staging, so it cannot damage an install running
-            // in another instance. Stale staging is swept by
-            // the next install of that model instead, which is the moment it
-            // is provably garbage.
+            // (#152). It replaces only a target that is not sealed and whole,
+            // and only with a usable backup; the single-instance plugin keeps a
+            // second launch from running it beside a live install. Stale
+            // staging is swept by the next install of that model instead, which
+            // is the moment it is provably garbage.
             crate::speech::model_store::recover_interrupted(&data_dir);
 
             // The alignment engine runs beside the recogniser that feeds it, so a
@@ -360,12 +360,13 @@ pub fn run() {
             // (`$APPDATA/scripts/*/assets/*`), with an explicit `deny` list
             // that takes precedence over any runtime widening.
             //
-            // Startup grants nothing at runtime any more (imports still grant a
-            // script's flat assets directory). The one exception was the
+            // Setup grants nothing at runtime any more. The one exception was the
             // bundled Listener pack directory, which in a dev build lived in the
             // repo, outside `$RESOURCE`, and so could not be expressed as a
             // static pattern. The Listener is gone (#106) and the exception with
-            // it, which leaves the static config as the whole story.
+            // it. What remains at runtime is narrow: an image import or drop
+            // grants that script's flat assets directory, and the `deny` list
+            // above beats every runtime grant.
 
             register_stage_event_bridge(&handle);
 
