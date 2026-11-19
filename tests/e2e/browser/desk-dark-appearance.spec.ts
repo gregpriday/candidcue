@@ -25,35 +25,49 @@ type Rgb = [number, number, number];
 interface Resolved {
   appearance: string | undefined;
   colorScheme: string;
-  /** Each token, resolved through the real cascade to an `rgb()` colour. */
-  colours: Record<string, string>;
+  /** Each place probed, with each token resolved there to an `rgb()` colour. */
+  places: { where: string; colours: Record<string, string> }[];
 }
 
 const PROBED = ['--accent-strong', '--text-primary', '--bg-canvas', '--bg-panel', '--bg-chrome'];
 
 /**
- * Resolve tokens where the desk draws: a probe element inside the themed
- * element takes each token as its `color`, so the browser does the cascade,
- * the `var()` lookup and the colour parse, and hands back `rgb()`.
+ * Resolve tokens where the desk draws. A probe element takes each token as
+ * its `color`, so the browser does the cascade, the `var()` lookup and the
+ * colour parse, and hands back `rgb()`. It is placed inside EVERY element that
+ * carries the workspace theme — the control window mirrors it onto `<html>`
+ * as well as its `.shell`, so the first one alone is not where the library
+ * draws — and inside one element deep in the window's own content, so an
+ * override scoped to the shell or below it is read too.
  */
-async function resolveDesk(page: Page): Promise<Resolved> {
-  return page.evaluate((tokens) => {
-    const themed = document.querySelector<HTMLElement>("[data-theme='workspace']");
-    if (!themed) throw new Error('no element carries the workspace theme');
-    const probe = document.createElement('span');
-    themed.appendChild(probe);
-    const colours: Record<string, string> = {};
-    for (const token of tokens) {
-      probe.style.color = `var(${token})`;
-      colours[token] = getComputedStyle(probe).color;
-    }
-    probe.remove();
-    return {
-      appearance: document.documentElement.dataset['appearance'],
-      colorScheme: getComputedStyle(themed).colorScheme,
-      colours,
-    };
-  }, PROBED);
+async function resolveDesk(page: Page, deep: string): Promise<Resolved> {
+  return page.evaluate(
+    ({ tokens, deep }) => {
+      const themed = [...document.querySelectorAll<HTMLElement>("[data-theme='workspace']")];
+      if (themed.length === 0) throw new Error('no element carries the workspace theme');
+      const inner = document.querySelector<HTMLElement>(deep);
+      if (!inner) throw new Error(`nothing matches ${deep}`);
+      const describe = (el: HTMLElement) =>
+        el === inner ? deep : `${el.tagName.toLowerCase()}${el.className ? `.${el.className}` : ''}`;
+      const places = [...themed, inner].map((host) => {
+        const probe = document.createElement('span');
+        host.appendChild(probe);
+        const colours: Record<string, string> = {};
+        for (const token of tokens) {
+          probe.style.color = `var(${token})`;
+          colours[token] = getComputedStyle(probe).color;
+        }
+        probe.remove();
+        return { where: describe(host), colours };
+      });
+      return {
+        appearance: document.documentElement.dataset['appearance'],
+        colorScheme: getComputedStyle(inner).colorScheme,
+        places,
+      };
+    },
+    { tokens: PROBED, deep },
+  );
 }
 
 function rgb(css: string): Rgb {
@@ -81,25 +95,36 @@ function contrast(a: string, b: string): number {
 
 /** What #231 asks of either appearance: small accent text and body text clear AA. */
 function expectReadable(desk: Resolved): void {
-  for (const ground of ['--bg-canvas', '--bg-panel', '--bg-chrome']) {
-    for (const ink of ['--accent-strong', '--text-primary']) {
-      expect(
-        contrast(desk.colours[ink]!, desk.colours[ground]!),
-        `${ink} (${desk.colours[ink]}) on ${ground} (${desk.colours[ground]})`,
-      ).toBeGreaterThanOrEqual(4.5);
+  expect(desk.places.length).toBeGreaterThan(1);
+  for (const { where, colours } of desk.places) {
+    for (const ground of ['--bg-canvas', '--bg-panel', '--bg-chrome']) {
+      for (const ink of ['--accent-strong', '--text-primary']) {
+        expect(
+          contrast(colours[ink]!, colours[ground]!),
+          `${ink} (${colours[ink]}) on ${ground} (${colours[ground]}) in ${where}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
     }
   }
+}
+
+/** Every place probed, held to the same test. */
+function everywhere(desk: Resolved, check: (colours: Record<string, string>, where: string) => void) {
+  for (const { where, colours } of desk.places) check(colours, where);
 }
 
 const WINDOWS = [
   {
     name: 'the control window',
+    // The library's list, inside the shell, inside the route.
+    deep: '[role="listbox"]',
     open: async (page: Page) => {
       await page.goto('/control.html');
       await collection(page).getByRole('option').first().waitFor();
     },
   },
-  { name: 'the Settings window', open: openPreferences },
+  // The section content Settings draws its forms in.
+  { name: 'the Settings window', deep: 'main.shell .content', open: openPreferences },
 ];
 
 test.beforeEach(async ({ page }) => {
@@ -123,26 +148,31 @@ for (const desk of WINDOWS) {
     await page.emulateMedia({ colorScheme: 'dark' });
     await desk.open(page);
 
-    const dark = await resolveDesk(page);
+    const dark = await resolveDesk(page, desk.deep);
     expect(dark.appearance).toBe('dark');
     expect(dark.colorScheme).toBe('dark');
     expectReadable(dark);
     // Dark ground under light ink, not the light desk with an attribute on it.
-    expect(luminance(rgb(dark.colours['--bg-canvas']!))).toBeLessThan(0.05);
-    expect(luminance(rgb(dark.colours['--text-primary']!))).toBeGreaterThan(0.7);
+    everywhere(dark, (colours, where) => {
+      expect(luminance(rgb(colours['--bg-canvas']!)), where).toBeLessThan(0.05);
+      expect(luminance(rgb(colours['--text-primary']!)), where).toBeGreaterThan(0.7);
+    });
 
     // The system changes while the window is open; nothing reloads.
     await page.emulateMedia({ colorScheme: 'light' });
-    await expect.poll(async () => (await resolveDesk(page)).appearance).toBe('light');
+    await expect.poll(async () => (await resolveDesk(page, desk.deep)).appearance).toBe('light');
 
-    const light = await resolveDesk(page);
-    expect(light.colorScheme).not.toBe('dark');
+    const light = await resolveDesk(page, desk.deep);
+    expect(light.colorScheme).toBe('light');
     expectReadable(light);
-    expect(luminance(rgb(light.colours['--bg-canvas']!))).toBeGreaterThan(0.7);
-    for (const token of PROBED) {
-      expect(light.colours[token], `${token} must differ between the appearances`).not.toBe(
-        dark.colours[token],
-      );
-    }
+    everywhere(light, (colours, where) => {
+      expect(luminance(rgb(colours['--bg-canvas']!)), where).toBeGreaterThan(0.7);
+      const before = dark.places.find((place) => place.where === where)!.colours;
+      for (const token of PROBED) {
+        expect(colours[token], `${token} in ${where} must differ between the appearances`).not.toBe(
+          before[token],
+        );
+      }
+    });
   });
 }

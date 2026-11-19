@@ -51,9 +51,12 @@ function fakeSystem(initiallyDark: boolean) {
     get subscribed() {
       return lists.reduce((sum, list) => sum + list.listeners.size, 0);
     },
+    /** A browser fires `change` only on a list whose answer actually moved. */
     setDark(next: boolean) {
+      const before = new Map(lists.map((list) => [list, answers(list.query)]));
       dark = next;
       for (const list of lists) {
+        if (answers(list.query) === before.get(list)) continue;
         for (const listener of [...list.listeners]) {
           listener({ matches: answers(list.query), media: list.query } as MediaQueryListEvent);
         }
