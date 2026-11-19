@@ -165,6 +165,14 @@
      */
     practice?: boolean;
     /**
+     * Whether this take listens at all (#243). False for a Read take, which
+     * opens no microphone and no recogniser: the dock then offers no "Follow
+     * voice" and the diagnostic transcript strip, which would only ever say
+     * "listening", is not drawn. Absent is true — a standalone stage window and
+     * an older host keep exactly what they had.
+     */
+    voiceInput?: boolean;
+    /**
      * §parts. The part this reading is of, and whether its end has been
      * reached (#241) — for the label that says on the glass what is running.
      *
@@ -761,6 +769,8 @@
    * second opinion could only ever disagree with it.
    */
   const followPaused = $derived(embedded ? (embedded.followPaused ?? false) : app.followPaused);
+  /** See `voiceInput` on the bridge. */
+  const voiceInput = $derived(embedded?.voiceInput ?? true);
   /**
    * A paused take holds a reading window's text still — see `takePaused` on the
    * bridge. Only the motion engine hears it: the hold chip and the dock read
@@ -2934,8 +2944,9 @@
                replayed directives included. Zero is expected in a take — the
                embedded stage gets its transcript through the bridge, which
                this does not count — so on its own it cannot establish a
-               delivery fault. -->
-          <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
+               delivery fault. A Read take (#243) sends no taps at all; its
+               snapshots come from hand moves, so the pair is not a fault there. -->
+          <div class:diag-fault={voiceInput && transcriptTapsArrived === 0 && alignmentArrived > 0}>
             taps: {transcriptTapsArrived} arrived
           </div>
           <div>viewport: {vw}×{vh}</div>
@@ -3020,7 +3031,7 @@
         exactly what they were before, in different planes, parting company
         whenever anybody turned mirroring on.
       -->
-      {#if showDiagnostics && app.envelope !== null && !app.blanked && !dockPopoverOpen}
+      {#if showDiagnostics && voiceInput && app.envelope !== null && !app.blanked && !dockPopoverOpen}
         <div class="transcript-tap" class:silent={transcriptWords.length === 0}>
           <span class="transcript-tap-words">
             {transcriptWords.length > 0 ? transcriptWords : 'listening — no words yet'}
@@ -3075,7 +3086,7 @@
         readout={!app.blanked}
         revealed={dockVisible}
         {followPaused}
-        onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
+        onfollowtoggle={voiceInput ? () => sendIntent({ kind: 'toggle_follow' }) : undefined}
         presentationMode={embedded?.presentationMode ?? 'prompter'}
         onpresentationtoggle={embedded?.onpresentationtoggle}
         practice={embedded?.practice ?? false}

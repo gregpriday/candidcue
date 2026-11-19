@@ -28,8 +28,17 @@
      * Unwired callers keep the old reading of the store flag.
      */
     heldByUser?: boolean;
+    /**
+     * Whether the take listens at all (#243). A Read take does not, so it has
+     * no voice to hold or to follow, and the switch between the two is not
+     * offered. Nor is "Set my place": it asks the engine to find the presenter
+     * from what they say next, which a take that hears nothing never answers.
+     * The single steps stay — they are how a Read take is moved by hand, along
+     * with scrolling. Unwired callers keep everything.
+     */
+    voiceInput?: boolean;
   }
-  let { follow, part = 'all', heldByUser }: Props = $props();
+  let { follow, part = 'all', heldByUser, voiceInput = true }: Props = $props();
 
   const userHold = $derived(heldByUser ?? follow.followingPaused);
 </script>
@@ -89,14 +98,16 @@
   -->
   {#if part !== 'candidates'}
     <div class="routine">
-      <Button
-        variant={follow.followingPaused && userHold ? 'primary' : 'default'}
-        title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
-        onclick={() => smoothFollow.toggleFollowingPaused()}
-      >
-        {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
-      </Button>
-      <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
+      {#if voiceInput}
+        <Button
+          variant={follow.followingPaused && userHold ? 'primary' : 'default'}
+          title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
+          onclick={() => smoothFollow.toggleFollowingPaused()}
+        >
+          {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
+        </Button>
+        <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
+      {/if}
       <Button onclick={() => smoothFollow.nudge('back')}>{TAKE_ACTIONS.previousSentence}</Button>
       <Button onclick={() => smoothFollow.nudge('forward')}>{TAKE_ACTIONS.nextSentence}</Button>
     </div>

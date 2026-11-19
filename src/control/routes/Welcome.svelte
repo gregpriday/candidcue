@@ -259,8 +259,13 @@
         tone: 'success',
         pill: 'Installed',
         // The narrow claim, like every other row: the files are here. Whether
-        // a take follows also needs a microphone, which this row cannot see.
-        detail: 'Speech data is installed. Transcription happens on this machine.',
+        // a take follows also needs a microphone, which this row cannot see —
+        // and a take in Read (#243), which a new profile starts in, does not
+        // listen at all, so that is said too: the download alone turns nothing on.
+        detail:
+          $settings.general.defaultSessionMode === 'manual'
+            ? 'Speech data is installed. Takes open in Read mode until you choose Follow voice in Settings › General.'
+            : 'Speech data is installed. Transcription happens on this machine.',
         emphasis: 'quiet',
       };
     }
@@ -278,7 +283,10 @@
     return {
       tone: 'neutral',
       pill: 'Not set up',
-      detail: 'Voice following needs a one-time download. Writing works without it.',
+      // A new profile's takes open in Read (#243), so the script can be
+      // presented and scrolled before anything is downloaded.
+      detail:
+        'Voice following needs a one-time download. Writing and presenting in Read mode work without it.',
       emphasis: 'setup',
     };
   }

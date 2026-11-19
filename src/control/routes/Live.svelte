@@ -1955,6 +1955,9 @@ import { onShortcut } from '../lib/shortcuts';
          * practice — the window is how it opens, not what it is.
          */
         practice: $session.practice,
+        // A Read take (#243) listens to nothing, so the stage offers nothing
+        // that would follow a voice.
+        voiceInput: $session.mode === 'voice',
         /*
          * The part, for the stage's "what is running" label (#241): it
          * was readable only in the console and the drawer, neither of which is
@@ -2142,7 +2145,7 @@ import { onShortcut } from '../lib/shortcuts';
         performance details sit behind a disclosure.
       -->
       <p class="region-label">Following</p>
-      <FollowControls follow={$smoothFollow} />
+      <FollowControls follow={$smoothFollow} voiceInput={$session.mode === 'voice'} />
 
       <Disclosure label="Follow diagnostics">
         <FollowDiagnostics
@@ -2464,7 +2467,12 @@ import { onShortcut } from '../lib/shortcuts';
         onnoticeaction={handleNoticeAction}
       />
 
-      <FollowControls follow={$smoothFollow} part="routine" heldByUser={$session.followPausedByUser} />
+      <FollowControls
+        follow={$smoothFollow}
+        part="routine"
+        heldByUser={$session.followPausedByUser}
+        voiceInput={$session.mode === 'voice'}
+      />
 
       {@render stageFaultNotice()}
 

@@ -489,6 +489,26 @@ describe('single-window Present', () => {
     );
   });
 
+  it('opens a Read take on a missing pin without looking for it or saying so (#243)', async () => {
+    settingsState.value!.general.defaultSessionMode = 'manual';
+    settingsState.value!.audio.followSystemDefault = false;
+    settingsState.value!.audio.preferredDeviceId = 'rode';
+    settingsState.value!.audio.preferredDeviceLabel = 'RØDE NT-USB Mini';
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    const opened = calls.startLiveSession.mock.calls[0]?.[0] as {
+      micDeviceId?: string;
+      mode?: string;
+    };
+    expect(opened.mode).toBe('manual');
+    expect(opened.micDeviceId).toBeUndefined();
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'manual' }),
+    );
+    expect(calls.preloadSpeechEngine).not.toHaveBeenCalled();
+    expect(calls.showToast).not.toHaveBeenCalled();
+  });
+
   it('reads the legacy `default` pin as the system default, not a missing device', async () => {
     settingsState.value!.audio.followSystemDefault = false;
     settingsState.value!.audio.preferredDeviceId = 'default';

@@ -312,6 +312,13 @@ describe('the menu holds whatever this window can actually offer', () => {
     expect(menuRow(container, 'follow'), 'the menu stays up').not.toBeNull();
   });
 
+  it('offers no Follow voice to a take that does not listen (#243)', async () => {
+    const { container } = mount({ onfollowtoggle: undefined });
+    await openMenu(container);
+    expect(menuRow(container, 'follow')).toBeNull();
+    expect(container.textContent).not.toContain('Follow voice');
+  });
+
   it('replaces itself with the level the panel row opens', async () => {
     const { container, onappearanceopen } = mount({ appearancePanel: PANEL });
     await openMenu(container);

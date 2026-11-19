@@ -93,24 +93,30 @@ export type SessionMode = 'voice' | 'manual' | 'fixed';
  * 'fixed' reads as "Roll at pace" rather than "Fixed speed" so the summary, the
  * settings readout and the live control all name one thing one way. The stored
  * value is untouched — this is a display mapping, not a migration.
+ *
+ * 'manual' is Read (#243): a take that opens with no microphone and no speech
+ * model, moved by hand and by Auto-scroll. It keeps the stored value it always
+ * had — Rust's session command and the sessions table's CHECK both accept it,
+ * and every 'manual' row ever written was exactly that take — so naming it is
+ * the whole change.
  */
 export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
   voice: 'Follow voice',
-  manual: 'Manual',
+  manual: 'Read',
   fixed: 'Roll at pace',
 };
 
 /**
  * The session modes a take can be opened as in this release.
  *
- * Only voice. 'manual' and 'fixed' survive as stored values — a document saved
- * by an earlier version can still carry one, and Settings offers the way back —
- * but nothing offers them, so no copy may send a presenter looking for one
- * (#121). Settings reads this to decide whether the stored mode needs that way
- * back, and the error-copy test reads it to decide which modes copy may name:
- * the day a mode ships, adding it here lifts both at once.
+ * Follow voice and Read (#243). 'fixed' survives only as a stored value — a
+ * document saved by an earlier version can still carry one — but nothing offers
+ * it, so no copy may send a presenter looking for it (#121). Settings builds its
+ * Session mode choice from this and shows a stored mode outside it as an
+ * earlier version's, and the error-copy test reads it to decide which modes
+ * copy may name: adding a mode here lifts both at once.
  */
-export const OFFERED_SESSION_MODES: readonly SessionMode[] = ['voice'];
+export const OFFERED_SESSION_MODES: readonly SessionMode[] = ['voice', 'manual'];
 
 export function sessionModeLabel(mode: string): string {
   return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;

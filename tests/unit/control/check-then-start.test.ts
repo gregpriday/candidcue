@@ -256,6 +256,34 @@ describe('checkThenStartTake', () => {
     expect(get(takeReadinessPrompt)).toBeNull();
   });
 
+  it('launches a Read take with no model, a refused microphone and a missing pin, without asking about any of them (#243)', async () => {
+    pinYeti();
+    settingsDoc.update((s) => ({
+      ...s,
+      general: { ...s.general, defaultSessionMode: 'manual' },
+    }));
+    model.set(MISSING);
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    // A named list without the pinned input: a voice take would report it.
+    h.listMicrophones.mockResolvedValue([{ ...YETI, deviceId: 'other', label: 'Built-in' }]);
+
+    await checkThenStartTake('script-1');
+
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(get(takeReadinessPrompt)).toBeNull();
+    // Not asked at all, rather than asked and ignored.
+    expect(h.listMicrophones).not.toHaveBeenCalled();
+    expect(h.readMicrophonePermission).not.toHaveBeenCalled();
+  });
+
+  it('still reports the microphone to a voice take on the same setup', async () => {
+    pinYeti();
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    await checkThenStartTake('script-1');
+    expect(h.readMicrophonePermission).toHaveBeenCalled();
+    expect(findingIds()).toContain('mic_permission_denied');
+  });
+
   it('checks a practice like a take, and resumes it as a practice', async () => {
     model.set(MISSING);
     await checkThenStartTake('script-1', { practice: true });
@@ -453,6 +481,68 @@ describe('checkThenStart', () => {
     expect(get(takeReadinessPrompt)?.verdict.findings).toEqual([]);
     await startAnyway();
     expect(launch).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * #243 — a held sheet answers the mode it was checked for. Settings is another
+ * window, and switching between Follow voice and Read while the sheet is up
+ * changes the question: a Read check asks nothing about the microphone.
+ */
+describe('a mode switched while the sheet is held', () => {
+  function setMode(mode: 'voice' | 'manual'): void {
+    settingsDoc.update((s) => ({ ...s, general: { ...s.general, defaultSessionMode: mode } }));
+  }
+
+  it('checks again rather than start a voice take under a Read verdict', async () => {
+    setMode('manual');
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    const launch = vi.fn(async () => {});
+    await checkThenStart('script-1', { requested: true }, launch);
+    expect(get(takeReadinessPrompt)?.verdict.findings).toEqual([]);
+
+    setMode('voice');
+    await startAnyway();
+    expect(launch, 'the clean Read verdict is not a voice one').not.toHaveBeenCalled();
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+
+    // Answered for what it now is, the sheet's start launches as usual.
+    await startAnyway();
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the sheet down while it checks again, so the old launch cannot be pressed past a newer one', async () => {
+    setMode('manual');
+    const launch = vi.fn(async () => {});
+    await checkThenStart('script-1', { requested: true }, launch);
+
+    setMode('voice');
+    const permission = deferred<string>();
+    h.readMicrophonePermission.mockReturnValueOnce(permission.promise);
+    const rechecking = startAnyway();
+    expect(get(takeReadinessPrompt), 'nothing left to press mid-check').toBeNull();
+
+    // A newer Present arrives while the old launch is being re-checked.
+    const newer = vi.fn(async () => {});
+    await checkThenStart('script-2', {}, newer);
+    permission.resolve('granted');
+    await rechecking;
+
+    expect(newer).toHaveBeenCalledTimes(1);
+    expect(launch, 'the older launch was retired by the newer one').not.toHaveBeenCalled();
+  });
+
+  it('does not open the microphone for a launch that became Read', async () => {
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    await checkThenStartTake('script-1');
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+
+    setMode('manual');
+    await allowMicrophoneForTake();
+    expect(h.requestMicrophoneAccess).not.toHaveBeenCalled();
+    // Checked again as Read, with nothing to say: it launches.
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(get(takeReadinessPrompt)).toBeNull();
   });
 });
 

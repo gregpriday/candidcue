@@ -2403,6 +2403,9 @@ const followActions = {
    * the engine's own position is the thing being disputed.
    */
   reAnchor(): void {
+    // A search for the presenter in what they say next. A Read take (#243)
+    // hears nothing, so it would leave "Finding your place" up for good.
+    if (get(state).mode !== 'voice') return;
     driver?.reacquire();
     noteReposition();
     acknowledgeOnStage('Re-finding your place');
@@ -3111,6 +3114,13 @@ export function toggleBlankStage(): void {
  * in sync.
  */
 export function toggleVoiceFollow(): void {
+  /*
+   * A Read take has no voice to follow (#243): nothing listens, so the switch
+   * would only move a flag — and turning it "on" would stop a running
+   * Auto-scroll, handing the script to a voice that is not there. The dock and
+   * the drawer do not offer it in that take; this covers the keys.
+   */
+  if (get(state).mode !== 'voice') return;
   /*
    * Toggles the presenter's own switch, NOT `voiceFollow`.
    *

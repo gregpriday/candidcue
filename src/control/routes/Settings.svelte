@@ -94,13 +94,10 @@
     withoutOpticalProfile,
     withPanelMirror,
     type ReaderTheme,
+    type SessionMode,
   } from '../services/settings-types';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
-  import {
-    OFFERED_SESSION_MODES,
-    SESSION_MODE_LABELS,
-    sessionModeLabel,
-  } from '../../shared/take-vocabulary';
+  import { OFFERED_SESSION_MODES, SESSION_MODE_LABELS } from '../../shared/take-vocabulary';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -210,7 +207,7 @@
       id: 'general',
       label: 'General',
       keywords:
-        'on launch / open the script library / open the most recent script / startup / session mode / follow voice / remember the reading window / window position size restore / confirm before ending an active session / follow headings as spoken lines / headings read aloud',
+        'on launch / open the script library / open the most recent script / startup / session mode / follow voice / read / remember the reading window / window position size restore / confirm before ending an active session / follow headings as spoken lines / headings read aloud',
     },
     {
       id: 'speech',
@@ -620,6 +617,40 @@
   async function refreshSpeechStatus(): Promise<void> {
     await refreshEngineStatus();
   }
+
+  /**
+   * What the chosen session mode does, said under the choice (#243).
+   *
+   * Read says what it does NOT need, because that is why somebody picks it,
+   * and where the motion comes from instead. A stored 'fixed' is an earlier
+   * version's value: it is named, and the sentence says what to do about it.
+   */
+  /** A stored mode nothing offers any more, named as what it is. */
+  const LEGACY_MODE_LABEL = $derived(
+    `${SESSION_MODE_LABELS[$settings.general.defaultSessionMode]} (earlier version)`,
+  );
+
+  function sessionModeDescription(mode: SessionMode): string {
+    if (mode === 'voice') {
+      return 'Takes open listening, and the script follows your voice. Needs the speech data in Settings › Speech and the microphone.';
+    }
+    if (mode === 'manual') {
+      return 'Takes open without the microphone or speech data. Scroll by hand, or press A to auto-scroll at the pace in Teleprompter › Auto-scroll pace.';
+    }
+    return `Saved by an earlier version. Takes in this mode do not follow your voice; choose ${SESSION_MODE_LABELS.voice} or ${SESSION_MODE_LABELS.manual}.`;
+  }
+
+  /*
+   * Read in force while speech data is installed (#243). A fresh profile opens
+   * in Read, so somebody who has just downloaded the model to have takes
+   * follow them would otherwise find their next take still not listening, with
+   * the switch two sections away. Said beside the download, with the switch.
+   */
+  const readModeWithModel = $derived(
+    $settings.general.defaultSessionMode === 'manual' &&
+      modelStatus?.installed === true &&
+      !isModelBusy(modelStatus),
+  );
 
   $effect(() => {
     void loadSettings();
@@ -2648,72 +2679,46 @@
               void patchSettings('general', { launchBehavior: value as 'library' | 'recent' })}
           />
           <!--
-            One mode, said out loud.
+            Two ways a take can open, and the choice is the presenter's (#243).
 
-            'manual' and 'fixed' are still in the `SessionMode` union because a
-            session RECORD carries the mode it ran in and old rows have to keep
-            parsing — but nothing STARTS a take in either of them. Offering all
-            three made the mode look like a choice, and choosing one of the two
-            that do nothing produced a take that behaved exactly like voice
-            follow without saying so.
+            Follow voice opens the microphone and the on-device recogniser and
+            lets the engine move the script. Read opens neither: the script moves
+            by hand and by Auto-scroll, so there is no permission prompt, no
+            speech model to download first and no readiness warning about either.
+            Read is stored as 'manual', the value the session record has always
+            accepted for a take with no voice in it.
 
-            Constant-rate motion is no longer the thing that is missing: there
-            is a fixed-pace transport, and Auto-scroll pace in Settings ›
-            Teleprompter sets it. What is missing is a MODE — a take that opens
-            with no microphone and no recogniser, and prompts by the clock
-            alone. That is a different decision from "can the script roll", and
-            until somebody makes it, a take always opens listening.
-          -->
-          <!--
-            A readout, not a dropdown. A dropdown is a question, and one whose
-            two alternatives are permanently greyed out answers it with "there
-            was never anything to decide" — every time, for every reader.
+            'fixed' stays in the `SessionMode` union because session RECORDS and
+            documents written by an earlier version carry it, and they have to
+            keep parsing. Nothing offers it, but a stored one is shown as what it
+            is rather than as one of the two choices — a screen describing a
+            state the app is not in is the defect the old readout was written to
+            avoid — and picking either choice replaces it. Opening Settings does
+            not rewrite it.
 
-            So it says what the mode is, and the sentence carries the part worth
-            keeping: somebody who came here looking for a fixed-speed mode
-            learns that auto-scroll exists and where to find it, instead of
-            learning only that they cannot have what they came for.
+            A fresh profile starts in Read (Rust's `get_settings`, on the first
+            row it writes): turning voice following on is a choice somebody
+            makes, not a 161 MB download and a permission prompt standing
+            between a new install and its first scrolling script. A document
+            that already exists keeps whatever it says.
           -->
-          <!--
-            READ, not asserted. `defaultSessionMode` is still a real stored
-            field: `fromRustDocument` accepts a persisted 'manual' or 'fixed',
-            and `startTake` passes whatever it finds straight into the session.
-            A readout hardcoded to "Follow voice" would therefore have been the
-            same defect one layer along — a screen describing a state the app is
-            not in — for anybody carrying such a document. So if an unsupported
-            mode is stored, this says so and offers the way back that removing
-            the Select would otherwise have taken away. The way back names the
-            mode with the readout's own label, so the button and the value it
-            produces say the same words.
-          -->
-          {#if OFFERED_SESSION_MODES.includes($settings.general.defaultSessionMode)}
-            <SettingReadout
-              layout="row"
-              label="Session mode"
-              value={SESSION_MODE_LABELS.voice}
-              description="Every take opens listening. Auto-scroll can still roll the script at a set pace (Teleprompter › Auto-scroll pace)."
-            />
-          {:else}
-            <!-- The way back sits tight under the row it belongs to, not a
-                 row's gap away from it. -->
-            <div class="readout-with-action" data-search-row>
-              <SettingReadout
-                layout="row"
-                label="Session mode"
-                value={sessionModeLabel($settings.general.defaultSessionMode)}
-                description={`Saved by an earlier version. Takes in this mode do not follow your voice; switch back to ${SESSION_MODE_LABELS.voice} to prompt normally.`}
-              />
-              <p class="hint-line">
-                <button
-                  type="button"
-                  class="inline-link"
-                  onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
-                >
-                  Switch to {SESSION_MODE_LABELS.voice}
-                </button>
-              </p>
-            </div>
-          {/if}
+          <Select
+            layout="row"
+            label="Session mode"
+            value={$settings.general.defaultSessionMode}
+            options={[
+              ...OFFERED_SESSION_MODES.map((mode) => ({
+                value: mode,
+                label: SESSION_MODE_LABELS[mode],
+              })),
+              ...(OFFERED_SESSION_MODES.includes($settings.general.defaultSessionMode)
+                ? []
+                : [{ value: $settings.general.defaultSessionMode, label: LEGACY_MODE_LABEL, disabled: true }]),
+            ]}
+            description={sessionModeDescription($settings.general.defaultSessionMode)}
+            onchange={(value) =>
+              void patchSettings('general', { defaultSessionMode: value as SessionMode })}
+          />
           <!-- #218 removed "Revision retention": nothing prunes revisions, so
                every one is kept whatever the slider said. -->
           <!--
@@ -2793,6 +2798,19 @@
               await refreshSpeechStatus();
             }}
           />
+
+          {#if readModeWithModel}
+            <p class="hint-line" data-search-row>
+              Takes open in {SESSION_MODE_LABELS.manual} mode, so they do not listen.
+              <button
+                type="button"
+                class="inline-link"
+                onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
+              >
+                Follow my voice in takes
+              </button>
+            </p>
+          {/if}
 
           <p class="hint-line">
             Your voice never leaves this computer. The audio is never saved, and the words are not
