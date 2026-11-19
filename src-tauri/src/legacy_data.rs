@@ -702,11 +702,14 @@ mod tests {
         assert!(matches!(outcome, Outcome::Copied { raw_database: None, .. }), "{outcome:?}");
 
         let new = data_dir.path().join(IDENTIFIER);
-        assert_eq!(title_in(&new.join("speaking-glass.sqlite3")), "Edited while open");
+        // Checked before reading it back: `title_in` opens the snapshot in WAL
+        // mode, which makes a `-wal` of its own, and on Windows `pool.close()`
+        // can return before SQLite has removed it.
         assert!(
             !new.join("speaking-glass.sqlite3-wal").exists(),
             "a snapshot is one self-contained file, not a copy of the WAL"
         );
+        assert_eq!(title_in(&new.join("speaking-glass.sqlite3")), "Edited while open");
         assert_eq!(std::fs::read(old.join("candidcue.sqlite3-wal")).unwrap(), wal);
         assert_eq!(std::fs::read(old.join("candidcue.sqlite3")).unwrap(), database);
         tauri::async_runtime::block_on(live.close());
