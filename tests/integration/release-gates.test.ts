@@ -1823,12 +1823,46 @@ describe('the release workflow cannot publish an unverified build', () => {
      * an architecture mismatch. None of that is visible from source.
      */
     expect(uncommented).toContain('verify-signed-bundle.mjs');
-    expect(uncommented, 'and without the unsigned escape hatch').not.toMatch(
-      /verify-signed-bundle\.mjs[^\n]*--unsigned/,
-    );
-    // The DMG and the updater payload are artifacts too, and each is asked.
+    expect(uncommented, 'and without the unsigned escape hatch, on any line').not.toContain('--unsigned');
+    // The DMG is an artifact too, and is asked directly.
     expect(uncommented).toMatch(/stapler validate "\$DMG"/);
-    expect(uncommented).toMatch(/stapler validate "\$RUNNER_TEMP\/payload\/Speaking Glass\.app"/);
+  });
+
+  /*
+   * #189: the bundle that shipped was the linker's ad-hoc signature, with no
+   * hardened runtime and no entitlements. The inspection reads each slice's
+   * signer, Team ID, runtime flag and entitlements back off the signature,
+   * and the Team ID it holds them to is the release identity's — so both app
+   * copies (the one in the DMG and the one the updater installs) must be
+   * inspected, and each step must be handed the identity.
+   */
+  it('inspects both signed app copies against the release identity', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const targets = {
+      'Inspect the signed bundle':
+        '"src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"',
+      'Inspect the disk image and the updater payload': '"$RUNNER_TEMP/payload/Speaking Glass.app"',
+    };
+    for (const [name, app] of Object.entries(targets)) {
+      const step = stepOf(build, name, RELEASE_WORKFLOWS.macos);
+      expect(step, name).not.toMatch(/^\s+if:/m);
+      expect(step, name).not.toContain('continue-on-error');
+      expect(step.replace(/\\\n\s*/g, ''), name).toContain(`node scripts/verify-signed-bundle.mjs ${app}`);
+      expect(envMappings(step, 'secrets'), name).toEqual([['APPLE_SIGNING_IDENTITY', 'APPLE_SIGNING_IDENTITY']]);
+      expect(build.indexOf(`- name: ${name}`), `${name} runs before staging`).toBeLessThan(
+        build.indexOf('release-feed.mjs stage'),
+      );
+    }
+  });
+
+  it('stops before the build when the imported certificate is not the identity it will sign with', () => {
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    const step = stepOf(build, 'Import the signing certificate', RELEASE_WORKFLOWS.macos);
+    expect(envMappings(step, 'secrets').map(([name]) => name)).toContain('APPLE_SIGNING_IDENTITY');
+    expect(step).toContain('security find-identity -p codesigning "$KEYCHAIN"');
+    expect(step).toMatch(/grep -Fq "\\"\$APPLE_SIGNING_IDENTITY\\""/);
+    expect(step).toMatch(/exit 1/);
+    expect(build.indexOf('- name: Import the signing certificate')).toBeLessThan(build.indexOf('pnpm tauri build'));
   });
 
   it('publishes only after everything else has run', () => {

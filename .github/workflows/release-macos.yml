@@ -344,6 +344,7 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           if [ -z "${APPLE_CERTIFICATE:-}" ]; then
@@ -377,6 +378,19 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$PASSWORD" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          # The identity Tauri will hand codesign must now be findable, by its
+          # exact name. A certificate whose name differs from the secret (a
+          # renewal, another team's .p12) otherwise surfaces as a codesign
+          # error after the whole universal build. Not `-v`: that lists only
+          # identities whose chain this runner already trusts, and a missing
+          # intermediate there is codesign's to report, not a reason to stop
+          # here. The listing is never printed.
+          identities="$(security find-identity -p codesigning "$KEYCHAIN")"
+          if ! grep -Fq "\"$APPLE_SIGNING_IDENTITY\"" <<<"$identities"; then
+            echo "::error::the imported certificate is not the identity APPLE_SIGNING_IDENTITY names. Tauri would ask codesign for an identity this keychain does not hold; set the secret to the certificate's exact \"Developer ID Application: <name> (<TEAM ID>)\" name."
+            exit 1
+          fi
+          echo "The signing identity is in the job's keychain."
 
       - name: Build, sign and notarise
         env:
@@ -561,7 +575,14 @@ jobs:
           cp "$RUNNER_TEMP/otool.txt" provenance/linked-libraries.txt
           cp "$RUNNER_TEMP/link-aarch64.map" "$RUNNER_TEMP/link-x86_64.map" provenance/
 
+      # Developer ID (never ad hoc), the release Team ID, a secure timestamp
+      # and the hardened runtime on each slice, and exactly the entitlements
+      # the source plist declares, the microphone among them, read back off
+      # the signature; then Gatekeeper and the stapled ticket. The identity is
+      # how it knows which Team ID the bundle must carry.
       - name: Inspect the signed bundle
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           node scripts/verify-signed-bundle.mjs \
             "src-tauri/target/universal-apple-darwin/release/bundle/macos/Speaking Glass.app"
@@ -573,6 +594,8 @@ jobs:
       # it after signing would surface here rather than as InvalidSignature
       # on every installed copy.
       - name: Inspect the disk image and the updater payload
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
@@ -582,9 +605,10 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
           rm -rf "$RUNNER_TEMP/payload" && mkdir -p "$RUNNER_TEMP/payload"
           tar -xzf "$BUNDLE"/macos/*.app.tar.gz -C "$RUNNER_TEMP/payload"
-          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/payload/Speaking Glass.app"
-          xcrun stapler validate "$RUNNER_TEMP/payload/Speaking Glass.app"
-          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/payload/Speaking Glass.app"
+          # The same inspection as the bundle beside it: an updater payload
+          # that lost the runtime flag or an entitlement on its way into the
+          # tarball would ship to every installed copy, not just new ones.
+          node scripts/verify-signed-bundle.mjs "$RUNNER_TEMP/payload/Speaking Glass.app"
 
       # The bundle opens and stays open. Nothing here can hear a voice or see
       # the glass, but an app that dies at launch on a clean machine dies here
