@@ -131,7 +131,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     openSyntaxReference,
     syntaxReferenceOpen,
   } from './stores/syntax-reference';
-  import { showToast } from './stores/toasts';
+  import { dismissToastByKey, showToast } from './stores/toasts';
 
   let ready = $state(false);
   let shortcutsOpen = $state(false);
@@ -176,6 +176,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   /** How long the boot waits for the CandidCue library notice (#454). */
   const LEGACY_NOTICE_WAIT_MS = 2000;
+  const LEGACY_NOTICE_TOAST = 'legacy-library';
+
+  // The editor-launch pointer is for the desk: a take takes it down.
+  $effect(() => {
+    if ($session.active || $takeStarting || $presentingPhase !== 'off') {
+      dismissToastByKey(LEGACY_NOTICE_TOAST);
+    }
+  });
   let stopUpdateSchedule: (() => void) | null = null;
   /**
    * Files are over the window right now (§20.2).
@@ -736,12 +744,22 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * Bounded: the notice is worth a short wait, never a launch. A reply
          * that does not come in time is treated as no notice.
          */
+        let noticeTimer: ReturnType<typeof setTimeout> | undefined;
         const legacy = await Promise.race([
           legacyNotice,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), LEGACY_NOTICE_WAIT_MS)),
+          new Promise<null>((resolve) => {
+            noticeTimer = setTimeout(() => resolve(null), LEGACY_NOTICE_WAIT_MS);
+          }),
         ]);
+        clearTimeout(noticeTimer);
         if (disposed) return;
         setLegacyLibraryNotice(legacy);
+        // A reply that missed the deadline still says it, wherever the user is.
+        if (legacy === null) {
+          void legacyNotice.then((late) => {
+            if (!disposed && late !== null) setLegacyLibraryNotice(late);
+          });
+        }
 
         const status = await initAppStatus();
 
@@ -836,7 +854,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
           showToast(
             'Your CandidCue scripts are not in this library: All Scripts in the Library says where they are.',
             'info',
-            { durationMs: 12_000 },
+            { durationMs: 12_000, key: LEGACY_NOTICE_TOAST },
           );
         }
 

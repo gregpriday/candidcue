@@ -100,6 +100,16 @@ test('Welcome waits for the notice, then shows it above the buttons that would e
   errors.expectClean();
 });
 
+test('a reply that misses the boot deadline still says it', async ({ page }) => {
+  await installTauriShim(page, { legacyLibraryNotice: FAILED, heldAtBoot: ['get_legacy_library_notice'] });
+  await page.goto('/control.html');
+  // The desk does not wait forever: Welcome opens without it.
+  await expect(page.getByRole('button', { name: 'Open the sample script' })).toBeVisible();
+  await expect(notice(page)).toHaveCount(0);
+  await page.evaluate(() => window.__E2E__.setHeld('get_legacy_library_notice', false));
+  await expect(notice(page)).toBeVisible();
+});
+
 test('past Welcome, the Library says it at the head of its list', async ({ page }) => {
   const errors = watchPageErrors(page);
   await installTauriShim(page, {
