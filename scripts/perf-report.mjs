@@ -199,9 +199,16 @@ export function seriesOf(report) {
   for (const pair of report.pairs.filter((p) => p.valid)) {
     for (const temp of ['cold', 'warm']) {
       const l = pair.launches[temp];
+      // Not navigation start: WKWebView stamps it at one of two points
+      // about 60 ms apart while the native side is still starting, so
+      // anything measured from it is bimodal while spawn-to-entry is not
+      // (bench/perf/README.md). It stays in the report; it is not compared.
+      // Derived here, from fields every recording has, so a recording made
+      // before a series existed still compares on it.
+      const sum = (a, b) => (a === null || a === undefined || b === null || b === undefined ? null : round(a + b));
       push(`launch.${temp}.spawn-to-ready`, l?.spawnToReadyMs);
-      push(`launch.${temp}.spawn-to-navigation`, l?.spawnToNavigationMs);
-      push(`launch.${temp}.navigation-to-entry`, l?.navigationToEntryMs);
+      push(`launch.${temp}.spawn-to-entry`, sum(l?.spawnToNavigationMs, l?.navigationToEntryMs));
+      push(`launch.${temp}.entry-to-ready`, sum(l?.navigationToReadyMs, l === null || l === undefined ? null : -l.navigationToEntryMs));
     }
     ['cold', 'warm'].forEach((temp, i) => {
       push(`open.${temp}`, pair.opens[i]?.ms);
@@ -221,15 +228,20 @@ export function seriesOf(report) {
 
 /**
  * How much worse a candidate may be before it is a regression, by series
- * family: `base × (1 + relative) + absoluteMs`. The defaults are a starting
- * point; a baseline carries its own, set from repeat runs of an unchanged
- * build on its Mac (bench/perf/README.md), and those win.
+ * family: `base × (1 + relative) + absolute`. Set from two recordings of
+ * one unchanged build on the baseline's Mac, both ways round
+ * (bench/perf/README.md has the numbers). A baseline may carry its own
+ * `thresholds`, which win; a new Mac should be measured the same way.
  */
 export const DEFAULT_THRESHOLDS = {
-  launch: { relative: 0.2, absolute: 60 },
-  open: { relative: 0.2, absolute: 40 },
-  present: { relative: 0.2, absolute: 40 },
+  launch: { relative: 0.2, absolute: 40 },
+  open: { relative: 0.2, absolute: 30 },
+  present: { relative: 0.1, absolute: 30 },
   frames: { relative: 0.25, absolute: 4 },
+  // A take's single worst frame: one sample per take, so its p95 over twenty
+  // takes is the second-worst frame of the run, and two recordings of the
+  // same build put that at 30 and 42 ms.
+  frameMax: { relative: 0.5, absolute: 8 },
   // A COUNT of frames over LONG_FRAME_MS per take, not milliseconds: most
   // takes have none, so a relative allowance alone would make one stray
   // frame a regression.
@@ -237,7 +249,11 @@ export const DEFAULT_THRESHOLDS = {
 };
 
 function thresholdFor(name, thresholds) {
-  const family = name.endsWith('.long') ? 'longFrames' : name.split('.')[0];
+  const family = name.endsWith('.long')
+    ? 'longFrames'
+    : name.startsWith('frames.') && name.endsWith('.max')
+      ? 'frameMax'
+      : name.split('.')[0];
   return thresholds[family] ?? DEFAULT_THRESHOLDS[family] ?? { relative: 0.2, absolute: 0 };
 }
 
@@ -325,4 +341,15 @@ export function formatComparison(result) {
   for (const name of result.missing ?? []) lines.push(`${name.padEnd(34)} missing from the candidate`);
   for (const p of result.invalidPairs) lines.push(`pair ${p.pair} INVALID: ${p.problems.join('; ')}`);
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * A report as committed: indented, but every array of plain numbers on one
+ * line. A baseline holds tens of thousands of frame intervals, and one per
+ * line would make it a file nobody can read or review.
+ */
+export function serialiseReport(report) {
+  return `${JSON.stringify(report, null, 1).replace(/\[\s*(-?[\d.e+-]+(?:,\s*-?[\d.e+-]+)*)\s*\]/g, (_, body) =>
+    `[${body.split(/,\s*/).join(',')}]`,
+  )}\n`;
 }

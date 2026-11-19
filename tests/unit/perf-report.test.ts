@@ -16,6 +16,7 @@ import {
   parseTrace,
   REPORT_SCHEMA,
   SCENARIO_ID,
+  serialiseReport,
   seriesOf,
   summarise,
   type Pair,
@@ -102,7 +103,11 @@ describe('assembling a pair', () => {
     const pair = assemblePair({ pair: 1, firstUse: firstUse(), relaunch: relaunch(), spawnedAt });
     expect(pair.problems).toEqual([]);
     expect(pair.valid).toBe(true);
-    expect(pair.launches.cold).toMatchObject({ spawnToReadyMs: 500, spawnToNavigationMs: 300, navigationToEntryMs: 40 });
+    expect(pair.launches.cold).toMatchObject({
+      spawnToReadyMs: 500,
+      spawnToNavigationMs: 300,
+      navigationToEntryMs: 40,
+    });
     expect(pair.launches.warm).toMatchObject({ spawnToReadyMs: 300, spawnToNavigationMs: 150 });
     expect(pair.opens.map((o) => o.ms)).toEqual([420, 180]);
     expect(pair.takes[0]?.deltas).toEqual([16.7, 16.7, 16.6, 33.4]);
@@ -165,6 +170,10 @@ describe('series', () => {
     const series = seriesOf(report([...pairs(3), broken]));
     expect(series['launch.cold.spawn-to-ready']).toEqual([500, 500, 500]);
     expect(series['launch.warm.spawn-to-ready']).toEqual([300, 300, 300]);
+    expect(series['launch.cold.spawn-to-entry']).toEqual([340, 340, 340]);
+    expect(series['launch.cold.entry-to-ready']).toEqual([160, 160, 160]);
+    // Navigation start is bimodal on WKWebView, so nothing is measured from it.
+    expect(Object.keys(series).some((name) => name.includes('navigation'))).toBe(false);
     expect(series['open.cold']).toEqual([420, 420, 420]);
     expect(series['open.warm']).toEqual([180, 180, 180]);
     expect(series['frames.cold.max']).toEqual([33.4, 33.4, 33.4]);
@@ -225,5 +234,15 @@ describe('comparing two recordings', () => {
     expect(compareReports(base, report(pairs(2), { scenario: { id: SCENARIO_ID, fixtureSha256: 'def' } })).reasons).toEqual([
       'the fixture script differs',
     ]);
+  });
+});
+
+describe('serialising a report', () => {
+  it('keeps number arrays on one line and round-trips', () => {
+    const r = report(pairs(2));
+    const text = serialiseReport(r);
+    expect(text).toContain('[16.7,16.7,16.6,33.4]');
+    expect(text.endsWith('\n')).toBe(true);
+    expect(JSON.parse(text)).toEqual(JSON.parse(JSON.stringify(r)));
   });
 });

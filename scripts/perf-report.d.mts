@@ -97,3 +97,4 @@ export declare function seriesOf(report: Pick<Report, 'pairs'>): Record<string, 
 export declare function incompatibilities(base: Report, candidate: Report): string[];
 export declare function compareReports(base: Report, candidate: Report): Comparison;
 export declare function formatComparison(result: Comparison): string;
+export declare function serialiseReport(report: unknown): string;

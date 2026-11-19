@@ -35,6 +35,7 @@ import {
   SCENARIO_ID,
   assemblePair,
   parseTrace,
+  serialiseReport,
   seriesOf,
   summarise,
 } from './perf-report.mjs';
@@ -221,7 +222,7 @@ async function main() {
 
   const out = resolve(ROOT, opts.out);
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, `${JSON.stringify(report, null, 1)}\n`);
+  writeFileSync(out, serialiseReport(report));
   process.stdout.write(`\n${opts.out}\n`);
   for (const [name, values] of Object.entries(seriesOf(report))) {
     const s = summarise(values);

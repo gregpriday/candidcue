@@ -304,6 +304,13 @@ function doneButton(): HTMLButtonElement | null {
  * instrumentation in the renderer. The raw interval is kept, before the
  * follower's own gap handling could hide it. A take during which the window
  * was hidden is not a take: rAF stops, and the gap would be a lie.
+ *
+ * It also has a watchdog, because it is the one wait driven by nothing but
+ * animation frames: if they stop altogether (an occluded window, a blocked
+ * main thread) it would never finish, the process would be killed and the
+ * pair would say only "timeout". A stalled take reports itself instead. If
+ * the main thread itself is blocked the watchdog cannot run either, and that
+ * difference — a `stalled` record against no record at all — is the clue.
  */
 function sampleFrames(
   durationMs: number,
@@ -318,24 +325,36 @@ function sampleFrames(
     const startOffset = scrollOffset();
     let first: number | null = null;
     let last: number | null = null;
-    const frame = (now: number): void => {
-      if (first === null) first = now;
-      else if (last !== null) deltas.push(Math.round((now - last) * 100) / 100);
-      last = now;
-      if (now - first < durationMs && !hidden) {
-        requestAnimationFrame(frame);
-        return;
-      }
+    let finished = false;
+    let rafId = 0;
+    const finish = (endedAt: number, outcome: string): void => {
+      finished = true;
+      clearTimeout(watchdog);
+      cancelAnimationFrame(rafId);
       document.removeEventListener('visibilitychange', onVisibility);
       const endOffset = scrollOffset();
       resolve({
         deltas,
-        durationMs: now - first,
+        durationMs: first === null ? 0 : endedAt - first,
         displacementPx: startOffset === null || endOffset === null ? 0 : Math.abs(endOffset - startOffset),
-        outcome: hidden ? 'hidden' : 'ok',
+        outcome,
       });
     };
-    requestAnimationFrame(frame);
+    const watchdog = setTimeout(() => {
+      if (!finished) finish(last ?? 0, `stalled (frames stopped; ${document.visibilityState})`);
+    }, durationMs + 5_000);
+    const frame = (now: number): void => {
+      if (finished) return;
+      if (first === null) first = now;
+      else if (last !== null) deltas.push(Math.round((now - last) * 100) / 100);
+      last = now;
+      if (now - first < durationMs && !hidden) {
+        rafId = requestAnimationFrame(frame);
+        return;
+      }
+      finish(now, hidden ? 'hidden' : 'ok');
+    };
+    rafId = requestAnimationFrame(frame);
   });
 }
 

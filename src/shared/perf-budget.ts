@@ -33,8 +33,12 @@
  *
  * One test changed meaning: the stage wrap-plan budget used to time a COLD
  * first call and now times a warmed one, so it no longer says anything about
- * first-plan latency (which is what a presenter actually waits for). If that ever matters, it wants its own test that says so
- * rather than a budget quietly doing two jobs.
+ * first-plan latency (which is what a presenter actually waits for). That is
+ * measured where it can be measured honestly — in the packaged app, as
+ * Present to the first readable line, cold and warm, recorded as a
+ * distribution on a named Mac and compared by its p50 and p95
+ * (`bench/perf/README.md`, issue #240) — rather than by a budget here
+ * quietly doing two jobs.
  *
  * ---------------------------------------------------------------------------
  * ONE ALLOWANCE, FOR THE WINDOWS RUNNER
