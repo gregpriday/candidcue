@@ -379,6 +379,13 @@
     line-height: 1.2;
     font-weight: 600;
     letter-spacing: -0.006em;
+    /* The page's shaping, stated for both: an input's UA `font` shorthand
+       resets it, and a field shaped apart from its measure is a field the
+       measure no longer fits. */
+    text-rendering: inherit;
+    font-kerning: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
     color: var(--text-primary);
     min-width: 0;
   }
