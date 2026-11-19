@@ -158,9 +158,18 @@
         pattern to remove: a control on its own line above a heading is a web
         breadcrumb, and it cost 28px of every screen.
       -->
-      <button type="button" class="back" data-focus="control" onclick={onback}>
+      <!-- Named and titled as well as labelled: a route with no room for the
+           words (the editor's narrowest toolbar, #412) shows the chevron alone. -->
+      <button
+        type="button"
+        class="back"
+        data-focus="control"
+        aria-label={backLabel ?? 'Back'}
+        title={backLabel ?? 'Back'}
+        onclick={onback}
+      >
         <Icon name="chevron-left" size={14} />
-        <span>{backLabel ?? 'Back'}</span>
+        <span class="back-label">{backLabel ?? 'Back'}</span>
       </button>
     {/if}
 
@@ -224,6 +233,14 @@
     height: var(--toolbar-h);
     padding-inline: var(--page-x);
     min-width: 0;
+    /*
+     * A size container, so a route can fit what it shows to the bar's own
+     * width rather than the window's: the sidebar and the macOS traffic-light
+     * inset both come out of the bar, and a viewport query sees neither. Its
+     * content box is what is measured, so the inset is already excluded. The
+     * editor's Present readout is the first user (#412).
+     */
+    container: toolbar / inline-size;
   }
 
   .back {
@@ -350,7 +367,7 @@
 
   .spacer {
     flex: 1 1 auto;
-    min-width: var(--space-2);
+    min-width: var(--toolbar-spacer-min, var(--space-2));
   }
 
   .status,
@@ -362,8 +379,19 @@
   .status {
     gap: var(--space-3);
   }
+  /* A slot with nothing in it — the editor's save state on an ordinary save —
+     must not cost the row one of its 12px gaps. */
+  .status:empty {
+    display: none;
+  }
+  /*
+   * The gaps a route may close up when its bar runs short of room
+   * (`--toolbar-actions-gap`, `--toolbar-spacer-min`), set on the bar's
+   * children from the route's own container query. The row's own gaps are
+   * not offered: a query cannot restyle its container.
+   */
   .actions {
-    gap: var(--space-2);
+    gap: var(--toolbar-actions-gap, var(--space-2));
   }
 
   /*
