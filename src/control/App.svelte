@@ -97,7 +97,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
   import { pendingConfirm, requestConfirm } from './stores/confirm';
-  import { editor, editorHasUnsavedWork, saveNow } from './stores/editor';
+  import { editor, editorHasUnsavedWork, saveDocument, saveNow } from './stores/editor';
   import {
     duplicateScript,
     library,
@@ -159,7 +159,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * install is refused rather than allowed to outrun a save that failed.
      */
     prepareToQuit: async () => {
-      await saveNow();
+      await saveDocument();
       if (editorHasUnsavedWork()) {
         throw new Error(
           'Your script has changes that could not be saved, so the update was not installed. Save the script, then try again.',
@@ -841,7 +841,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
          */
         name: 'flush-editor',
         run: async () => {
-          await saveNow();
+          // With the title still being typed, if it is (#449): quitting moves
+          // no focus, so nothing else would commit it.
+          await saveDocument();
           if (!editorHasUnsavedWork()) return;
 
           const { scriptId, source } = get(editor);
@@ -1012,7 +1014,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   const commandActions: CommandActions = {
     newScript: () => void createAndOpenScript('new'),
     importMarkdown: () => void importMarkdown(),
-    save: () => void saveNow(),
+    save: () => void saveDocument(),
     duplicate: (scriptId) => void duplicateScript(scriptId),
     rename: () => dispatchRouteCommand('file.rename-script'),
     exportMarkdown: (scriptId) => {

@@ -202,7 +202,55 @@ export async function setTitle(title: string): Promise<void> {
   await saveNow();
 }
 
-/** Immediate save (autosave flush and Cmd/Ctrl+S). */
+/**
+ * The title the toolbar is holding but has not committed.
+ *
+ * The title field is a draft until Enter or leaving it commits it, and an
+ * explicit Save or a quit moves neither the caret nor focus — so both used to
+ * write the document with its old name while the new one sat in the field
+ * (#449). The route that renders the field registers a reader here for as
+ * long as it is mounted; the reader answers `null` when there is nothing to
+ * commit, and owns what counts as that (an unchanged, emptied or abandoned
+ * edit), because those rules live with the field.
+ */
+let titleDraftReader: (() => string | null) | null = null;
+
+/** Register the title-draft reader; returns the unregistration. */
+export function registerTitleDraft(read: () => string | null): () => void {
+  titleDraftReader = read;
+  return () => {
+    if (titleDraftReader === read) titleDraftReader = null;
+  };
+}
+
+/**
+ * Adopt a pending title draft into the document, without saving.
+ *
+ * Synchronous on purpose: the caller's save then sends the body and the new
+ * title in one write, on the one revision they share (see `setTitle`).
+ */
+function adoptTitleDraft(): void {
+  const draft = titleDraftReader?.()?.trim() ?? '';
+  const s = get(state);
+  if (s.scriptId === null || draft === '' || draft === s.title) return;
+  state.update((prev) => ({ ...prev, title: draft, dirty: true }));
+}
+
+/**
+ * An explicit save — File › Save, ⌘S, or the flush a quit runs — which also
+ * takes the title still being typed.
+ *
+ * Deliberately NOT folded into `saveNow`: the autosave debounce calls that,
+ * and committing the draft from there would rename the file mid-word and trim
+ * a trailing space out from under the caret. Only a save the user asked for,
+ * or the last one before the window goes, commits a draft they have not left.
+ */
+export async function saveDocument(): Promise<void> {
+  adoptTitleDraft();
+  await saveNow();
+}
+
+/** Immediate save (the autosave flush, and every save that is not explicit). */
 export async function saveNow(): Promise<void> {
   // Flush the pending compile first, even when there is nothing to save:
   // Preflight awaits saveNow() and then issues its own compile at revision 0,

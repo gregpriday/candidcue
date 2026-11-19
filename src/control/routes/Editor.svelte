@@ -95,8 +95,10 @@ import type { PresentationMode } from '../services/settings-types';
     flushEditorEdits,
     keepEditorVersion,
     openScript,
+    registerTitleDraft,
     retryCompile,
     revisionHistoryRequest,
+    saveDocument,
     saveNow,
     setSource,
     setTitle,
@@ -117,6 +119,13 @@ import type { PresentationMode } from '../services/settings-types';
   let editorRef: MarkdownEditor | null = $state(null);
   /** The document-title field, so File › Rename can put the caret in it. */
   let titleInput: HTMLInputElement | null = $state(null);
+  /**
+   * The toolbar, so an explicit Save or a quit can include a title still being
+   * typed (#449). Registered for this route's lifetime; while the script is
+   * opening there is no toolbar and so nothing to read.
+   */
+  let toolbar: Toolbar | null = $state(null);
+  $effect(() => registerTitleDraft(() => toolbar?.pendingTitle() ?? null));
   /**
    * The layout, from the workspace store rather than from local state.
    *
@@ -772,7 +781,7 @@ import type { PresentationMode } from '../services/settings-types';
   );
 
   async function manualSave(): Promise<void> {
-    await saveNow();
+    await saveDocument();
   }
 
   async function goBack(): Promise<void> {
@@ -2302,6 +2311,7 @@ import type { PresentationMode } from '../services/settings-types';
       backLabel="Library"
       onback={() => goBack()}
       editableTitle
+      bind:this={toolbar}
       bind:titleElement={titleInput}
       ontitlechange={(t) => void setTitle(t)}
       showSecondary={layout !== 'preview'}

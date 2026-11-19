@@ -117,6 +117,22 @@
     if (next !== title) ontitlechange?.(next);
   }
 
+  /**
+   * The title the field would commit if it were left now, or `null` when
+   * leaving it would commit nothing — unchanged, emptied, or abandoned with
+   * Escape (which has already put the saved title back into the draft).
+   *
+   * Read, not committed: an explicit Save or a quit has to include a title the
+   * caret is still in (#449), and neither moves focus. Reading the draft leaves
+   * the field exactly as the user has it; the saved title then catches up
+   * underneath, and `draft` re-seeds from it.
+   */
+  export function pendingTitle(): string | null {
+    if (!editableTitle) return null;
+    const next = draft.trim();
+    return next && next !== title ? next : null;
+  }
+
   function titleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Enter') {
       (event.currentTarget as HTMLInputElement).blur();
