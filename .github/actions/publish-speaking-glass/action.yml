@@ -80,6 +80,17 @@ runs:
         SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
       run: node scripts/release-feed.mjs write-once --stage verified/stage
 
+    # The catalogue compiled into this build asks the model mirror first
+    # (#198). A build that ships pointing at a mirror which does not serve its
+    # archive would leave new installs with upstream's mutable tag alone, and
+    # nobody would notice until that tag moved. The mirror is filled by
+    # .github/workflows/mirror-models.yml when the catalogue lands on develop.
+    - name: The speech-model mirror must serve every archive the catalogue pins
+      shell: bash
+      env:
+        SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
+      run: node scripts/mirror-models.mjs verify
+
     # The aws CLI's default request checksums are an S3 extension R2 does not
     # need; asking for them only when required keeps every CLI version working.
     - name: Upload the release files

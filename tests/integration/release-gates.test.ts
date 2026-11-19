@@ -1849,6 +1849,7 @@ describe('the release workflow cannot publish an unverified build', () => {
       './.github/actions/receive-speaking-glass',
       'release-feed.mjs monotonic',
       'release-feed.mjs write-once',
+      'mirror-models.mjs verify',
       'aws s3 cp verified/stage/files/',
       'release-feed.mjs verify-files',
       'aws s3 cp verified/stage/feed/',

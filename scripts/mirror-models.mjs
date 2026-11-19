@@ -32,13 +32,17 @@
  * ## What counts as done
  *
  * Not the upload. R2 accepting an object says nothing about what the public
- * hostname serves — a cached 404 can outlive it — so each archive is fetched
- * back from the URL a client uses and hashed in full before the run passes.
+ * hostname serves — a 404 cached at the edge before the upload can outlive it
+ * by minutes — so each archive is fetched back from the URL a client uses and
+ * hashed in full before the run passes, retrying past that cache's lifetime.
  * A length match is not enough: a same-length object of the wrong bytes is
  * exactly what a mirror must never get away with.
  *
  *   node scripts/mirror-models.mjs sync     upload what is missing, then verify
  *   node scripts/mirror-models.mjs verify   verify only; needs no credentials
+ *
+ * The release pipeline runs `verify` before it publishes anything, so a build
+ * whose catalogue names a mirror that does not serve its archive never ships.
  *
  * `sync` reads the bucket through the aws CLI with `R2_ENDPOINT`, `R2_BUCKET`
  * and the usual `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
@@ -51,6 +55,8 @@ import { createHash } from 'node:crypto';
 import { createWriteStream, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -59,21 +65,27 @@ export const DEFAULT_PUBLIC_URL = 'https://updates.speakingglass.com';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const SPDX_RE = /^[A-Za-z0-9.-]+$/;
+/*
+ * Archive names and the mirror prefix become both an object key and a URL
+ * path. Only characters that mean the same thing in both are allowed: a `#`,
+ * `?` or `%` would be written into the key literally and then read by a client
+ * as a fragment, a query or an escape, and the two would name different
+ * objects.
+ */
+const URL_SAFE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const URL_SAFE_PATH_RE = /^[A-Za-z0-9._~/-]*$/;
 const ARCHIVE_CONTENT_TYPE = 'application/x-bzip2';
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 // The notices may be reworded with the catalogue; an hour keeps a fix visible.
 const NOTICE_CACHE = 'public, max-age=3600';
 const FETCH_TIMEOUT_MS = 10 * 60_000;
-
-/** A name that stays one path segment: no traversal, no separators, no controls. */
-function isSafeName(name) {
-  return (
-    typeof name === 'string' &&
-    name.length > 0 &&
-    !name.startsWith('.') &&
-    !/[/\\\u0000-\u001f\u007f]/.test(name)
-  );
-}
+/*
+ * Cloudflare caches a 404 for three minutes by default. A lookup that lands
+ * just before the upload can keep the public URL answering 404 for that long,
+ * so the read-back keeps trying for longer than that: 8 tries, 30 s apart.
+ */
+const READ_BACK_ATTEMPTS = 8;
+const READ_BACK_DELAY_MS = 30_000;
 
 function httpsUrl(value, where) {
   let url;
@@ -114,6 +126,9 @@ export function mirrorPrefix(mirrorBaseUrl, publicUrl) {
   const strip = (path) => path.replace(/^\/+|\/+$/g, '');
   const originPath = strip(origin.pathname);
   const basePath = strip(base.pathname);
+  if (!URL_SAFE_PATH_RE.test(basePath)) {
+    throw new Error(`mirrorBaseUrl ${mirrorBaseUrl} has a path a bucket key cannot spell the same way`);
+  }
   if (originPath && basePath !== originPath && !basePath.startsWith(`${originPath}/`)) {
     throw new Error(`mirrorBaseUrl ${mirrorBaseUrl} is outside ${publicUrl}`);
   }
@@ -134,10 +149,16 @@ export function mirrorKeys(prefix, model) {
 /** The fields this script relies on, checked before any of them reach a key or a URL. */
 export function checkModel(model) {
   const id = model?.id;
-  if (!isSafeName(id)) throw new Error(`model id ${JSON.stringify(id)} is not a safe name`);
-  if (!isSafeName(model.installDir)) throw new Error(`${id}: installDir is not a safe name`);
+  if (typeof id !== 'string' || !URL_SAFE_NAME_RE.test(id)) {
+    throw new Error(`model id ${JSON.stringify(id)} is not a safe name`);
+  }
+  if (typeof model.installDir !== 'string' || !URL_SAFE_NAME_RE.test(model.installDir)) {
+    throw new Error(`${id}: installDir is not a safe name`);
+  }
   const archive = model.archive ?? {};
-  if (!isSafeName(archive.fileName)) throw new Error(`${id}: archive.fileName is not a safe name`);
+  if (typeof archive.fileName !== 'string' || !URL_SAFE_NAME_RE.test(archive.fileName)) {
+    throw new Error(`${id}: archive.fileName ${JSON.stringify(archive.fileName)} is not a URL-safe name`);
+  }
   if (!SHA256_RE.test(archive.sha256 ?? '')) throw new Error(`${id}: archive.sha256 is not a digest`);
   if (!Number.isSafeInteger(archive.bytes) || archive.bytes <= 0) {
     throw new Error(`${id}: archive.bytes must be a positive integer`);
@@ -146,6 +167,11 @@ export function checkModel(model) {
   const licenseId = model.attribution?.license?.id;
   if (typeof licenseId !== 'string' || !SPDX_RE.test(licenseId)) {
     throw new Error(`${id}: licence id ${JSON.stringify(licenseId)} is not a bare SPDX id`);
+  }
+  // The notices share the archive's directory; an archive by either name
+  // would be overwritten by its own notice after it was verified.
+  if (archive.fileName === 'ATTRIBUTION.md' || archive.fileName === `LICENSE-${licenseId}.txt`) {
+    throw new Error(`${id}: archive.fileName ${archive.fileName} collides with a notice beside it`);
   }
   return model;
 }
@@ -161,68 +187,89 @@ export function loadCatalogue(path = process.env.SPEAKING_GLASS_MODEL_CATALOGUE 
 
 /* ------------------------------------------------------------------ transfer */
 
-async function fetchWithTimeout(url, fetchFn) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    return { response: await fetchFn(url, { redirect: 'follow', signal: controller.signal }), timer };
-  } catch (error) {
-    clearTimeout(timer);
-    throw error;
-  }
-}
-
 /**
- * Read a response body, hashing it and refusing to read past `limit` bytes.
- * `sink` receives each chunk (a file write stream for a download, nothing for
- * a read-back).
+ * GET `url` and pass its body, hashed and bounded, to `sink` (or nowhere).
+ *
+ * A non-200 answer is returned with its body cancelled and nothing written.
+ * The body runs through one `pipeline`, so an error anywhere — the network,
+ * the byte ceiling, the file — rejects this call and closes everything, and
+ * the timeout aborts the transfer rather than just the wait for headers.
  */
-async function digestBody(response, limit, sink) {
-  const hash = createHash('sha256');
-  let bytes = 0;
-  for await (const chunk of response.body) {
-    bytes += chunk.length;
-    if (bytes > limit) throw new Error(`body exceeded the catalogue's ${limit} bytes`);
-    hash.update(chunk);
-    if (sink && !sink.write(chunk)) await new Promise((done) => sink.once('drain', done));
+async function transfer(url, limit, sink, fetchFn) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`${url} took longer than ${FETCH_TIMEOUT_MS} ms`)), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetchFn(url, { redirect: 'follow', signal: controller.signal });
+    if (response.status !== 200 || !response.body) {
+      await response.body?.cancel().catch(() => {});
+      return { status: response.status };
+    }
+    const hash = createHash('sha256');
+    let bytes = 0;
+    const meter = new Transform({
+      transform(chunk, _encoding, done) {
+        bytes += chunk.length;
+        if (bytes > limit) {
+          done(new Error(`body exceeded the catalogue's ${limit} bytes`));
+          return;
+        }
+        hash.update(chunk);
+        done(null, sink ? chunk : undefined);
+      },
+    });
+    const stages = [Readable.fromWeb(response.body), meter];
+    if (sink) stages.push(sink());
+    else stages.push(async function* drain(source) {
+      for await (const _ of source);
+    });
+    await pipeline(...stages, { signal: controller.signal });
+    return { status: 200, sha256: hash.digest('hex'), bytes };
+  } finally {
+    clearTimeout(timer);
   }
-  return { sha256: hash.digest('hex'), bytes };
 }
 
 /** GET a URL, hash its body, and report what it served. Never reads past `limit`. */
 export async function readBack(url, limit, { fetchFn = fetch } = {}) {
-  const { response, timer } = await fetchWithTimeout(url, fetchFn);
-  try {
-    if (response.status !== 200) {
-      await response.body?.cancel?.();
-      return { status: response.status };
-    }
-    return { status: 200, ...(await digestBody(response, limit)) };
-  } finally {
-    clearTimeout(timer);
-  }
+  return transfer(url, limit, null, fetchFn);
 }
 
-/** Download `url` to `dest`, refusing anything that is not exactly the pinned bytes. */
+/**
+ * Download `url` to `dest`, refusing anything that is not exactly the pinned
+ * bytes. The file is not created for an error answer, and is removed when the
+ * bytes are refused.
+ */
 export async function downloadVerified(url, dest, expected, { fetchFn = fetch } = {}) {
-  const { response, timer } = await fetchWithTimeout(url, fetchFn);
-  const out = createWriteStream(dest);
+  let got;
   try {
-    if (response.status !== 200) throw new Error(`upstream answered HTTP ${response.status}`);
-    const got = await digestBody(response, expected.bytes, out);
-    if (got.bytes !== expected.bytes) {
-      throw new Error(`upstream sent ${got.bytes} bytes, the catalogue pins ${expected.bytes}`);
-    }
-    if (got.sha256 !== expected.sha256) {
-      throw new Error(`upstream sent sha256 ${got.sha256}, the catalogue pins ${expected.sha256}`);
-    }
-  } finally {
-    clearTimeout(timer);
-    await new Promise((done, fail) => out.end((error) => (error ? fail(error) : done())));
+    got = await transfer(url, expected.bytes, () => createWriteStream(dest), fetchFn);
+  } catch (error) {
+    rmSync(dest, { force: true });
+    throw error;
+  }
+  let problem = '';
+  if (got.status !== 200) problem = `upstream answered HTTP ${got.status}`;
+  else if (got.bytes !== expected.bytes) problem = `upstream sent ${got.bytes} bytes, the catalogue pins ${expected.bytes}`;
+  else if (got.sha256 !== expected.sha256) problem = `upstream sent sha256 ${got.sha256}, the catalogue pins ${expected.sha256}`;
+  if (problem) {
+    rmSync(dest, { force: true });
+    throw new Error(problem);
   }
 }
 
 /* ----------------------------------------------------------------- the bucket */
+
+/*
+ * The aws CLI exits 254 when the service answered with an error, and prints
+ * `An error occurred (<Code>) when calling the <Operation> operation`. Only
+ * that shape, for that operation, is read as an answer: a connection failure
+ * whose message happens to contain `404` is not "the object is absent".
+ */
+function serviceError(result, operation) {
+  if (result.status !== 254) return null;
+  const match = /An error occurred \(([A-Za-z0-9]+)\) when calling the (\w+) operation/.exec(result.stderr);
+  return match && match[2] === operation ? match[1] : null;
+}
 
 /**
  * The bucket, through the aws CLI as the release action already uses it.
@@ -250,7 +297,7 @@ export function awsBucket({ endpoint, bucket, run = spawnSync } = {}) {
     head(key) {
       const result = aws(['s3api', 'head-object', '--bucket', bucket, '--key', key]);
       if (result.status === 0) return { size: JSON.parse(result.stdout).ContentLength };
-      if (/\b(404|Not Found|NoSuchKey)\b/.test(result.stderr)) return null;
+      if (['404', 'NotFound', 'NoSuchKey'].includes(serviceError(result, 'HeadObject'))) return null;
       throw new Error(`head-object ${key} failed: ${result.stderr.trim()}`);
     },
     /**
@@ -263,7 +310,9 @@ export function awsBucket({ endpoint, bucket, run = spawnSync } = {}) {
       if (ifAbsent) args.push('--if-none-match', '*');
       const result = aws(args);
       if (result.status === 0) return 'created';
-      if (ifAbsent && /\b(412|PreconditionFailed)\b/.test(result.stderr)) return 'exists';
+      if (ifAbsent && ['412', 'PreconditionFailed'].includes(serviceError(result, 'PutObject'))) {
+        return 'exists';
+      }
       throw new Error(`put-object ${key} failed: ${result.stderr.trim()}`);
     },
   };
@@ -277,7 +326,11 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
  * The client URL must serve exactly the pinned bytes. Retried, because a 404
  * the edge cached before the upload can outlive it for a while.
  */
-export async function verifyArchive(url, expected, { read = readBack, attempts = 6, delayMs = 20_000, log = console.log } = {}) {
+export async function verifyArchive(
+  url,
+  expected,
+  { read = readBack, attempts = READ_BACK_ATTEMPTS, delayMs = READ_BACK_DELAY_MS, log = console.log } = {},
+) {
   let last = '';
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -333,11 +386,14 @@ export async function syncModel(model, { bucket, keys, url, download, scratch, l
   await verify(url, expected, { log });
 }
 
-/** Put the notice and licence beside the archive. Small, rewritten every run. */
-function syncNotices(model, { bucket, keys }) {
-  const attribution = join(ROOT, 'src-tauri', 'models', model.installDir, 'ATTRIBUTION.md');
-  const license = join(ROOT, 'legal', 'licenses', `${model.attribution.license.id}.txt`);
-  // Read first: a missing notice must fail the run before anything goes up.
+/**
+ * Put the notice and licence beside the archive. Small, rewritten every run,
+ * and written BEFORE the archive, so the archive is never public without them.
+ */
+export function syncNotices(model, { bucket, keys, root = ROOT }) {
+  const attribution = join(root, 'src-tauri', 'models', model.installDir, 'ATTRIBUTION.md');
+  const license = join(root, 'legal', 'licenses', `${model.attribution.license.id}.txt`);
+  // Read both first: a missing notice must fail the run before either goes up.
   readFileSync(attribution);
   readFileSync(license);
   bucket.put(keys.attribution, attribution, {
@@ -347,41 +403,47 @@ function syncNotices(model, { bucket, keys }) {
   bucket.put(keys.license, license, { contentType: 'text/plain; charset=utf-8', cacheControl: NOTICE_CACHE });
 }
 
-async function main([command]) {
-  if (command !== 'sync' && command !== 'verify') {
-    throw new Error('usage: mirror-models.mjs sync|verify');
-  }
-  const catalogue = loadCatalogue();
+/** `sync` over a whole catalogue: per model, the notices, then the archive. */
+export async function syncCatalogue(catalogue, { publicUrl, bucket, download, scratch, root = ROOT, log = console.log, verify = verifyArchive }) {
   if (!catalogue.mirrorBaseUrl) {
-    console.log('The catalogue names no mirror; nothing to do.');
+    log('The catalogue names no mirror; nothing to do.');
     return;
   }
-  const publicUrl = process.env.SPEAKING_GLASS_PUBLIC_URL || DEFAULT_PUBLIC_URL;
   const prefix = mirrorPrefix(catalogue.mirrorBaseUrl, publicUrl);
+  for (const model of catalogue.models) {
+    log(model.id);
+    const keys = mirrorKeys(prefix, model);
+    syncNotices(model, { bucket, keys, root });
+    await syncModel(model, { bucket, keys, url: mirrorUrl(catalogue.mirrorBaseUrl, model), download, scratch, log, verify });
+  }
+}
 
-  if (command === 'verify') {
-    for (const model of catalogue.models) {
-      console.log(model.id);
-      await verifyArchive(mirrorUrl(catalogue.mirrorBaseUrl, model), model.archive, { attempts: 1 });
-    }
+/** `verify` over a whole catalogue. Needs no credentials. */
+export async function verifyCatalogue(catalogue, { publicUrl, log = console.log, verify = verifyArchive, attempts = 3 }) {
+  if (!catalogue.mirrorBaseUrl) {
+    log('The catalogue names no mirror; nothing to verify.');
     return;
   }
+  mirrorPrefix(catalogue.mirrorBaseUrl, publicUrl);
+  for (const model of catalogue.models) {
+    log(model.id);
+    await verify(mirrorUrl(catalogue.mirrorBaseUrl, model), model.archive, { log, attempts });
+  }
+}
+
+async function main([command]) {
+  const catalogue = loadCatalogue();
+  const publicUrl = process.env.SPEAKING_GLASS_PUBLIC_URL || DEFAULT_PUBLIC_URL;
+  if (command === 'verify') {
+    await verifyCatalogue(catalogue, { publicUrl });
+    return;
+  }
+  if (command !== 'sync') throw new Error('usage: mirror-models.mjs sync|verify');
 
   const bucket = awsBucket({ endpoint: process.env.R2_ENDPOINT, bucket: process.env.R2_BUCKET });
   const scratch = mkdtempSync(join(tmpdir(), 'mirror-models-'));
   try {
-    for (const model of catalogue.models) {
-      console.log(model.id);
-      const keys = mirrorKeys(prefix, model);
-      await syncModel(model, {
-        bucket,
-        keys,
-        url: mirrorUrl(catalogue.mirrorBaseUrl, model),
-        download: downloadVerified,
-        scratch,
-      });
-      syncNotices(model, { bucket, keys });
-    }
+    await syncCatalogue(catalogue, { publicUrl, bucket, download: downloadVerified, scratch });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

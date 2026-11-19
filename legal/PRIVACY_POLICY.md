@@ -42,11 +42,11 @@ copies, files you exported, or what your own backup software has saved.
 The speech model is downloaded when you choose to install it, from the Welcome
 screen or from Speech settings. The download asks our own copy of the model on
 `updates.speakingglass.com` first, and the model's release hosting on GitHub
-(`github.com`) when that copy does not answer, along with whatever host either
-of those redirects it to, such as a content delivery network, so the server
-that finally sends the file is not one we can promise in advance. Like any
-download, it shows that server your IP address, and its User-Agent names
-Speaking Glass and its version. It carries none of your scripts, audio or
+(`github.com`) when that copy cannot supply a file that passes the check below,
+along with whatever host either of those redirects it to, such as a content
+delivery network, so the server that finally sends the file is not one we can
+promise in advance. Like any download, it shows every server it contacts your
+IP address, and its User-Agent names Speaking Glass and its version. It carries none of your scripts, audio or
 transcripts, and the file is checked against a SHA-256 hash built into the app
 before it is installed, whichever server sent it. `updates.speakingglass.com`
 is hosted by Cloudflare; it, GitHub and any host they redirect to each handle

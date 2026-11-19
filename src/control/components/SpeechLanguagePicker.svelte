@@ -543,7 +543,7 @@
     }
   }
 
-  /** "github.com" — or "mirror.example, then github.com" once one is stood up. */
+  /** "updates.speakingglass.com, then github.com" — or one host when the catalogue names no mirror. */
   function originLine(option: SpeechLanguageOption): string {
     const hosts = option.origins.map((origin) => origin.host);
     const last = hosts.at(-1);

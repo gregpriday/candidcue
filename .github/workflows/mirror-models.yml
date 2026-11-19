@@ -27,9 +27,12 @@ on:
       - .github/workflows/mirror-models.yml
   workflow_dispatch:
 
-# One writer at a time; a second waits rather than racing the first to a key.
+# One run per branch at a time. A newer push to the same branch supersedes a
+# pending one (it carries the newer catalogue); the two branches never displace
+# each other's seed. Runs on different branches that meet at one key are
+# settled by the conditional write.
 concurrency:
-  group: mirror-speech-models
+  group: mirror-speech-models-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -56,10 +59,14 @@ jobs:
           SPEAKING_GLASS_PUBLIC_URL: ${{ vars.SPEAKING_GLASS_PUBLIC_URL }}
         run: |
           set -euo pipefail
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET SPEAKING_GLASS_PUBLIC_URL; do
+          # Repository secrets, the same four the release workflows use. A job
+          # with no environment sees only repository-level values.
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
             if [ -z "${!name}" ]; then
-              echo "::error::${name} is empty. The R2 secrets and SPEAKING_GLASS_PUBLIC_URL must be set on the repository, not only on a release environment."
+              echo "::error::${name} is empty. R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT and SPEAKING_GLASS_R2_BUCKET must be repository secrets."
               exit 1
             fi
           done
+          # An unset variable falls back to the script's default origin, which
+          # mirrorBaseUrl must sit under either way.
           node scripts/mirror-models.mjs sync

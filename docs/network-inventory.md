@@ -49,8 +49,10 @@ is a worse failure than one that contacts a CDN. What protects the *user* is not
 the host but the digest — the archive is checked against a SHA-256 compiled into
 the binary, and a substituted file is rejected wherever it came from.
 
-So the honest public claim is "the download goes to the host named in the app,
-and to wherever that host redirects it", never "it only ever contacts GitHub".
+So the honest public claim is "the download goes to the hosts named in the app
+— the mirror first, then the publisher when the mirror cannot supply bytes that
+pass the digest — and to wherever either of them redirects it", never "it only
+ever contacts GitHub" or "it only ever contacts our own host".
 
 ### The update check is a different transport, on purpose
 
