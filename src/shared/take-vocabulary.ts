@@ -100,6 +100,18 @@ export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
   fixed: 'Roll at pace',
 };
 
+/**
+ * The session modes a take can be opened as in this release.
+ *
+ * Only voice. 'manual' and 'fixed' survive as stored values — a document saved
+ * by an earlier version can still carry one, and Settings offers the way back —
+ * but nothing offers them, so no copy may send a presenter looking for one
+ * (#121). Settings reads this to decide whether the stored mode needs that way
+ * back, and the error-copy test reads it to decide which modes copy may name:
+ * the day a mode ships, adding it here lifts both at once.
+ */
+export const OFFERED_SESSION_MODES: readonly SessionMode[] = ['voice'];
+
 export function sessionModeLabel(mode: string): string {
   return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;
 }

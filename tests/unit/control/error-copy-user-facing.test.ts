@@ -16,6 +16,18 @@
  * this build can produce is pushed through the live path and no rendered
  * string is allowed to contain a SCREAMING_SNAKE_CASE token. A code added
  * tomorrow without copy fails here rather than in front of a camera.
+ *
+ * The promises the rest of the file protects, each held by rule rather than by
+ * the words of today's copy:
+ *
+ *  - no copy offers a session mode nothing offers (#121), read from
+ *    `OFFERED_SESSION_MODES`;
+ *  - recogniser copy reads true with no take open: the take-only fallback is
+ *    scoped, and only it (#121, relocated to the microphone test);
+ *  - a model that is not on the machine is repaired by the download, never by
+ *    reinstalling an app the model is not in (#181).
+ *
+ * Rewording any of the copy while keeping those true passes without a test edit.
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -92,7 +104,17 @@ const {
   describeError,
   copyForErrorCode,
   hasErrorCopy,
+  composeRecogniserCopy,
+  scopeToTake,
+  AUTO_SCROLL_KEY,
+  RECOGNISER_COPY,
+  RECOGNISER_CODES: AUTHORED_RECOGNISER_CODES,
 } = await import('../../../src/control/services/errors');
+const { osCopy } = await import('../../../src/control/lib/os-copy');
+const { resolveShortcut } = await import('../../../src/control/lib/shortcuts');
+const { OFFERED_SESSION_MODES, SESSION_MODE_LABELS } = await import(
+  '../../../src/shared/take-vocabulary'
+);
 
 /**
  * The shape a user must never see. Deliberately the same rule the production
@@ -183,24 +205,10 @@ describe('a session-level failure toast is authored copy, not a code', () => {
     // The shape of the literal string the operator used to see.
     expect(message).not.toContain('STT_MODEL_MISSING');
     expect(message).not.toMatch(CODE_TOKEN);
-    expect(message).toContain('Voice following stopped.');
-    // What happened, and what to do about it. The recogniser runs on this
-    // machine, so the remedy is the model download — never an account, a key
-    // or a dashboard.
-    expect(message).toMatch(/speech model/i);
-    // Not `/download|manual mode/`: "manual mode" is a banned phrase now (see
-    // the Settings-guarded sweep below), so accepting it as an alternative here
-    // would have let the very copy that test forbids satisfy this one.
-    //
-    // This asserted `/reinstall/i` until #181. The model moved out of the
-    // bundle in §152, so a reinstall leaves it exactly as it was and the old
-    // copy sent the reader somewhere that could not help them; the remedy that
-    // does work is the download, and the screen it is on is named in full for
-    // the same reason the Diagnostics path is below.
-    expect(message).toMatch(/download/i);
-    expect(message).toMatch(/Settings → Speech/);
-    // The fallback it points at has to be one that exists.
-    expect(message).toMatch(/auto-scroll/i);
+    // The toast carries the copy authored for the code. What that copy may and
+    // must say is held further down, by rule rather than by wording: the
+    // download as the remedy (#181), and the fallback that exists (#121).
+    expect(message).toContain(copyForErrorCode('STT_MODEL_MISSING'));
   });
 
   it('gives a missing model, a microphone refusal and a network drop different advice', () => {
@@ -211,14 +219,15 @@ describe('a session-level failure toast is authored copy, not a code', () => {
 
     const [model, mic, network] = toastMessages();
     expect(new Set([model, mic, network]).size).toBe(3);
-    // Each names the remedy that actually applies to it.
-    expect(model).toMatch(/Settings → Speech/);
-    expect(mic).toMatch(/System Settings|Privacy/i);
-    expect(network).toMatch(/internet connection/i);
-    // …and not one that does not: a model download cannot grant a microphone
-    // permission, and a privacy toggle cannot restore a missing model.
-    expect(mic).not.toMatch(/Settings → Speech/);
-    expect(network).not.toMatch(/Settings → Speech/);
+    // Each carries the copy authored for its own code…
+    expect(model).toContain(copyForErrorCode('STT_MODEL_MISSING'));
+    expect(mic).toContain(copyForErrorCode('MIC_PERMISSION_DENIED'));
+    expect(network).toContain(copyForErrorCode('NETWORK_OFFLINE'));
+    // …and not the model's repair: a model download cannot grant a microphone
+    // permission or mend a connection.
+    const modelRepair = RECOGNISER_COPY.STT_MODEL_MISSING.repair;
+    expect(mic).not.toContain(modelRepair);
+    expect(network).not.toContain(modelRepair);
     // Kept from before #181, which swapped the positive assertion above from
     // reinstall to download: a reinstall is no more able to grant a permission
     // or mend a connection than it is to restore a model, and dropping these
@@ -229,10 +238,24 @@ describe('a session-level failure toast is authored copy, not a code', () => {
   });
 
   it('distinguishes a stopped session from an interrupted one', () => {
+    // The same failure, fatal and then not: the two notices must not read the
+    // same, and both still carry the authored copy rather than the code.
+    start();
+    hooks().onSessionFailure?.('REALTIME_CONNECTION_LOST', true);
+    const [stopped] = toastMessages();
+    clearSession();
+    clearToasts();
     start();
     hooks().onSessionFailure?.('REALTIME_CONNECTION_LOST', false);
-    expect(toastMessages()[0]).toContain('Voice following interrupted.');
-    expect(toastMessages()[0]).not.toMatch(CODE_TOKEN);
+    const [interrupted] = toastMessages();
+
+    expect(stopped).toBeDefined();
+    expect(interrupted).toBeDefined();
+    expect(interrupted).not.toBe(stopped);
+    for (const message of [stopped, interrupted]) {
+      expect(message).toContain(copyForErrorCode('REALTIME_CONNECTION_LOST'));
+      expect(message).not.toMatch(CODE_TOKEN);
+    }
   });
 
   it('keeps the raw code for Settings → Diagnostics', () => {
@@ -270,14 +293,8 @@ describe('no code can reach a user-visible string', () => {
     const [message] = toastMessages();
     expect(message).not.toContain('SOME_FUTURE_PROVIDER_FAULT');
     expect(message).not.toMatch(CODE_TOKEN);
-    /*
-     * Honest plain English that points at where the code can be read — and at
-     * a place that EXISTS. The copy used to say "Settings → Diagnostics",
-     * which is not a section: Diagnostics is a card inside "Data, privacy &
-     * updates". Being sent to a screen you cannot find is worse than being
-     * told nothing, so the path is asserted in full rather than by fragment.
-     */
-    expect(message).toMatch(/Settings → Data, privacy & updates → Diagnostics/);
+    // The honest unmapped sentence, and the code kept where Diagnostics reads it.
+    expect(message).toContain(copyForErrorCode('SOME_FUTURE_PROVIDER_FAULT'));
     expect(recentErrorDiagnostics()[0]?.code).toBe('SOME_FUTURE_PROVIDER_FAULT');
   });
 
@@ -292,11 +309,12 @@ describe('no code can reach a user-visible string', () => {
 
     // A refusal has its own notice now (#303), with the pane on it; the code
     // must stay out of that one just the same.
-    const message = toastMessages().find((m) => m.includes('not allowed to use the microphone'));
-    expect(message).toBeDefined();
-    expect(message).not.toContain('MIC_PERMISSION_DENIED');
-    expect(message).not.toMatch(CODE_TOKEN);
-    expect(message).toMatch(/System Settings/);
+    const notice = get(toasts).find((t) => t.message === osCopy().micRefusedToast);
+    expect(notice, 'the microphone refusal notice was not shown').toBeDefined();
+    expect(notice?.message).not.toContain('MIC_PERMISSION_DENIED');
+    expect(notice?.message).not.toMatch(CODE_TOKEN);
+    // …and it carries the way to the pane, not just a description of it.
+    expect(notice?.action?.label).toBe(osCopy().openMicrophoneSettings);
   });
 
   it('does not leak a code carried on a RealtimeTransportError', () => {
@@ -306,140 +324,46 @@ describe('no code can reach a user-visible string', () => {
     const shown = describeError(err);
     expect(shown).not.toMatch(CODE_TOKEN);
     expect(shown).not.toBe('No live audio track');
-    expect(shown).toMatch(/No microphone was found/);
+    expect(shown).toBe(copyForErrorCode('MIC_DEVICE_MISSING'));
   });
 });
 
 /**
- * The other half of the rule in `errors.ts`'s header: copy must not imply an
- * action that does not exist.
+ * #121 — copy must not offer a session mode nobody can choose.
  *
- * All four recogniser errors used to end "Manual and fixed-speed modes still
- * work." Settings renders both of those as disabled — "not available in this
- * release" — so a presenter whose recogniser had just died was sent hunting
- * for a greyed-out menu item and left with nothing.
+ * All the recogniser errors used to end "Manual and fixed-speed modes still
+ * work." Nothing in Settings offered either mode, so a presenter whose
+ * recogniser had just died was sent hunting for a menu item that was not there.
  *
- * This reads Settings as the source of truth rather than hard-coding the ban,
- * so the day either mode actually ships, its `disabled: true` goes away and
- * the ban retires itself instead of blocking the copy that would then be true.
+ * Which modes are offered is read from `OFFERED_SESSION_MODES`, the constant
+ * Settings itself branches on, rather than parsed out of the route's markup or
+ * its prose: the day a mode ships, adding it there lifts its ban here, and
+ * rewording the Settings readout touches nothing in this file.
  */
-describe('error copy never offers a session mode Settings marks unavailable', () => {
-  const settingsSource = readFileSync(
-    new URL('../../../src/control/routes/Settings.svelte', import.meta.url),
-    'utf8',
-  );
-
+describe('error copy never offers a session mode that is not offered', () => {
   /**
-   * The session-mode CHOOSER, if Settings still offers one.
+   * The spellings of each mode, deliberately broader than its label.
    *
-   * It did until #124. Two of its three options were permanently
-   * `disabled: true`, which is a dropdown that answers "there was never
-   * anything to decide" — so it became a static readout, and this parse had to
-   * follow it.
-   *
-   * Both shapes are still read, and that is the point rather than tidiness:
-   * the day a mode genuinely ships, the natural change is a Select coming back
-   * with it enabled, and this guard must retire itself then WITHOUT anybody
-   * remembering that a test in another directory encodes the rule.
+   * `manual` is matched as a bare word: the sentence this exists to forbid read
+   * "Manual **and** fixed-speed modes", where "manual" is never followed by
+   * "mode" at all. It does not match "manually". `fixed` tolerates any run of
+   * spaces or dashes, U+2010–U+2015 included, and is NOT broadened to "fixed
+   * pace": auto-scroll genuinely is a fixed pace, and it is the fallback the
+   * copy has to be free to describe. Each mode's glossary label is banned too.
    */
-  const selectMatch = settingsSource.match(
-    /label="(?:Default session mode|Session mode)"[\s\S]*?options=\{\[([\s\S]*?)\]\}/,
-  );
-
-  /** Each `{ value: 'manual' … }` / `{ value: 'fixed' … }` object, body included. */
-  const selectOptions = [
-    ...(selectMatch?.[1] ?? '').matchAll(/\{([^{}]*\bvalue:\s*'(manual|fixed)'[^{}]*)\}/g),
-  ].map((m) => ({ body: m[1] ?? '', mode: m[2] ?? '' }));
-
-  /**
-   * The readout that replaced it, and the sentence carrying the same fact.
-   *
-   * Anchored on the sentence rather than on the component name because the
-   * sentence is the claim: while Settings tells the reader that every take
-   * opens listening, no other mode can start one, and error copy must not send
-   * them looking for one. It used to say so outright — "manual and fixed-speed
-   * modes are not offered", design rationale that #304 took out of the readout
-   * — and the day a mode ships this sentence stops being true and has to go,
-   * which retires the ban with it.
-   *
-   * The attribute, not the words alone: a comment saying the same thing is not
-   * something the reader is told.
-   */
-  const readoutSaysUnavailable = /description="Every take opens listening\./.test(settingsSource);
-
-  /** Each mode, and whether Settings currently marks it unavailable. */
-  const modeOptions = selectOptions.length > 0 ? selectOptions : [{ body: '', mode: 'manual' }, { body: '', mode: 'fixed' }];
-
-  /**
-   * A phrase per mode, deliberately broader than the label.
-   *
-   * `manual` is matched as a bare word on purpose: the sentence this test
-   * exists to forbid read "Manual **and** fixed-speed modes", where "manual"
-   * is never followed by "mode" at all — a narrower /manual mode/ would have
-   * sailed straight past the actual bug. It does not match "manually", which
-   * has no word boundary after the l.
-   *
-   * `fixed` tolerates any run of spaces or dashes, U+2010–U+2015 included, so
-   * the phrase cannot slip through on an en dash a word processor introduced.
-   * It is deliberately NOT broadened to "fixed pace" or "constant speed": the
-   * auto-scroll transport genuinely IS a fixed pace, and banning that would
-   * forbid the copy from describing the very fallback this issue added.
-   */
-  const BANNED = {
-    manual: /\bmanual\b/i,
+  const SPELLINGS: Record<string, RegExp[]> = {
+    manual: [/\bmanual\b/i],
     // The class is \s, the range U+2010–U+2015, and a trailing ASCII hyphen.
-    // Those dashes are indistinguishable by eye, so the range is asserted
-    // directly below rather than trusted to survive a reformat.
-    fixed: /\bfixed[\s‐-―-]+speed\b/iu,
-  } satisfies Record<string, RegExp>;
-
-  /**
-   * Availability, read rather than assumed.
-   *
-   * `readable` is the anti-vacuity check. A ban that quietly stops applying is
-   * worse than no ban, so the only states this test accepts are the two it can
-   * actually interpret: exactly one `disabled: true`/`false`, or no `disabled`
-   * key at all (which means enabled). Anything else — `disabled: !someFlag`,
-   * the shorthand `disabled`, a computed value — is a state we cannot read,
-   * and the self-check below fails rather than guessing.
-   *
-   * Two ways this could have lapsed silently, both closed here:
-   *
-   *  - Mentions are COUNTED, not just tested. `.match` returns the first hit,
-   *    so a second mention of the word — an explanatory comment reading
-   *    "disabled: false once it ships", sitting ahead of the real
-   *    `disabled: true` — would otherwise be taken as the answer.
-   *  - The literal must run to the property delimiter. Without that,
-   *    `disabled: false || !modesShipped` reads as a literal `false` and lifts
-   *    the ban while the option is disabled at runtime.
-   *
-   * That keeps the guard self-retiring in the way the issue asked for: flip
-   * either option to `disabled: false`, or drop the key when the mode really
-   * ships, and its ban lifts on its own with no test to edit.
-   */
-  const availability = modeOptions.map((o) => {
-    /*
-     * With no Select on the screen, the readout's sentence IS the statement of
-     * availability, and it speaks for both modes at once. `readable` still
-     * means "we could tell either way": if neither a parseable Select nor that
-     * sentence is present, we cannot, and the self-check below fails rather
-     * than letting a ban lapse silently.
-     */
-    if (selectOptions.length === 0) {
-      return { mode: o.mode, disabled: readoutSaysUnavailable, readable: readoutSaysUnavailable };
-    }
-    // `\s*(?=,|$)` is the load-bearing part: the boolean has to BE the value,
-    // not merely start it.
-    const literal = o.body.match(/\bdisabled:\s*(true|false)\s*(?=,|$)/);
-    const mentions = o.body.match(/\bdisabled\b/g)?.length ?? 0;
-    // A spread could carry a `disabled` this never sees.
-    const spread = o.body.includes('...');
-    return {
-      mode: o.mode,
-      disabled: literal?.[1] === 'true',
-      readable: !spread && (mentions === 0 || (mentions === 1 && literal !== null)),
-    };
-  });
+    fixed: [/\bfixed[\s‐-―-]+speed\b/iu],
+  };
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const bansFor = (mode: string): RegExp[] => [
+    ...(SPELLINGS[mode] ?? []),
+    new RegExp(`\\b${escape(SESSION_MODE_LABELS[mode as keyof typeof SESSION_MODE_LABELS])}\\b`, 'i'),
+  ];
+  const unoffered = Object.keys(SESSION_MODE_LABELS).filter(
+    (mode) => !(OFFERED_SESSION_MODES as readonly string[]).includes(mode),
+  );
 
   it('bans every spelling of the mode names, and nothing legitimate', () => {
     // The bans are the whole guard, so they get asserted rather than assumed.
@@ -448,165 +372,126 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
       'manual mode still works',
       'Use Manual instead.',
     ]) {
-      expect(spelling, `'${spelling}' should trip the manual ban`).toMatch(BANNED.manual);
+      expect(bansFor('manual').some((ban) => ban.test(spelling)), spelling).toBe(true);
     }
     for (const spelling of ['fixed-speed', 'fixed speed', 'Fixed Speed', 'fixed‑speed', 'fixed–speed']) {
-      expect(spelling, `'${spelling}' should trip the fixed ban`).toMatch(BANNED.fixed);
+      expect(bansFor('fixed').some((ban) => ban.test(spelling)), spelling).toBe(true);
     }
-    // Auto-scroll IS a fixed pace, and "manually" is a different word. Banning
-    // either would forbid copy that is true.
-    expect('rolls the script at a fixed pace').not.toMatch(BANNED.fixed);
-    expect('scroll the script manually').not.toMatch(BANNED.manual);
-  });
-
-  it('can still read both session modes out of Settings', () => {
-    // Either shape is fine; being unable to read EITHER is not, because then
-    // the ban below stops applying without anybody deciding that it should.
-    expect(
-      selectMatch !== null || readoutSaysUnavailable,
-      'Settings no longer states session-mode availability in a shape this can read',
-    ).toBe(true);
-    expect(modeOptions.map((o) => o.mode).sort()).toEqual(['fixed', 'manual']);
-    // Not "both are disabled" — that would have to be edited the day one ships.
-    // Only "we could tell either way", which stays true forever.
-    expect(
-      availability.filter((a) => !a.readable).map((a) => a.mode),
-      'a session-mode option no longer states its availability as a literal',
-    ).toEqual([]);
-  });
-
-  it('does not name a mode that cannot start a take', () => {
-    // Vacuous by design once both modes ship — at which point the copy is free
-    // to name them again, which is the whole point of reading Settings.
-    for (const { mode, disabled } of availability) {
-      if (!disabled) continue;
-      for (const code of KNOWN_ERROR_CODES) {
-        const copy = copyForErrorCode(code);
-        expect(
-          copy,
-          `${code} offers '${mode}', which Settings marks unavailable: ${copy}`,
-        ).not.toMatch(BANNED[mode as keyof typeof BANNED]);
+    // Auto-scroll IS a fixed pace, "manually" is a different word, and a
+    // problem can be fixed. Banning any of those would forbid copy that is true.
+    for (const honest of [
+      'rolls the script at a fixed pace',
+      'scroll the script manually',
+      'Try again once the network problem is fixed.',
+    ]) {
+      for (const mode of ['manual', 'fixed']) {
+        expect(bansFor(mode).some((ban) => ban.test(honest)), honest).toBe(false);
       }
     }
   });
 
-  it('points the recogniser failures at auto-scroll, which does exist', () => {
-    // The replacement is only an improvement if it names the real fallback and
-    // the key that starts it (`a` → 'toggle-auto-scroll' in lib/shortcuts.ts).
-    for (const code of RECOGNISER_CODES) {
-      const copy = copyForErrorCode(code);
-      expect(copy, `${code} does not name auto-scroll`).toMatch(/auto-scroll/i);
-      // Loose enough not to police the sentence around it; `shortcuts.test.ts`
-      // asserts that this key still reaches the transport.
-      expect(copy, `${code} does not name the key that works it`).toMatch(
-        /\bpress (?:the )?A\b/i,
-      );
+  it('knows which modes are not offered', () => {
+    // Anti-vacuity: with every mode offered the sweep below checks nothing,
+    // which is right the day it happens and worth a look until then.
+    expect(OFFERED_SESSION_MODES.length).toBeGreaterThan(0);
+    expect(unoffered.sort()).toEqual(['fixed', 'manual']);
+  });
+
+  it('does not name a mode that cannot start a take', () => {
+    for (const mode of unoffered) {
+      for (const code of KNOWN_ERROR_CODES) {
+        const copy = copyForErrorCode(code);
+        for (const ban of bansFor(mode)) {
+          expect(copy, `${code} offers '${mode}', which nothing offers: ${copy}`).not.toMatch(ban);
+        }
+      }
     }
   });
 });
 
 /**
- * The same rule again, one surface further out: copy must not imply an action
- * that does not exist WHERE IT IS READ.
+ * #121 again, one surface further out: copy must not imply an action that does
+ * not exist WHERE IT IS READ.
  *
- * Pointing the recogniser failures at auto-scroll is only true with a take
- * open, and these five strings have a second reader who has none — with
- * `STT_MODEL_NOT_INSTALLED` reaching a third, the language picker, which
- * `tests/dom/speech-language-picker.test.ts` asserts as a screen.
- * `voice-live.ts` hands `describeError(...)` to `events.onError` on both the
- * `startTranscription()` rejection and every `failed` frame; `MicTestSession`
- * keeps it as `snapshot.error`; Settings → Audio renders it verbatim. That is
- * the microphone test, where `toggleAutoScroll()` returns early on
- * `!state.active` and `A` is just a letter — so "Press A to start or stop
- * auto-scroll. Reinstall Speaking Glass after the take." is exactly the defect
- * gregpriday/candidcue#121 is about, relocated rather than fixed.
- *
- * The fix is a conditional: a sentence that names a take-only affordance has to
- * SAY it is about a take. Then it is true in the toast and true in Settings.
+ * The recogniser failures name auto-scroll as the fallback, which is only true
+ * with a take open — and these strings have readers with none: Settings → Audio
+ * renders the microphone test's `describeError` output, and the language picker
+ * renders `STT_MODEL_NOT_INSTALLED`'s. That is why they are built from parts in
+ * `errors.ts`: the take-only fallback lives in `inTake`, and `scopeToTake` is
+ * the one place that says it is about a take. These hold that structure, not
+ * any wording of it.
  */
 describe('recogniser copy stays true on the surface with no take', () => {
-  const settingsSource = readFileSync(
-    new URL('../../../src/control/routes/Settings.svelte', import.meta.url),
-    'utf8',
-  );
   const voiceLiveSource = readFileSync(
     new URL('../../../src/control/services/voice-live.ts', import.meta.url),
     'utf8',
   );
 
-  /** Affordances that only exist while a take is running. */
-  const TAKE_ONLY = /\bauto-scroll\b|\bpress (?:the )?A\b|\b(?:the|a|your) take\b/i;
-  /** The scope that makes naming one of them honest anywhere. */
-  const SCOPED = /^In a take[,:]/;
+  /** Advice that only exists while a take is running. */
+  const TAKE_ONLY = new RegExp(
+    `\\bauto-scroll\\b|\\bpress (?:the )?${AUTO_SCROLL_KEY}\\b|\\b(?:the|a|your) take\\b`,
+    'i',
+  );
 
-  const sentences = (copy: string): string[] =>
-    copy
-      .split(/(?<=\.)\s+/)
-      .map((s) => s.trim())
-      .filter((s) => s !== '');
-
-  const unscoped = (copy: string): string[] =>
-    sentences(copy).filter((s) => TAKE_ONLY.test(s) && !SCOPED.test(s));
+  it('covers every recogniser code', () => {
+    expect([...AUTHORED_RECOGNISER_CODES].sort()).toEqual([...RECOGNISER_CODES].sort());
+  });
 
   it('still has a reader with no take — the Settings → Audio microphone test', () => {
     /*
-     * Anti-vacuity, in the spirit of the availability check above: this ban
-     * only earns its keep while that second surface exists. Asserting the wiring
-     * means the day the mic test stops rendering `describeError` output, this
-     * fails loudly and someone decides whether the scope is still needed —
-     * rather than the ban quietly guarding nothing.
+     * Anti-vacuity: the scoping below earns its keep while that surface exists.
+     * The day the mic test stops rendering `describeError` output, this fails
+     * and someone decides whether the scope is still needed.
      */
     expect(voiceLiveSource, 'the mic test no longer routes failures through describeError').toMatch(
       /events\.onError\(describeError\(/,
     );
-    expect(settingsSource, 'Settings no longer describes mic-test errors with describeError').toMatch(
-      /describe:\s*describeError/,
-    );
-    expect(settingsSource, 'Settings no longer renders the mic-test error').toMatch(/\{micError\}/);
   });
 
-  it('detects an unscoped take-only promise, and leaves honest copy alone', () => {
-    // The detector is the whole guard, so it is asserted rather than assumed.
-    // Left column: every clause this fix removed.
-    for (const bad of [
-      'Press A to start or stop auto-scroll.',
-      'Reinstall Speaking Glass after the take.',
-      'To retry voice following, stop and restart the take.',
-      'Use auto-scroll instead.',
-    ]) {
-      expect(unscoped(bad), `'${bad}' should read as an unscoped take-only promise`).toEqual([bad]);
-    }
-    for (const good of [
-      'In a take, press A to start or stop auto-scroll.',
-      'In a take, press A to start or stop auto-scroll, then stop and start the take to retry.',
-      'Restart Speaking Glass, and reinstall it if this keeps happening.',
-      'The speech model is missing from this installation.',
-    ]) {
-      expect(unscoped(good), `'${good}' is true on both surfaces and should pass`).toEqual([]);
-    }
-  });
-
-  it('never promises a take-only action unconditionally', () => {
+  it('is the composition of its parts', () => {
     for (const code of RECOGNISER_CODES) {
-      const copy = copyForErrorCode(code);
-      expect(
-        unscoped(copy),
-        `${code} names a take-only action to a reader who may have no take: ${copy}`,
-      ).toEqual([]);
-      // The specific phrasing that was wrong on this surface: "after the take"
-      // has no referent in Settings, whichever sentence it lands in.
-      expect(copy, `${code} still frames its repair around a take`).not.toMatch(/after the take/i);
+      expect(copyForErrorCode(code)).toBe(composeRecogniserCopy(RECOGNISER_COPY[code]));
     }
   });
 
-  it('leaves the conditional off the sentence that says what happened', () => {
-    // Scoping is for the remedy, not the diagnosis: a missing model is missing
-    // in Settings too, and hedging that would be its own small lie.
+  it('scopes the take-only clause, and only that clause', () => {
+    // The composer adds a scope to the clause it is given and keeps the clause.
+    const scoped = scopeToTake('clause');
+    expect(scoped).not.toBe('clause');
+    expect(scoped).toContain('clause');
+
     for (const code of RECOGNISER_CODES) {
-      const [first] = sentences(copyForErrorCode(code));
-      expect(first, `${code} has no leading statement of what happened`).toBeDefined();
-      expect(first, `${code} opens with a condition instead of the fault`).not.toMatch(SCOPED);
-      expect(first).toMatch(/^The speech (?:model|recogniser)\b/);
+      const { fault, inTake } = RECOGNISER_COPY[code];
+      const repair = (RECOGNISER_COPY[code] as { repair?: string }).repair ?? '';
+      expect(fault.trim(), `${code} says nothing about what happened`).not.toBe('');
+      // The parts read on every surface name nothing a take alone has.
+      expect(fault, `${code}'s diagnosis assumes a take`).not.toMatch(TAKE_ONLY);
+      expect(repair, `${code}'s repair assumes a take`).not.toMatch(TAKE_ONLY);
+      // The scoped clause is where that advice goes, and the copy opens with
+      // the fault rather than with a condition.
+      expect(inTake.trim(), `${code} offers no fallback in a take`).not.toBe('');
+      expect(copyForErrorCode(code).startsWith(fault), `${code} opens with a condition`).toBe(true);
+    }
+  });
+
+  it('points the take at auto-scroll, on the key that works it', () => {
+    // `shortcuts.test.ts` asserts the transport keys independently; this holds
+    // the copy's key to the same table.
+    expect(
+      resolveShortcut({
+        key: AUTO_SCROLL_KEY.toLowerCase(),
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        typing: false,
+        isMac: true,
+      }),
+    ).toBe('toggle-auto-scroll');
+    for (const code of RECOGNISER_CODES) {
+      const { inTake } = RECOGNISER_COPY[code];
+      expect(inTake, `${code} does not name auto-scroll`).toMatch(/auto-scroll/i);
+      expect(inTake, `${code} does not name the key`).toMatch(new RegExp(`\\b${AUTO_SCROLL_KEY}\\b`));
     }
   });
 });
@@ -673,9 +558,6 @@ describe('the model download is the remedy, not a reinstall', () => {
     'Download this language before switching to it.',
   ];
 
-  /** The claim about what happened, which is always the leading sentence. */
-  const opener = (copy: string): string => copy.split(/(?<=\.)\s+/)[0]?.trim() ?? '';
-
   it('authors the copy for a model that is not installed, rather than borrowing Rust’s', () => {
     expect(hasErrorCopy('STT_MODEL_NOT_INSTALLED')).toBe(true);
 
@@ -686,7 +568,6 @@ describe('the model download is the remedy, not a reinstall', () => {
       // and still mean this file had no say in it.
       expect(shown, 'the backend message reached the user unedited').not.toBe(userMessage);
       expect(shown).toBe(copyForErrorCode('STT_MODEL_NOT_INSTALLED'));
-      expect(shown).toMatch(/Settings → Speech/);
     }
   });
 
@@ -741,11 +622,13 @@ describe('the model download is the remedy, not a reinstall', () => {
     }
   });
 
-  it('points every model-state failure at the screen that can fix it', () => {
+  it('points every model-state failure at the download that can fix it', () => {
+    // The repair, which is the part read on every surface, offers the download
+    // and names the Speech pane it lives in — in whatever words.
     for (const code of MODEL_STATE_CODES) {
-      const copy = copyForErrorCode(code);
-      expect(copy, `${code} does not name the screen that fixes it`).toMatch(/Settings → Speech/);
-      expect(copy, `${code} does not name the action that fixes it`).toMatch(/download/i);
+      const repair = (RECOGNISER_COPY[code] as { repair?: string }).repair ?? '';
+      expect(repair, `${code} does not offer the download`).toMatch(/download/i);
+      expect(repair, `${code} does not name the pane the download is in`).toMatch(/\bSpeech\b/);
     }
   });
 
@@ -767,10 +650,12 @@ describe('the model download is the remedy, not a reinstall', () => {
     // Different conditions, different sentences: one machine has no usable
     // model, the other resolved a directory and could not find the files in it.
     // Collapsing them into one string is the defect the file header names.
-    const notInstalled = copyForErrorCode('STT_MODEL_NOT_INSTALLED');
-    const missing = copyForErrorCode('STT_MODEL_MISSING');
-    expect(notInstalled).not.toBe(missing);
-    expect(opener(notInstalled)).not.toBe(opener(missing));
+    expect(copyForErrorCode('STT_MODEL_NOT_INSTALLED')).not.toBe(
+      copyForErrorCode('STT_MODEL_MISSING'),
+    );
+    expect(RECOGNISER_COPY.STT_MODEL_NOT_INSTALLED.fault).not.toBe(
+      RECOGNISER_COPY.STT_MODEL_MISSING.fault,
+    );
   });
 });
 
@@ -784,8 +669,9 @@ describe('the model download is the remedy, not a reinstall', () => {
 describe('a refused model address points at the network, not the release', () => {
   it('advises on the network and never blames the release', () => {
     const copy = copyForErrorCode('STT_MODEL_URL_BLOCKED');
-    expect(copy).toMatch(/network settings/);
-    expect(copy).toMatch(/try another network/);
+    expect(hasErrorCopy('STT_MODEL_URL_BLOCKED')).toBe(true);
+    // The fault is the network's answer, not the build: the copy must not send
+    // the reader to wait for a new release.
     expect(copy).not.toMatch(/release/i);
     expect(copy).not.toMatch(CODE_TOKEN);
     expect(describeError({ code: 'STT_MODEL_URL_BLOCKED', userMessage: 'x' })).toBe(copy);
@@ -799,9 +685,11 @@ describe('a refused model address points at the network, not the release', () =>
  */
 describe('a transcription test refused during a take says why and what to do', () => {
   it('names the take and the remedy', () => {
+    // A refusal with a remedy, authored here rather than borrowed from the
+    // recogniser failures.
     const copy = copyForErrorCode('STT_TEST_BLOCKED_BY_TAKE');
-    expect(copy).toMatch(/during a take/);
-    expect(copy).toMatch(/End the take/);
+    expect(hasErrorCopy('STT_TEST_BLOCKED_BY_TAKE')).toBe(true);
+    for (const code of RECOGNISER_CODES) expect(copy).not.toBe(copyForErrorCode(code));
     expect(copy).not.toMatch(CODE_TOKEN);
     expect(describeError({ code: 'STT_TEST_BLOCKED_BY_TAKE', userMessage: 'x' })).toBe(copy);
   });

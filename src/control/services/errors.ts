@@ -29,6 +29,174 @@ const CODE_TOKEN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 
 /**
+ * The six failures of the on-device recogniser, as parts.
+ *
+ *
+ * A broken machine, not a broken account. There is no key, no quota and no
+ * provider to be down, so nothing here asks the presenter to go and fix
+ * something on a website.
+ *
+ * Nor does anything here ask them to reinstall Speaking Glass any more, which is
+ * what `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` used to say. The
+ * weights were in the bundle when that copy was written; since §152 the stock
+ * installer ships none and the model is downloaded into the app-data
+ * directory instead. A reinstall leaves those bytes exactly as they were, so
+ * it was an instruction that could not work — the same defect as naming a
+ * greyed-out menu item, one step further along. The model is a DOWNLOAD, and
+ * the download lives in Settings → Speech.
+ *
+ * `STT_MODEL_NOT_INSTALLED` is the newest of the five and the most likely to
+ * be read: a first run that skips Welcome and starts a take reaches it. It is
+ * not a fault at all — it is the ordinary state of a machine that has not
+ * downloaded a model yet — which is why Rust raises it recoverable and why
+ * its copy is the only one whose remedy is something the user was always
+ * going to have to do. Note it does NOT mean "never downloaded": a deleted,
+ * unsealed, stale or half-extracted download all fail `model_store`'s
+ * usability check and arrive here too, so the copy says the model is not
+ * installed rather than guessing at a history it cannot see.
+ *
+ * Each one also names the fallback that EXISTS. These used to end "Manual and
+ * fixed-speed modes still work", which they no longer do: Settings shows both
+ * as unavailable in this release, so that sentence sent a presenter whose
+ * recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
+ * the real answer.
+ *
+ * The rescue is scoped — "In a take, …" — because these five strings have
+ * THREE surfaces, and only one of them has a transport to press. In a take
+ * they reach the failure toast, where `A` really does work. But
+ * `voice-live.ts` hands the same `describeError` output to `events.onError`
+ * on both the `startTranscription()` rejection and every `failed` frame,
+ * `MicTestSession` stores it as `snapshot.error`, and Settings → Audio
+ * renders it verbatim as `micError`. `startTranscription()` →
+ * `ensure_loaded()` is exactly where `STT_MODEL_NOT_INSTALLED`,
+ * `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` are raised, and the failed
+ * frames carry `STT_WORKER_FAILED` / `STT_ENGINE_ERROR`, so all five land on
+ * that screen. There is no take there: `toggleAutoScroll()` returns early
+ * while `state.active` is false, and the shortcut layer only binds `A` inside
+ * a session, so a bare "Press A" is the old defect in new words. A conditional
+ * is true on both surfaces; an imperative is true on neither more than one.
+ *
+ * The third surface belongs to `STT_MODEL_NOT_INSTALLED` alone, and it is a
+ * SECOND raise site rather than another route out of `ensure_loaded`:
+ * `select_speech_language` (`speech_cmds.rs`) refuses a language whose
+ * weights are not on the machine, `SpeechLanguagePicker.activate()` turns the
+ * rejection into `selectError = describeError(err)`, and the picker renders
+ * it in a `role="alert"`. That screen has no take either, and the picker is
+ * hosted by both Welcome and Settings — so the copy has to read as sense next
+ * to a language row, not only under a take that failed to start.
+ *
+ * For the same reason nothing here says "after the take" any more: the reader
+ * in Settings has no take to be after. Every repair clause is phrased so it
+ * holds with or without one, and any clause that cannot be is folded into the
+ * "In a take" sentence (`STT_ENGINE_ERROR`'s stop-and-start).
+ *
+ * The rescue comes BEFORE the repair in all five. Downloading and restarting
+ * both mean putting the script down, which is not a thing anyone does
+ * mid-take; the keystroke that keeps the script moving is what the presenter
+ * needs in the second they are reading this, and the repair keeps until they
+ * are off camera.
+ *
+ * All five say "start or stop", because `A` is a TOGGLE and none of these
+ * can promise which way it will move.
+ *
+ * `STT_ENGINE_ERROR` is the obvious case: it fires arbitrarily deep into a
+ * take, and auto-scroll pauses following without pausing transcription, so
+ * the recogniser can die with the transport already running. The other four
+ * look like cold-start failures where `startLiveSession` has just set
+ * `running: false` — but `resume()` re-enters `start()` after a hard pause
+ * released the capture, and `autoScroll.running` deliberately survives a
+ * pause. A → hard pause → resume is enough to reach any of them with the
+ * transport armed, and telling that presenter to "start" auto-scroll would
+ * stop their script. "Start or stop" is also the wording Settings and Live
+ * already use for this key.
+ *
+ * "the requested language", not "the selected language". The picker raises
+ * this BEFORE `update_settings`, and `activate()` says so in its own comment:
+ * the write failed, so nothing changed and the old language is still the
+ * selected one — whose model is installed, or the screen could not have been
+ * reached. "Selected" would have put the alert in contradiction with the
+ * "currently using" line directly above it. A language can be requested and
+ * refused; that is exactly what happened on all three surfaces.
+ *
+ * WHY PARTS. Those rules used to be held by a test that split these strings
+ * into sentences and required the literal "In a take," before any sentence
+ * naming auto-scroll — so rewording the scope was a test edit. Now the shape
+ * carries the rule: `fault` says what happened and `repair` what fixes it, and
+ * both must hold with or without a take; `inTake` is the fallback that exists
+ * only in a take, and `scopeToTake` is the one place that says so. The words in
+ * every part are free to change.
+ */
+export interface RecogniserCopy {
+  /** What happened. True on every surface, so never conditional. */
+  readonly fault: string;
+  /** The fallback that only a take has: the auto-scroll transport, on its key. */
+  readonly inTake: string;
+  /** What fixes it, phrased so it holds with or without a take. */
+  readonly repair?: string;
+}
+
+/** The key `lib/shortcuts.ts` binds to the auto-scroll transport in a take. */
+export const AUTO_SCROLL_KEY = 'A';
+
+/** Scope a clause to a take: the one place recogniser copy says "in a take". */
+export function scopeToTake(clause: string): string {
+  return `In a take, ${clause}`;
+}
+
+/** The sentence the person reads, assembled from its parts. */
+export function composeRecogniserCopy({ fault, inTake, repair }: RecogniserCopy): string {
+  return [fault, scopeToTake(inTake), repair].filter((part) => part !== undefined).join(' ');
+}
+
+const AUTO_SCROLL_FALLBACK = `press ${AUTO_SCROLL_KEY} to start or stop auto-scroll`;
+
+export const RECOGNISER_COPY = {
+  STT_MODEL_NOT_INSTALLED: {
+    fault: 'The speech model for the requested language is not installed.',
+    inTake: `${AUTO_SCROLL_FALLBACK}.`,
+    repair: 'Download it in Settings → Speech to follow your voice.',
+  },
+  STT_MODEL_MISSING: {
+    fault: 'The speech model files could not be found.',
+    inTake: `${AUTO_SCROLL_FALLBACK}.`,
+    repair: 'Download the model again in Settings → Speech.',
+  },
+  // Not "remove the model, then download it again": Settings offers Remove only
+  // for a model this machine DOWNLOADED, and a load failure can also come from
+  // a bundled or `SPEAKING_GLASS_MODELS_DIR` copy that has no Remove button to press.
+  // Download is offered whenever a model is not usable, so it is the half of
+  // that pair which is always there to follow.
+  STT_MODEL_LOAD_FAILED: {
+    fault: 'The speech model could not be loaded.',
+    inTake: `${AUTO_SCROLL_FALLBACK}.`,
+    repair: 'Restart Speaking Glass; if this keeps happening, download the model again in Settings → Speech.',
+  },
+  // Found BEFORE the load, which is the point (#258): a damaged graph handed to
+  // the recogniser used to abort the app at the top of every take. No restart
+  // clause, unlike `STT_MODEL_LOAD_FAILED` — the files are what is wrong, and a
+  // restart reads the same files.
+  STT_MODEL_DAMAGED: {
+    fault: 'The speech model files on this computer are damaged.',
+    inTake: `${AUTO_SCROLL_FALLBACK}.`,
+    repair: 'Download the model again in Settings → Speech.',
+  },
+  STT_WORKER_FAILED: {
+    fault: 'The speech recogniser is unavailable.',
+    inTake: `${AUTO_SCROLL_FALLBACK}.`,
+    repair: 'Restart Speaking Glass to bring it back.',
+  },
+  // The stop-and-start only means anything in a take, so it is folded into the
+  // take's clause rather than given a repair of its own.
+  STT_ENGINE_ERROR: {
+    fault: 'The speech recogniser failed unexpectedly.',
+    inTake: `${AUTO_SCROLL_FALLBACK}, then stop and start the take to retry voice following.`,
+  },
+} as const satisfies Record<string, RecogniserCopy>;
+
+/** The codes whose copy is built from parts, and so reaches surfaces with no take. */
+export const RECOGNISER_CODES = Object.keys(RECOGNISER_COPY) as Array<keyof typeof RECOGNISER_COPY>;
+
+/**
  * Human copy for every code that can reach a person.
  *
  * Each entry answers two questions in order: what happened, and what the
@@ -42,112 +210,14 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 const ERROR_COPY: Record<string, string> = {
   /* -- the on-device recogniser -------------------------------------------- */
   //
-  // A broken machine, not a broken account. There is no key, no quota and no
-  // provider to be down, so nothing here asks the presenter to go and fix
-  // something on a website.
-  //
-  // Nor does anything here ask them to reinstall Speaking Glass any more, which is
-  // what `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` used to say. The
-  // weights were in the bundle when that copy was written; since §152 the stock
-  // installer ships none and the model is downloaded into the app-data
-  // directory instead. A reinstall leaves those bytes exactly as they were, so
-  // it was an instruction that could not work — the same defect as naming a
-  // greyed-out menu item, one step further along. The model is a DOWNLOAD, and
-  // the download lives in Settings → Speech.
-  //
-  // `STT_MODEL_NOT_INSTALLED` is the newest of the five and the most likely to
-  // be read: a first run that skips Welcome and starts a take reaches it. It is
-  // not a fault at all — it is the ordinary state of a machine that has not
-  // downloaded a model yet — which is why Rust raises it recoverable and why
-  // its copy is the only one whose remedy is something the user was always
-  // going to have to do. Note it does NOT mean "never downloaded": a deleted,
-  // unsealed, stale or half-extracted download all fail `model_store`'s
-  // usability check and arrive here too, so the copy says the model is not
-  // installed rather than guessing at a history it cannot see.
-  //
-  // Each one also names the fallback that EXISTS. These used to end "Manual and
-  // fixed-speed modes still work", which they no longer do: Settings shows both
-  // as unavailable in this release, so that sentence sent a presenter whose
-  // recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
-  // the real answer.
-  //
-  // The rescue is scoped — "In a take, …" — because these five strings have
-  // THREE surfaces, and only one of them has a transport to press. In a take
-  // they reach the failure toast, where `A` really does work. But
-  // `voice-live.ts` hands the same `describeError` output to `events.onError`
-  // on both the `startTranscription()` rejection and every `failed` frame,
-  // `MicTestSession` stores it as `snapshot.error`, and Settings → Audio
-  // renders it verbatim as `micError`. `startTranscription()` →
-  // `ensure_loaded()` is exactly where `STT_MODEL_NOT_INSTALLED`,
-  // `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` are raised, and the failed
-  // frames carry `STT_WORKER_FAILED` / `STT_ENGINE_ERROR`, so all five land on
-  // that screen. There is no take there: `toggleAutoScroll()` returns early
-  // while `state.active` is false, and the shortcut layer only binds `A` inside
-  // a session, so a bare "Press A" is the old defect in new words. A conditional
-  // is true on both surfaces; an imperative is true on neither more than one.
-  //
-  // The third surface belongs to `STT_MODEL_NOT_INSTALLED` alone, and it is a
-  // SECOND raise site rather than another route out of `ensure_loaded`:
-  // `select_speech_language` (`speech_cmds.rs`) refuses a language whose
-  // weights are not on the machine, `SpeechLanguagePicker.activate()` turns the
-  // rejection into `selectError = describeError(err)`, and the picker renders
-  // it in a `role="alert"`. That screen has no take either, and the picker is
-  // hosted by both Welcome and Settings — so the copy has to read as sense next
-  // to a language row, not only under a take that failed to start.
-  //
-  // For the same reason nothing here says "after the take" any more: the reader
-  // in Settings has no take to be after. Every repair clause is phrased so it
-  // holds with or without one, and any clause that cannot be is folded into the
-  // "In a take" sentence (`STT_ENGINE_ERROR`'s stop-and-start).
-  //
-  // The rescue comes BEFORE the repair in all five. Downloading and restarting
-  // both mean putting the script down, which is not a thing anyone does
-  // mid-take; the keystroke that keeps the script moving is what the presenter
-  // needs in the second they are reading this, and the repair keeps until they
-  // are off camera.
-  //
-  // All five say "start or stop", because `A` is a TOGGLE and none of these
-  // can promise which way it will move.
-  //
-  // `STT_ENGINE_ERROR` is the obvious case: it fires arbitrarily deep into a
-  // take, and auto-scroll pauses following without pausing transcription, so
-  // the recogniser can die with the transport already running. The other four
-  // look like cold-start failures where `startLiveSession` has just set
-  // `running: false` — but `resume()` re-enters `start()` after a hard pause
-  // released the capture, and `autoScroll.running` deliberately survives a
-  // pause. A → hard pause → resume is enough to reach any of them with the
-  // transport armed, and telling that presenter to "start" auto-scroll would
-  // stop their script. "Start or stop" is also the wording Settings and Live
-  // already use for this key.
-  //
-  // "the requested language", not "the selected language". The picker raises
-  // this BEFORE `update_settings`, and `activate()` says so in its own comment:
-  // the write failed, so nothing changed and the old language is still the
-  // selected one — whose model is installed, or the screen could not have been
-  // reached. "Selected" would have put the alert in contradiction with the
-  // "currently using" line directly above it. A language can be requested and
-  // refused; that is exactly what happened on all three surfaces.
-  STT_MODEL_NOT_INSTALLED:
-    'The speech model for the requested language is not installed. In a take, press A to start or stop auto-scroll. Download it in Settings → Speech to follow your voice.',
-  STT_MODEL_MISSING:
-    'The speech model files could not be found. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
-  // Not "remove the model, then download it again": Settings offers Remove only
-  // for a model this machine DOWNLOADED, and a load failure can also come from
-  // a bundled or `SPEAKING_GLASS_MODELS_DIR` copy that has no Remove button to press.
-  // Download is offered whenever a model is not usable, so it is the half of
-  // that pair which is always there to follow.
-  STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart Speaking Glass; if this keeps happening, download the model again in Settings → Speech.',
-  // Found BEFORE the load, which is the point (#258): a damaged graph handed to
-  // the recogniser used to abort the app at the top of every take. No restart
-  // clause, unlike `STT_MODEL_LOAD_FAILED` — the files are what is wrong, and a
-  // restart reads the same files.
-  STT_MODEL_DAMAGED:
-    'The speech model files on this computer are damaged. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
-  STT_WORKER_FAILED:
-    'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart Speaking Glass to bring it back.',
-  STT_ENGINE_ERROR:
-    'The speech recogniser failed unexpectedly. In a take, press A to start or stop auto-scroll, then stop and start the take to retry voice following.',
+  // Composed from RECOGNISER_COPY above, which says why each is shaped the
+  // way it is and why the take-only fallback is kept apart from the rest.
+  STT_MODEL_NOT_INSTALLED: composeRecogniserCopy(RECOGNISER_COPY.STT_MODEL_NOT_INSTALLED),
+  STT_MODEL_MISSING: composeRecogniserCopy(RECOGNISER_COPY.STT_MODEL_MISSING),
+  STT_MODEL_LOAD_FAILED: composeRecogniserCopy(RECOGNISER_COPY.STT_MODEL_LOAD_FAILED),
+  STT_MODEL_DAMAGED: composeRecogniserCopy(RECOGNISER_COPY.STT_MODEL_DAMAGED),
+  STT_WORKER_FAILED: composeRecogniserCopy(RECOGNISER_COPY.STT_WORKER_FAILED),
+  STT_ENGINE_ERROR: composeRecogniserCopy(RECOGNISER_COPY.STT_ENGINE_ERROR),
 
   /* -- updates ------------------------------------------------------------ */
   //

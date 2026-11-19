@@ -97,7 +97,11 @@
     type ReaderTheme,
   } from '../services/settings-types';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
-  import { SESSION_MODE_LABELS, sessionModeLabel } from '../../shared/take-vocabulary';
+  import {
+    OFFERED_SESSION_MODES,
+    SESSION_MODE_LABELS,
+    sessionModeLabel,
+  } from '../../shared/take-vocabulary';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -2708,7 +2712,7 @@
             mode with the readout's own label, so the button and the value it
             produces say the same words.
           -->
-          {#if $settings.general.defaultSessionMode === 'voice'}
+          {#if OFFERED_SESSION_MODES.includes($settings.general.defaultSessionMode)}
             <SettingReadout
               layout="row"
               label="Session mode"
