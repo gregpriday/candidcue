@@ -5,25 +5,33 @@
  * root before first paint, and `tokens.css` retunes the workspace palette
  * under it. These pin what the windows rely on — the answer is there at once,
  * it moves when the system does, it stops moving once the window lets go of
- * it, and a host that cannot be asked gets the light desk.
+ * it, and a host that cannot be asked gets the light desk. That both windows
+ * actually call it is `tests/e2e/browser/desk-dark-appearance.spec.ts`.
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { followSystemAppearance, systemAppearance } from '../../../src/control/lib/appearance';
 
 type Listener = (event: MediaQueryListEvent) => void;
 
-/** A system whose appearance the test can change, with its listeners in view. */
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+/**
+ * A system whose appearance the test can change. Each `matchMedia` call gets
+ * a list of its own, answering only its own query, as a browser's does: a
+ * subscription to the wrong query, or a release made on a different list
+ * than the one subscribed to, shows up as a listener that never fires or
+ * never leaves.
+ */
 function fakeSystem(initiallyDark: boolean) {
-  const listeners = new Set<Listener>();
-  const queries: string[] = [];
+  const lists: { query: string; listeners: Set<Listener> }[] = [];
   let dark = initiallyDark;
+  const answers = (query: string) => query === DARK_QUERY && dark;
   const matchMedia = (query: string) => {
-    queries.push(query);
+    const listeners = new Set<Listener>();
+    lists.push({ query, listeners });
     return {
       get matches() {
-        return dark;
+        return answers(query);
       },
       media: query,
       addEventListener: (type: string, listener: Listener) => {
@@ -36,12 +44,19 @@ function fakeSystem(initiallyDark: boolean) {
   };
   vi.stubGlobal('window', { matchMedia });
   return {
-    listeners,
-    queries,
+    get queries() {
+      return lists.map((list) => list.query);
+    },
+    /** Listeners still subscribed, across every list handed out. */
+    get subscribed() {
+      return lists.reduce((sum, list) => sum + list.listeners.size, 0);
+    },
     setDark(next: boolean) {
       dark = next;
-      for (const listener of [...listeners]) {
-        listener({ matches: next } as MediaQueryListEvent);
+      for (const list of lists) {
+        for (const listener of [...list.listeners]) {
+          listener({ matches: answers(list.query), media: list.query } as MediaQueryListEvent);
+        }
       }
     },
   };
@@ -103,13 +118,21 @@ describe('followSystemAppearance', () => {
     const system = fakeSystem(false);
     const root = fakeRoot();
     const stop = followSystemAppearance(root);
-    expect(system.listeners.size).toBe(1);
+    expect(system.subscribed).toBe(1);
 
     stop();
-    expect(system.listeners.size).toBe(0);
+    expect(system.subscribed).toBe(0);
 
     system.setDark(true);
     expect(root.dataset['appearance']).toBe('light');
+  });
+
+  it('gives the root the light desk where there is no window at all', () => {
+    expect(typeof window).toBe('undefined');
+    const root = fakeRoot();
+    const stop = followSystemAppearance(root);
+    expect(root.dataset['appearance']).toBe('light');
+    expect(() => stop()).not.toThrow();
   });
 
   it('still gives the root the light desk where the system cannot be asked', () => {
@@ -118,19 +141,5 @@ describe('followSystemAppearance', () => {
     const stop = followSystemAppearance(root);
     expect(root.dataset['appearance']).toBe('light');
     expect(() => stop()).not.toThrow();
-  });
-});
-
-/*
- * Both desk windows must apply it, before their first paint: a window that
- * forgets is a light window on a dark desk, which is the bug #231 describes.
- */
-describe('the desk windows', () => {
-  it.each([
-    ['the control window', '../../../src/control/main.ts'],
-    ['the Settings window', '../../../src/preferences/main.ts'],
-  ])('%s follows the system appearance on its document root', (_name, path) => {
-    const source = readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
-    expect(source).toMatch(/followSystemAppearance\(\s*document\.documentElement\s*\)/);
   });
 });
