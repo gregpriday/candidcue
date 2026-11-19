@@ -1920,3 +1920,270 @@ async fn issue_253_startup_removes_nothing_on_doubtful_ground() {
     assert_eq!(report.unused_assets_removed, 1, "{report:?}");
     assert!(!removed_file.exists());
 }
+
+// ---------------------------------------------------------------------------
+// #450 — re-importing an exported Markdown script keeps its images
+// ---------------------------------------------------------------------------
+
+async fn import_file(h: &Harness, path: &std::path::Path) -> ImportOutcome {
+    speaking_glass_lib::scripts::import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        speaking_glass_lib::scripts::import_export::ImportOptions {
+            path: path.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+}
+
+/// A script showing one image, exported as Markdown with its images.
+async fn exported_markdown_with_an_image(
+    h: &Harness,
+) -> (tempfile::TempDir, std::path::PathBuf, speaking_glass_lib::assets::ImportedAsset) {
+    let (id, kept, _) = script_that_dropped_an_image(h, false).await;
+    let out = tempfile::tempdir().unwrap();
+    let md = out.path().join("talk.md");
+    let result = speaking_glass_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        ExportOptions {
+            include_assets: true,
+            ..export_options(&md, "markdown")
+        },
+    )
+    .await
+    .expect("markdown export");
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert!(out.path().join("assets").join(asset_name(&kept)).is_file());
+    (out, md, kept)
+}
+
+/// The issue's evidence: the image sat beside the exported script, and the
+/// re-imported script resolved none of it, with no warning.
+#[tokio::test]
+async fn issue_450_an_exported_markdown_script_reimports_with_its_images() {
+    let mut h = harness().await;
+    let (_out, md, kept) = exported_markdown_with_an_image(&h).await;
+
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    let id = sid(&imported.script.id);
+    assert!(resolves(&h, &id, &kept.markdown_path).await, "the image resolves for the new script");
+    assert_eq!(indexed_assets(&h, &id).await, vec![asset_name(&kept)]);
+    assert_eq!(file_names(&h.paths.assets_dir(&id)), vec![asset_name(&kept)]);
+
+    let references: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM script_asset_references WHERE script_id = ?")
+            .bind(id.as_str())
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(references, 1, "the new script owns the image");
+    let revisions = repo::list_revisions(&h.pool, &id).await.unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].reason, "import");
+
+    // It is the new script's own, so neither the next launch's sweep nor
+    // garbage collection takes it. (The launch does collect the image the
+    // ORIGINAL script dropped, which is the fixture's point, not this one's.)
+    relaunch(&mut h).await;
+    speaking_glass_lib::assets::collect_garbage(&h.pool, &h.paths).await.expect("gc");
+    assert!(resolves(&h, &id, &kept.markdown_path).await, "still there after a relaunch");
+    assert_eq!(file_names(&h.paths.assets_dir(&id)), vec![asset_name(&kept)]);
+}
+
+/// A reference whose file is genuinely missing is named, with the format
+/// that would have kept it; the script still imports.
+#[tokio::test]
+async fn issue_450_a_missing_image_is_named_in_a_warning() {
+    let h = harness().await;
+    let (out, md, kept) = exported_markdown_with_an_image(&h).await;
+    fs::remove_file(out.path().join("assets").join(asset_name(&kept))).unwrap();
+
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    let id = sid(&imported.script.id);
+    assert!(!resolves(&h, &id, &kept.markdown_path).await);
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    let warning = &imported.warnings[0];
+    assert!(warning.contains(&kept.markdown_path), "names the reference: {warning}");
+    assert!(warning.contains(".speakingglass"), "says what preserves images: {warning}");
+
+    // Several missing beside one that is there, one of them a reference
+    // definition followed by prose: each missing one is named, and only those.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("assets")).unwrap();
+    let present = tiny_png();
+    let present_name = png_name(&present);
+    fs::write(dir.path().join("assets").join(&present_name), &present).unwrap();
+    let missing: Vec<String> = (0u8..5).map(|i| png_name(&solid_png([i, i, i]))).collect();
+    let present_stem = present_name.trim_end_matches(".png");
+    let missing_stem = missing[3].trim_end_matches(".png");
+    let md = dir.path().join("several.md");
+    fs::write(
+        &md,
+        format!(
+            "![Here](assets/{present_name})\n\n![A](assets/{})\n\n![B][b]\n\n\
+             [b]: assets/{}\n\nNext paragraph.\n\n![C](assets/{})\n\n\
+             ![D](assets/{missing_stem}&period;png)\n\n![E](assets/{})\n\n\
+             ![Wrong type](assets/{present_stem}.jpg)\n",
+            missing[0], missing[1], missing[2], missing[4]
+        ),
+    )
+    .unwrap();
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    let id = sid(&imported.script.id);
+    assert_eq!(file_names(&h.paths.assets_dir(&id)), vec![present_name.clone()]);
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    let warning = &imported.warnings[0];
+    assert!(warning.starts_with("6 image(s)"), "{warning}");
+    // Named in the order their hashes first appear: the present image's
+    // stem first (its `.jpg` would not resolve), the last missing one only
+    // counted.
+    assert!(warning.contains(&format!(": assets/{present_stem}.jpg, ")), "{warning}");
+    for name in &missing[..4] {
+        assert!(warning.contains(&format!("assets/{name}")), "{name} named: {warning}");
+    }
+    assert!(warning.contains(" and 1 more."), "five named, the sixth counted: {warning}");
+    assert!(!warning.contains(&missing[4]), "the sixth is not named: {warning}");
+    assert!(!warning.contains(&present_name), "the one brought in is not named: {warning}");
+}
+
+/// What the compiler reads as an image is more than `![](assets/x.png)`: a
+/// reference definition whose destination is on the next line, and a dot
+/// written as a character reference, both still show the image. A hand-named
+/// local image is not one of the app's, and is named rather than imported.
+#[tokio::test]
+async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
+    let h = harness().await;
+    let dir = tempfile::tempdir().unwrap();
+    let assets = dir.path().join("assets");
+    fs::create_dir(&assets).unwrap();
+    let (first, second) = (tiny_png(), solid_png([4, 5, 6]));
+    let (first_name, second_name) = (png_name(&first), png_name(&second));
+    fs::write(assets.join(&first_name), &first).unwrap();
+    fs::write(assets.join(&second_name), &second).unwrap();
+    fs::write(assets.join("photo.png"), solid_png([7, 8, 9])).unwrap();
+    let first_stem = first_name.trim_end_matches(".png");
+    let second_stem = second_name.trim_end_matches(".png");
+    let md = dir.path().join("mixed.md");
+    fs::write(
+        &md,
+        format!(
+            "# Mixed\n\nThe file is `{first_stem}.jpg` in the old notes.\n\n![Hero][hero]\n\n\
+             ![Escaped](assets/{second_stem}&period;png)\n\n\
+             ![Angled](<./assets/{first_stem}\\.png> \"Title\")\n\n\
+             ![Remote](https://example.com/assets/remote.png)\n\n\
+             ![Hand](assets/photo.png)\n\n![Defined][p]\n\n[p]:assets/defined.png\n\n\
+             [hero]:\n  assets/{first_name}\n\nNext paragraph.\n"
+        ),
+    )
+    .unwrap();
+
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    let id = sid(&imported.script.id);
+    let mut expected = vec![first_name.clone(), second_name.clone()];
+    expected.sort();
+    assert_eq!(file_names(&h.paths.assets_dir(&id)), expected);
+    assert!(resolves(&h, &id, &format!("assets/{first_name}")).await);
+    assert!(resolves(&h, &id, &format!("assets/{second_name}")).await);
+    // The `.jpg` the prose mentions would not resolve, so it is named; the
+    // PNG under the same hash came in all the same.
+    assert_eq!(
+        imported.warnings,
+        vec![format!(
+            "3 image(s) could not be imported from the assets folder beside this file: \
+             assets/{first_stem}.jpg, assets/photo.png, assets/defined.png. Export the \
+             original script as a \
+             .speakingglass bundle to keep its images with it."
+        )]
+    );
+}
+
+/// The folder beside the file is the boundary: an image reached through a
+/// link, or one whose bytes are not what its name says, stays where it is
+/// and is named in the warning. A plain-text import never looks.
+#[tokio::test]
+async fn issue_450_images_beside_a_file_stay_inside_its_folder() {
+    let h = harness().await;
+    let elsewhere = tempfile::tempdir().unwrap();
+    let real = tiny_png();
+    let real_name = png_name(&real);
+    fs::write(elsewhere.path().join(&real_name), &real).unwrap();
+
+    // Bytes that are a fine image, but not the one the name promises.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("assets")).unwrap();
+    let liar = png_name(&solid_png([1, 1, 1]));
+    fs::write(dir.path().join("assets").join(&liar), solid_png([2, 2, 2])).unwrap();
+    let md = dir.path().join("liar.md");
+    fs::write(&md, format!("![Liar](assets/{liar})\n")).unwrap();
+    let imported = import_file(&h, &md).await.expect("import");
+    assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    assert!(imported.warnings[0].contains(&format!("assets/{liar}")));
+
+    // Named after its own bytes, but not an image that decodes.
+    let truncated = tiny_png()[..40].to_vec();
+    let truncated_name = png_name(&truncated);
+    fs::write(dir.path().join("assets").join(&truncated_name), &truncated).unwrap();
+    let md = dir.path().join("truncated.md");
+    fs::write(&md, format!("![Cut](assets/{truncated_name})\n")).unwrap();
+    let imported = import_file(&h, &md).await.expect("import");
+    assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
+    assert!(imported.warnings[0].contains(&format!("assets/{truncated_name}")));
+
+    // Plain text keeps its old behaviour, even beside a usable image: no
+    // images, no warning.
+    let good = tiny_png();
+    let good_name = png_name(&good);
+    fs::write(dir.path().join("assets").join(&good_name), &good).unwrap();
+    let txt = dir.path().join("plain.txt");
+    fs::write(&txt, format!("assets/{good_name}\n")).unwrap();
+    let imported = import_file(&h, &txt).await.expect("txt import");
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
+
+    #[cfg(unix)]
+    {
+        // A linked image.
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("assets")).unwrap();
+        std::os::unix::fs::symlink(
+            elsewhere.path().join(&real_name),
+            dir.path().join("assets").join(&real_name),
+        )
+        .unwrap();
+        let md = dir.path().join("linked-file.md");
+        fs::write(&md, format!("![Linked](assets/{real_name})\n")).unwrap();
+        let imported = import_file(&h, &md).await.expect("import");
+        assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
+        assert!(imported.warnings[0].contains(&format!("assets/{real_name}")));
+
+        // A linked folder.
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("assets")).unwrap();
+        let md = dir.path().join("linked-folder.md");
+        fs::write(&md, format!("![Linked](assets/{real_name})\n")).unwrap();
+        let imported = import_file(&h, &md).await.expect("import");
+        assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
+        assert!(imported.warnings[0].contains(&format!("assets/{real_name}")));
+
+        // A fifo under an image's name is refused without blocking the import.
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("assets")).unwrap();
+        let fifo = dir.path().join("assets").join(&real_name);
+        let c_path = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let md = dir.path().join("fifo.md");
+        fs::write(&md, format!("![Fifo](assets/{real_name})\n")).unwrap();
+        let imported = tokio::time::timeout(std::time::Duration::from_secs(10), import_file(&h, &md))
+            .await
+            .expect("a fifo never blocks the import")
+            .expect("import");
+        assert!(imported.warnings[0].contains(&format!("assets/{real_name}")));
+    }
+}
