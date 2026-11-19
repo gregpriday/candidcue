@@ -257,33 +257,38 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
             folder.canonicalize().ok()
         });
         let mut read_total: u64 = 0;
-        for (stem, written) in wanted {
-            let names: Vec<String> = match written {
-                Some(extension) => vec![format!("{stem}.{extension}")],
-                None => ALLOWED_BUNDLE_ASSET_EXTENSIONS
+        for (looked_for, (stem, written)) in wanted.into_iter().enumerate() {
+            // The extension written first, then the rest: export picked the
+            // file by its stem, so whichever is there is the one it copied.
+            let mut extensions: Vec<&str> = written.into_iter().collect();
+            extensions.extend(
+                ALLOWED_BUNDLE_ASSET_EXTENSIONS
                     .iter()
-                    .map(|extension| format!("{stem}.{extension}"))
-                    .collect(),
-            };
+                    .copied()
+                    .filter(|e| Some(*e) != written),
+            );
             let mut brought_in = false;
-            for name in names {
-                let bytes = match (&folder, &canonical_folder) {
-                    (Some(folder), Some(canonical))
-                        if found.len() < MAX_BUNDLE_FILE_COUNT
-                            && read_total < MAX_BUNDLE_TOTAL_BYTES =>
-                    {
-                        let limit = MAX_BUNDLE_ASSET_BYTES.min(MAX_BUNDLE_TOTAL_BYTES - read_total);
-                        read_image_beside(folder, canonical, &name, limit)
+            // Bounded in what is looked up as well as in what is kept, so a
+            // text naming thousands of hashes costs a bounded number of
+            // lookups.
+            if let (Some(folder), Some(canonical), true) =
+                (&folder, &canonical_folder, looked_for < MAX_BUNDLE_FILE_COUNT)
+            {
+                for extension in extensions {
+                    if found.len() >= MAX_BUNDLE_FILE_COUNT || read_total >= MAX_BUNDLE_TOTAL_BYTES {
+                        break;
                     }
-                    _ => None,
-                };
-                // Counted whether or not the bytes turn out to be a usable
-                // image: the limit is on what the import reads.
-                read_total += bytes.as_ref().map_or(0, |b| b.len() as u64);
-                if let Some(bytes) = bytes.filter(|b| validate_asset_image(&name, b).is_ok()) {
-                    found.push((name, bytes));
-                    brought_in = true;
-                    break;
+                    let name = format!("{stem}.{extension}");
+                    let limit = MAX_BUNDLE_ASSET_BYTES.min(MAX_BUNDLE_TOTAL_BYTES - read_total);
+                    let (bytes, read) = read_image_beside(folder, canonical, &name, limit);
+                    // Every byte read counts, kept or not: the limit is on
+                    // what the import reads.
+                    read_total += read;
+                    if let Some(bytes) = bytes.filter(|b| validate_asset_image(&name, b).is_ok()) {
+                        found.push((name, bytes));
+                        brought_in = true;
+                        break;
+                    }
                 }
             }
             // Only a name written as an image is reported: a bare hash with no
@@ -297,8 +302,9 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
     // A local image under `assets/` that is not named the way the app names
     // its own was never one of its exports, and is not imported, but the
     // text still shows it, so it is named too.
+    let mut named: std::collections::HashSet<String> = omitted.iter().cloned().collect();
     for reference in authored_asset_references(source) {
-        if !omitted.contains(&reference) {
+        if named.insert(reference.clone()) {
             omitted.push(reference);
         }
     }
@@ -307,14 +313,20 @@ fn images_beside(source_path: &Path, source: &str) -> ImagesBeside {
 
 /// One image file from the folder beside an imported Markdown file, or `None`
 /// if it is missing, not a plain file, a link, outside that folder, or over
-/// `limit` bytes. The checks are repeated on the opened handle, and the open
-/// neither follows a link nor waits on a fifo, so a file swapped in after the
-/// first look is refused rather than read.
-fn read_image_beside(folder: &Path, canonical_folder: &Path, name: &str, limit: u64) -> Option<Vec<u8>> {
+/// `limit` bytes; with how many bytes were read either way. The checks are
+/// repeated on the opened handle, and the open neither follows a link nor
+/// waits on a fifo, so a file swapped in after the first look is refused
+/// rather than read.
+fn read_image_beside(
+    folder: &Path,
+    canonical_folder: &Path,
+    name: &str,
+    limit: u64,
+) -> (Option<Vec<u8>>, u64) {
     let path = folder.join(name);
-    let meta = fs::symlink_metadata(&path).ok()?;
+    let Ok(meta) = fs::symlink_metadata(&path) else { return (None, 0) };
     if meta.file_type().is_symlink() || !meta.is_file() || meta.len() > limit {
-        return None;
+        return (None, 0);
     }
     let mut options = fs::OpenOptions::new();
     options.read(true);
@@ -330,47 +342,54 @@ fn read_image_beside(folder: &Path, canonical_folder: &Path, name: &str, limit: 
         // check below sees it, rather than whatever it points at.
         options.custom_flags(0x0020_0000);
     }
-    let file = options.open(&path).ok()?;
-    let opened = file.metadata().ok()?;
-    if opened.file_type().is_symlink() || !opened.is_file() {
-        return None;
+    let Ok(file) = options.open(&path) else { return (None, 0) };
+    match file.metadata() {
+        Ok(opened) if !opened.file_type().is_symlink() && opened.is_file() => {}
+        _ => return (None, 0),
     }
-    if path.canonicalize().ok()?.parent() != Some(canonical_folder) {
-        return None;
+    if path.canonicalize().ok().as_deref().and_then(Path::parent) != Some(canonical_folder) {
+        return (None, 0);
     }
     let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > limit {
-        return None;
+    let outcome = file.take(limit + 1).read_to_end(&mut bytes);
+    let read = bytes.len() as u64;
+    if outcome.is_err() || read > limit {
+        return (None, read);
     }
-    Some(bytes)
+    (Some(bytes), read)
 }
 
 /// `assets/…` image references in the text whose file is not named after a
 /// hash: written by hand, so never one of the app's exports. They resolve to
-/// nothing in an imported script, before #450 and after it.
+/// nothing in an imported script, before #450 and after it. A reference
+/// inside a remote or absolute URL is not a local image at all.
 fn authored_asset_references(source: &str) -> Vec<String> {
     const IMAGE_EXTENSIONS: [&str; 12] = [
         "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "heic", "tif", "tiff", "ico",
     ];
+    const DELIMITERS: &str = "()[]<>\"'`|*?#";
     let mut references: Vec<String> = Vec::new();
-    let mut rest = source;
-    while let Some(at) = rest.find("assets/") {
-        let after = &rest[at..];
-        let end = after
-            .find(|c: char| c.is_whitespace() || "()[]<>\"'`|*?#".contains(c))
-            .unwrap_or(after.len());
-        let reference = &after[..end];
-        rest = &after["assets/".len()..];
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // One pass over the text's tokens, so the scan stays linear however the
+    // text is built.
+    for token in source.split(|c: char| c.is_whitespace() || DELIMITERS.contains(c)) {
+        let Some(at) = token.find("assets/") else { continue };
+        let prefix = &token[..at];
+        if prefix.contains(':') || prefix.starts_with('/') {
+            continue;
+        }
+        let reference = &token[at..];
         let leaf = reference.rsplit('/').next().unwrap_or_default();
         let Some((stem, extension)) = leaf.rsplit_once('.') else { continue };
         if !IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()) {
             continue;
         }
+        // The app's own names, however escaped, are `hash_named_images`'s.
+        let stem = stem.trim_end_matches('\\');
         if stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()) {
             continue;
         }
-        if !references.iter().any(|r| r == reference) {
+        if seen.insert(reference) {
             references.push(reference.to_string());
         }
     }
@@ -378,18 +397,28 @@ fn authored_asset_references(source: &str) -> Vec<String> {
 }
 
 /// One warning naming the images an import left behind, and what keeps them.
+/// It is a toast, so it names a few, each cut short if it is long.
 fn omitted_images_warning(omitted: &[String]) -> Option<String> {
     const NAMED: usize = 5;
+    const LONGEST: usize = 80;
     if omitted.is_empty() {
         return None;
     }
-    let mut named = omitted.iter().take(NAMED).cloned().collect::<Vec<_>>().join(", ");
+    let mut named = omitted
+        .iter()
+        .take(NAMED)
+        .map(|reference| match reference.char_indices().nth(LONGEST) {
+            Some((cut, _)) => format!("{}…", &reference[..cut]),
+            None => reference.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     if omitted.len() > NAMED {
         named.push_str(&format!(" and {} more", omitted.len() - NAMED));
     }
     Some(format!(
         "{} image(s) could not be imported from the assets folder beside this file: {named}. \
-         Export a .speakingglass bundle to keep a script's images with it.",
+         Export the original script as a .speakingglass bundle to keep its images with it.",
         omitted.len()
     ))
 }
@@ -531,13 +560,10 @@ pub async fn import_script(
                 }
                 return Err(err);
             }
-            let script = if beside.found.is_empty() {
-                summary
-            } else {
-                repo::get_summary(pool, &new_id).await?
-            };
+            // Installing changes nothing a summary carries, and a read here
+            // could fail after the import has fully landed.
             Ok(ImportResult {
-                script,
+                script: summary,
                 warnings: omitted_images_warning(&beside.omitted).into_iter().collect(),
             })
         }

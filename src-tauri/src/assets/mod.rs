@@ -437,8 +437,8 @@ impl<'a> AssetMentions<'a> {
 
 /// The app's own images a script's text mentions (#450): every SHA-256 stem
 /// in it, read the way [`AssetMentions`] reads a URL, in lower case, first
-/// mention first, with the image extension written after it when one can be
-/// read there (`.png`, `\.png`, `&period;png`).
+/// mention first, each with the image extension written after it when one
+/// can be read there (`.png`, `\.png`, `&period;png`).
 ///
 /// This is the export's selection turned round. Markdown export copies the
 /// files whose stem the text mentions into a folder beside it, and every file
@@ -447,14 +447,18 @@ impl<'a> AssetMentions<'a> {
 /// reads the text, not its Markdown structure, for the reason `AssetMentions`
 /// gives: a reference definition whose destination sits on the next line is
 /// still a mention, and a name in a code block costs one extra file, never a
-/// lost one. A stem whose extension cannot be read is still looked for under
-/// every extension the app stores, as the export would have copied it.
+/// lost one.
+///
+/// Reading a URL drops whitespace, so what follows an extension runs on into
+/// the next words (`png` then `Next paragraph` reads `pngnextparagraph`): an
+/// extension counts when it starts what follows the dot.
 pub(crate) fn hash_named_images(source: &str) -> Vec<(String, Option<&'static str>)> {
     const EXTENSIONS: [&str; 4] = ["png", "jpg", "gif", "webp"];
     let text = as_a_url_reads(source);
     let bytes = text.as_bytes();
     let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
     let mut found: Vec<(String, Option<&'static str>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut at = 0;
     while at < bytes.len() {
         if !hex(bytes[at]) {
@@ -470,21 +474,19 @@ pub(crate) fn hash_named_images(source: &str) -> Vec<(String, Option<&'static st
         }
         let stem = &text[start..at];
         let after = &text[at..];
-        let ext_start = ["\\.", ".", "&period;"]
+        let extension = ["\\.", ".", "&period;"]
             .into_iter()
             .find(|dot| after.starts_with(dot))
-            .map(|dot| dot.len());
-        let extension = ext_start.and_then(|from| {
-            let rest = &after[from..];
-            let end = rest
-                .bytes()
-                .position(|b| !b.is_ascii_alphanumeric())
-                .unwrap_or(rest.len());
-            EXTENSIONS.into_iter().find(|e| *e == &rest[..end])
-        });
-        match found.iter_mut().find(|(s, _)| s == stem) {
-            Some(entry) => entry.1 = entry.1.or(extension),
-            None => found.push((stem.to_string(), extension)),
+            .and_then(|dot| {
+                let rest = &after[dot.len()..];
+                EXTENSIONS.into_iter().find(|e| rest.starts_with(e))
+            });
+        match index.get(stem) {
+            Some(&i) => found[i].1 = found[i].1.or(extension),
+            None => {
+                index.insert(stem.to_string(), found.len());
+                found.push((stem.to_string(), extension));
+            }
         }
     }
     found

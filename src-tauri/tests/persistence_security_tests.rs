@@ -2011,6 +2011,35 @@ async fn issue_450_a_missing_image_is_named_in_a_warning() {
     let warning = &imported.warnings[0];
     assert!(warning.contains(&kept.markdown_path), "names the reference: {warning}");
     assert!(warning.contains(".speakingglass"), "says what preserves images: {warning}");
+
+    // Several missing beside one that is there, one of them a reference
+    // definition followed by prose: each missing one is named, and only those.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("assets")).unwrap();
+    let present = tiny_png();
+    let present_name = png_name(&present);
+    fs::write(dir.path().join("assets").join(&present_name), &present).unwrap();
+    let missing: Vec<String> = (0u8..3).map(|i| png_name(&solid_png([i, i, i]))).collect();
+    let md = dir.path().join("several.md");
+    fs::write(
+        &md,
+        format!(
+            "![Here](assets/{present_name})\n\n![A](assets/{})\n\n![B][b]\n\n\
+             [b]: assets/{}\n\nNext paragraph.\n\n![C](assets/{})\n",
+            missing[0], missing[1], missing[2]
+        ),
+    )
+    .unwrap();
+    let imported = import_file(&h, &md).await.expect("markdown import");
+    let id = sid(&imported.script.id);
+    assert_eq!(file_names(&h.paths.assets_dir(&id)), vec![present_name.clone()]);
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    let warning = &imported.warnings[0];
+    assert!(warning.starts_with("3 image(s)"), "{warning}");
+    for name in &missing {
+        assert!(warning.contains(&format!("assets/{name}")), "{name} named: {warning}");
+    }
+    assert!(!warning.contains(&present_name), "the one brought in is not named: {warning}");
 }
 
 /// What the compiler reads as an image is more than `![](assets/x.png)`: a
@@ -2028,13 +2057,17 @@ async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
     fs::write(assets.join(&first_name), &first).unwrap();
     fs::write(assets.join(&second_name), &second).unwrap();
     fs::write(assets.join("photo.png"), solid_png([7, 8, 9])).unwrap();
+    let first_stem = first_name.trim_end_matches(".png");
     let second_stem = second_name.trim_end_matches(".png");
     let md = dir.path().join("mixed.md");
     fs::write(
         &md,
         format!(
-            "# Mixed\n\n![Hero][hero]\n\n![Escaped](assets/{second_stem}&period;png)\n\n\
-             ![Hand](assets/photo.png)\n\n[hero]:\n  assets/{first_name}\n"
+            "# Mixed\n\nThe file is `{first_stem}.jpg` in the old notes.\n\n![Hero][hero]\n\n\
+             ![Escaped](assets/{second_stem}&period;png)\n\n\
+             ![Angled](<./assets/{second_stem}\\.png> \"Title\")\n\n\
+             ![Remote](https://example.com/assets/remote.png)\n\n\
+             ![Hand](assets/photo.png)\n\n[hero]:\n  assets/{first_name}\n\nNext paragraph.\n"
         ),
     )
     .unwrap();
@@ -2050,7 +2083,8 @@ async fn issue_450_every_way_of_writing_the_apps_image_is_brought_in() {
         imported.warnings,
         vec![
             "1 image(s) could not be imported from the assets folder beside this file: \
-             assets/photo.png. Export a .speakingglass bundle to keep a script's images with it."
+             assets/photo.png. Export the original script as a .speakingglass bundle to keep \
+             its images with it."
                 .to_string()
         ]
     );
@@ -2079,11 +2113,26 @@ async fn issue_450_images_beside_a_file_stay_inside_its_folder() {
     assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
     assert!(imported.warnings[0].contains(&format!("assets/{liar}")));
 
-    // Plain text keeps its old behaviour: no images, no warning.
-    let txt = dir.path().join("liar.txt");
-    fs::write(&txt, format!("assets/{liar}\n")).unwrap();
+    // Named after its own bytes, but not an image that decodes.
+    let truncated = tiny_png()[..40].to_vec();
+    let truncated_name = png_name(&truncated);
+    fs::write(dir.path().join("assets").join(&truncated_name), &truncated).unwrap();
+    let md = dir.path().join("truncated.md");
+    fs::write(&md, format!("![Cut](assets/{truncated_name})\n")).unwrap();
+    let imported = import_file(&h, &md).await.expect("import");
+    assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
+    assert!(imported.warnings[0].contains(&format!("assets/{truncated_name}")));
+
+    // Plain text keeps its old behaviour, even beside a usable image: no
+    // images, no warning.
+    let good = tiny_png();
+    let good_name = png_name(&good);
+    fs::write(dir.path().join("assets").join(&good_name), &good).unwrap();
+    let txt = dir.path().join("plain.txt");
+    fs::write(&txt, format!("assets/{good_name}\n")).unwrap();
     let imported = import_file(&h, &txt).await.expect("txt import");
     assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    assert!(file_names(&h.paths.assets_dir(&sid(&imported.script.id))).is_empty());
 
     #[cfg(unix)]
     {
