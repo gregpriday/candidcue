@@ -1,5 +1,5 @@
 /**
- * Presentation of the system diagnostics report (spec §44.11, §47.10).
+ * Presentation of the system diagnostics report.
  * Pure, so the honesty rules below are unit-testable without a DOM.
  *
  * Two of these numbers can lie by omission, and the rules exist to stop them:
@@ -80,13 +80,13 @@ export function diagnosticsClipboardText(d: SystemDiagnostics): string {
 }
 
 /**
- * What a support bundle actually contains (spec §44.11), stated before the
+ * What a support bundle actually contains, stated before the
  * operator sends it to anyone.
  *
  * This list is a promise made to someone about to hand a folder to a stranger,
  * so it has to track what `export_support_bundle` actually writes. It used to
  * end "— nothing else", which stopped being true the moment the bundle started
- * carrying logs (§179) — the disclosure went stale in the direction that
+ * carrying logs — the disclosure went stale in the direction that
  * matters, understating what leaves the machine.
  */
 export const SUPPORT_BUNDLE_CONTENTS = [

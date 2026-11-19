@@ -1,25 +1,22 @@
 <!--
-  One script in the Library collection (desktop refinement §10.1).
+  One script in the Library collection.
 
   ---------------------------------------------------------------------------
   A ROW, NOT A CARD
   ---------------------------------------------------------------------------
-  `ScriptCard` drew each script as a rounded, bordered, shadowed surface that
-  lifted on hover, with two lines of excerpt and its own miniature metadata
-  layout. Fifty of those is a stack of floating tiles: nothing lines up column to
-  column, the eye has to re-find the title on every row, and the hover lift makes
-  a list feel like a page of links.
+  Fifty rounded, shadowed cards that lift on hover are a stack of floating
+  tiles: nothing lines up column to column, the eye has to re-find the title on
+  every row, and the hover lift makes a list feel like a page of links.
 
   This is a 52px row on one continuous surface, separated by hairlines, with the
-  metadata in stable columns. §10.1's anatomy, in order: selection highlight,
+  metadata in stable columns. The anatomy, in order: selection highlight,
   title (with readiness beside it, when there is any), one line of excerpt,
   duration, modified, trailing action.
 
   ---------------------------------------------------------------------------
   ONE HIGHLIGHT FOR HOVER, SELECTION AND FOCUS
   ---------------------------------------------------------------------------
-  §10.2 and §23.3 insist that selected-and-focused be told apart from
-  selected-and-not, and it is the property most easily lost. A list that draws
+  Selected-and-focused must be told apart from selected-and-not, and it is the property most easily lost. A list that draws
   them the same tells a keyboard user nothing about where their next keystroke
   lands.
 
@@ -28,19 +25,15 @@
   focused — plus the quiet 2px edge on that highlight when the keyboard put
   focus there. The ramp is in tokens.css (`--bg-row-*`).
 
-  WHAT IT REPLACED
-  ----------------
-  Hover was a warm grey and selection a clay tint with an accent bar at its
-  leading edge: two unrelated colours, so hover never read as a lighter version
-  of selection, and the faintest selection step was so close to white that only
-  the bar found it. Any clay light enough to sit behind body text reads pink or
-  peach on white. The bar was a second signal for a state the fill already
-  carries, and on a focused row it stacked against the keyboard edge.
+  Do not go back to a warm grey hover and a clay selection tint with an accent
+  bar: two unrelated colours never read as one ramp, any clay light enough to sit
+  behind body text reads pink or peach on white, and the bar stacked against the
+  keyboard edge on a focused row.
 
   ---------------------------------------------------------------------------
   ACTIONS APPEAR ON HOVER, FOCUS OR SELECTION
   ---------------------------------------------------------------------------
-  §10.1: keep row actions hidden until hover, focus or selection so the list does
+  Row actions stay hidden until hover, focus or selection so the list does
   not become button-heavy. `visibility` rather than conditional rendering, so the
   row's layout does not shift when the pointer crosses it — and so the buttons
   stay in the tab order for the selected row, which is the one a keyboard user is
@@ -55,13 +48,13 @@
     /** Right-aligned columns, in a fixed order the caller keeps stable. */
     duration: string;
     modified: string;
-    /** Shown only when it is actionable (§10.1). */
+    /** Shown only when it is actionable. */
     status?: Snippet;
     actions?: Snippet;
     selected?: boolean;
     /** The list containing this row has DOM focus. */
     listFocused?: boolean;
-    /** Compact density, for large libraries (§10.1). */
+    /** Compact density, for large libraries. */
     compact?: boolean;
     /** Withheld in Trash, where the body does nothing. */
     onselect?: () => void;
@@ -170,7 +163,7 @@
 
   function click(event: MouseEvent): void {
     // A single click SELECTS; it does not open. That is the desktop collection
-    // model §10.2 asks for, and it is what makes the inspector, the context
+    // model, and it is what makes the inspector, the context
     // menu and the File commands meaningful — they all act on "the selected
     // script", which single-click-to-open would never leave standing.
     //
@@ -239,7 +232,7 @@
       {@render status?.()}
     </span>
     <!--
-      ONE line of excerpt, and only outside compact density. §10.1: two full
+      ONE line of excerpt, and only outside compact density. Two full
       lines in the default list is harder to scan than one, and the second line
       is what turned every card into a paragraph.
 
@@ -281,7 +274,7 @@
     padding: 0 var(--space-3);
     min-width: 0;
     /* No radius, no border, no shadow. The rows sit on one continuous surface
-       and are separated by the list's own hairlines (§10.1). */
+       and are separated by the list's own hairlines. */
     background: transparent;
     /* The highlight below is positioned against this. NOT a stacking context
        (no isolation, no z-index): the overflow menu opens inside this row and
@@ -307,7 +300,7 @@
    *   hover  <  selected  <  selected + hover  <  focused  <  focused + hover
    *
    * so hover reads as a lighter version of selection rather than as a second,
-   * unrelated colour, and "the keyboard is here" (§23.3) is the same mark,
+   * unrelated colour, and "the keyboard is here" is the same mark,
    * firmer. There is no marker bar: the fill is the selection.
    *
    * Drawn on a pseudo-element rather than on the row, so the row keeps its full
@@ -476,7 +469,7 @@
   /*
    * At narrow widths the columns go before the excerpt does.
    *
-   * §21.3 in miniature: collapse optional things before compressing the core.
+   * Collapse optional things before compressing the core.
    * The title is the core; a last-modified stamp is not, and squeezing it to
    * four characters is worse than dropping it.
    */

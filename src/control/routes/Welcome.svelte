@@ -1,15 +1,13 @@
 <!--
-  First-launch welcome (spec §9.1, copy from Appendix F.1). Restrained: no
-  account creation, no promotional imagery; the user can postpone setup.
+  First-launch welcome. Restrained: no account creation, no promotional
+  imagery; the user can postpone setup.
 
-  The two readiness lines used to be prose. They named the only two things that
-  have to be true before a take works and then offered no way to do either, so
-  a microphone that was never granted or a prompter panel that is no longer
-  plugged in was discovered at Present — after the writing, which is the
-  expensive place to find out. They now report what is actually true and link
-  to the control that fixes it.
+  The readiness rows report what is actually true and link to the control that
+  fixes it, so a microphone that was never granted or a prompter panel that is
+  no longer plugged in is found here rather than at Present — after the
+  writing, which is the expensive place to find out.
 
-  THIS IS NOT A PREFLIGHT GATE. Nothing here disables a CTA, blocks Present, or
+  THIS IS NOT A READINESS GATE. Nothing here disables a CTA, blocks Present, or
   prompts for hardware; the rows are a readout plus a link. The app deliberately
   has no blocking readiness step, and re-growing one on the first screen would
   be the same mistake in a friendlier place.
@@ -113,7 +111,7 @@
    * The microphone answer is a plain settings read, and must stay one.
    *
    * WKWebView does not implement `navigator.permissions.query({name:'microphone'})`,
-   * so a live query reports 'unsupported' on the one platform that ships. macOS
+   * so a live query reports 'unsupported' on macOS. macOS
    * grants the microphone to the APPLICATION, so the grant genuinely survives;
    * only the webview's ability to see it is missing. `audio.microphoneGranted`
    * is the record of that grant — the same source Settings falls back to, and
@@ -142,7 +140,7 @@
     }),
   );
   /**
-   * A pinned display that is not currently connected (§52 fingerprints), the
+   * A pinned display that is not currently connected (matched by fingerprint), the
    * same predicate Stage settings shows its inline alert from. A fingerprint is
    * panel identity, so an unplugged display simply stops matching and the take
    * opens on the panel this window is on instead.
@@ -387,10 +385,10 @@
    * launch, which is the honest outcome — they have not started yet.
    */
   /*
-   * The readiness rows open the SETTINGS WINDOW (§14.1), at their own section.
+   * The readiness rows open the SETTINGS WINDOW, at their own section.
    *
    * They used to navigate the control window to the Settings route, which is
-   * exactly the trip §16.1 asks a setup assistant not to make: somebody halfway
+   * exactly the trip a setup assistant should not make: somebody halfway
    * through getting ready is sent to another screen and has to find their way
    * back. Now the window opens beside the checklist and closing it leaves them
    * where they were, with the row they came to fix visibly answered.
@@ -422,7 +420,7 @@
   }
 
   function openPrivacy(): void {
-    /* The Settings WINDOW (§14.1). Navigating here reached a route this window
+    /* The Settings WINDOW. Navigating here reached a route this window
        no longer renders, which fell through to the Library. */
     void openSettingsWindow('privacy');
   }
@@ -432,12 +430,11 @@
   Two regions, side by side: starting a script on the left, setting up for a
   take on the right.
 
-  This was one centred column — a hero, a row of buttons, then the checklist
-  stacked under them — which is a landing page's rhythm around what is really a
-  setup utility. It left most of a desktop window empty at the sides and pushed
-  the speech download, the privacy link and the way out to the library below the
-  fold at every window size. Side by side, both answers are on screen at once,
-  and nothing in the setup column can push the way in further down.
+  Side by side rather than one centred column, which is a landing page's
+  rhythm around what is really a setup utility and pushed the speech download,
+  the privacy link and the way out below the fold. This way both answers are on
+  screen at once, and nothing in the setup column can push the way in further
+  down.
 -->
 <div class="welcome">
   <div class="inner">
@@ -457,8 +454,7 @@
 
       <h2 class="region-title">Start a script</h2>
       <!--
-        §16.1: "Make 'Create a script' the primary action. Make 'Open sample'
-        secondary."
+        Create a script is the primary action and Open sample the secondary one.
 
         This was the other way round, and the reasoning was real: the sample is
         the only one of the three that hands back something written to be read
@@ -498,7 +494,7 @@
         <span class="more-actions">
           <Button onclick={() => createAndOpenScript('sample')}>Open the sample script</Button>
           <!--
-            Import is TERTIARY (§16.1): three equally weighted buttons is a screen
+            Import is TERTIARY: three equally weighted buttons is a screen
             asking a question rather than offering a way in. It is also the one of
             the three that a returning user reaches for, and they have File › Import
             Markdown and ⇧⌘I — so it costs nothing to make it the quietest here.
@@ -524,8 +520,8 @@
 
       <!--
         `role="list"` is not redundant here. WebKit drops list semantics from a
-        `<ul>` whose markers are styled away, and WebKit is the only engine this
-        app ships in — without it VoiceOver reads three loose rows with no count.
+        `<ul>` whose markers are styled away, and WebKit is the engine on macOS
+        and Linux — without it VoiceOver reads three loose rows with no count.
 
         Each row is the same shape: title and status on one line, the sentence
         under them at the full width of the row, then the control that changes
@@ -567,7 +563,7 @@
         </li>
 
         <!--
-          §153: the language choice belongs HERE, at first run, alongside the
+          The language choice belongs HERE, at first run, alongside the
           other setup a good take needs — not behind a link to Settings. The
           header reports state (and, like the display row, that state ARRIVES
           over IPC, so the detail stays a polite live region); the picker beneath
@@ -717,7 +713,7 @@
    * at a medium weight, set tight. The brand face is the wordmark's alone, as
    * it is on the website, so the name above is the one thing set in it.
    *
-   * What came down earlier is the SCALE (§16.1): this is a setup assistant
+   * What came down earlier is the SCALE: this is a setup assistant
    * with three actions and a checklist beside it, and it should read as the
    * top of a window, not as the top of a marketing site. The page-title token
    * is what every other screen's title is set at.

@@ -1,6 +1,5 @@
 /**
- * Where this take will actually open, said out loud before it does (CCUX-004,
- * CCUX-005, #302).
+ * Where this take will actually open, said out loud before it does (#302).
  *
  * ---------------------------------------------------------------------------
  * THREE THINGS THAT ARE NOT THE SAME THING

@@ -9,21 +9,20 @@
   answered by standing where you will stand and seeing whether you can read it;
   "Text intensity" is a question about a reflection in a piece of glass. All of
   them have exactly one correct place to be set — in front of the running
-  prompter — and until now that was the one place they could not be reached.
+  prompter — which is where this panel puts them.
 
   ---------------------------------------------------------------------------
   IT RISES FROM THE DOCK, AND THAT CHANGES ITS SIZE
   ---------------------------------------------------------------------------
-  It used to drop from a menu in the top-right corner and was allowed to be
-  560px tall. The Elgato Prompter it is judged on is 600px tall in total, so a
-  panel that now rises from a control 16px off the BOTTOM edge would cover
-  essentially the whole left half of the stage — including the reading band, the
-  one part the operator opened the panel to look at.
+  The Elgato Prompter it is judged on is 600px tall in total, so a 560px panel
+  rising from a control 16px off the BOTTOM edge would cover essentially the
+  whole left half of the stage — including the reading band, the one part the
+  operator opened the panel to look at.
 
   So it is 304 wide, capped just over 430 tall, and every row inside it earns
-  its height. The long explanatory paragraphs are gone: they were written for a
-  settings screen with room to teach, and this is a panel somebody is operating
-  mid-take with a presenter waiting.
+  its height. No long explanatory paragraphs: those belong on a settings screen
+  with room to teach, and this is a panel somebody is operating mid-take with a
+  presenter waiting.
 
   ---------------------------------------------------------------------------
   WHAT IT PROMISES
@@ -52,7 +51,7 @@
   ---------------------------------------------------------------------------
   A RIG-RESOLVED TAKE GETS A READOUT, NOT CONTROLS
   ---------------------------------------------------------------------------
-  Where a saved rig decided the appearance (§17.2), `buildStageSettings` works
+  Where a saved rig decided the appearance, `buildStageSettings` works
   every one of these values out from a measured distance and never consults the
   loose ones — including text intensity, which a calibrated profile carries
   because it was chosen by somebody standing at that glass looking at that
@@ -131,7 +130,7 @@
      */
     readerTheme?: ReaderTheme;
     /**
-     * §17.2: a saved rig decided this take's appearance, so none of it is the
+     * A saved rig decided this take's appearance, so none of it is the
      * panel's to set. It reports and points at the wizard instead.
      */
     rigResolved: boolean;

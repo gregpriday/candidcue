@@ -105,7 +105,7 @@
 
   /*
    * Whether entries are hidden above or below the scroll region, so its edge
-   * can say so — the same hairline Keyboard Shortcuts draws. Without it a
+   * can say so. Without it a
    * window that happened to end between two entries looked like the whole
    * reference.
    */

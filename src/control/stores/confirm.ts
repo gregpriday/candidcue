@@ -1,5 +1,5 @@
 /**
- * Promise-based confirmation sheet (Appendix F.19 destructive confirmations).
+ * Promise-based confirmation sheet for destructive actions.
  * One ConfirmHost in App.svelte renders the pending request.
  */
 import { writable, type Readable } from 'svelte/store';

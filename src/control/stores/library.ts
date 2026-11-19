@@ -1,13 +1,11 @@
 /**
- * ScriptLibraryStore (spec §45.2) — summaries, search, sort, selection.
+ * ScriptLibraryStore — summaries, search, sort, selection.
  *
  * Every mutation reports its own outcome, success and failure both, exactly
- * once, from here. It used to report neither: the mutators had no `try`/`catch`
- * and every call site invoked them as `void moveScriptToTrash(id)`, so a
- * rejection reached nothing at all — there is no `unhandledrejection` handler
- * in the app, and the console is not a user interface. The success toasts sat
- * after the await at the call sites, which meant a failure produced no notice
- * of any kind: you clicked Restore and the row simply stayed where it was.
+ * once, from here. Call sites fire and forget (`void moveScriptToTrash(id)`)
+ * and there is no `unhandledrejection` handler in the app, so a rejection that
+ * escaped a mutator would reach nothing: you would click Restore and the row
+ * would simply stay where it was, with no notice of any kind.
  */
 import { derived, get, writable } from 'svelte/store';
 import type { ScriptSummary } from '../../shared/contracts';
@@ -20,11 +18,9 @@ import { showToast } from './toasts';
 /**
  * One page, at the largest size Rust will serve.
  *
- * `PageRequest` defaults to 100 and clamps to 500 (`scripts/repo.rs`), and this
- * store used to send no page at all — so a library of 340 scripts showed 240 of
- * them nowhere, with `total` arriving on the wire and being dropped on the
- * floor. Asking for the maximum is not a fix for pagination; it is the honest
- * ceiling until there is some, which is why `total` is kept and reported.
+ * `PageRequest` defaults to 100 and clamps to 500 (`scripts/repo.rs`), so a
+ * read that names no page silently stops at 100 rows. `total` is kept and
+ * reported, and `loadMoreScripts` reads the pages past this one.
  */
 const PAGE_SIZE = 500;
 
@@ -38,28 +34,16 @@ export interface LibraryState {
   sort: ScriptSort;
   /**
    * The selected script — drawn, and the target of every command that acts on
-   * "the script in the Library" (desktop refinement §10.2).
+   * "the script in the Library", ⌘⏎ included.
    *
-   * ---------------------------------------------------------------------------
-   * IT USED TO BE INVISIBLE, AND THAT WAS THE PROBLEM
-   * ---------------------------------------------------------------------------
-   * This was the Present shortcut's target and nothing else. Nothing drew it, so
-   * "the selected script" was a fiction: ⌘⏎ presented a script the user had no
-   * way of identifying, and there was no object for a context menu, an
-   * inspector, or a File menu command to act on. The Library was a list of links
-   * rather than a collection.
+   * It is drawn, it survives opening a script and coming back, and the arrows
+   * move it. `loadLibrary` falls back to the first row so the collection has a
+   * selection the moment it loads — which is what every desktop document
+   * manager does, and what makes the keyboard usable without a click first.
    *
-   * It is now drawn, it survives opening a script and coming back, and the
-   * arrows move it. `loadLibrary` still falls back to the first row so the
-   * collection has a selection the moment it loads — which is what every desktop
-   * document manager does, and what makes the keyboard usable without a click
-   * first.
-   *
-   * THE TRASH EXCLUSION IS GONE. It existed because an invisible selection in
-   * Trash meant ⌘⏎ aimed at a deleted script; now that selection is visible and
-   * Present is greyed out in Trash by `lib/commands.ts` and refused by the
-   * route's own shortcut handler, a Trash selection is exactly what Restore and
-   * Delete Permanently need to act on.
+   * A selection in Trash is kept too: it is exactly what Restore and Delete
+   * Permanently act on, and Present is greyed out in Trash by `lib/commands.ts`
+   * and refused by the route's own shortcut handler.
    */
   selectedId: string | null;
   error: string | null;
@@ -152,11 +136,11 @@ let loadedPages = 1;
 /**
  * How many pages the NEXT full reload should re-read.
  *
- * Returning from the editor calls `loadLibrary()`, which reads page 0 — so a
- * selection on row 700 was replaced by row 1, and the offset saved for the
- * scroll position pointed past the end of a list that had just shrunk back to
- * 500 rows. §10.2 names that journey specifically: selection survives returning
- * from the editor. Now the reload restores the depth it was left at.
+ * Returning from the editor calls `loadLibrary()`. Re-reading page 0 alone
+ * would replace a selection on row 700 with row 1 and leave the offset saved
+ * for the scroll position pointing past the end of a list that had just shrunk
+ * back to 500 rows. Selection must survive returning from the editor, so the
+ * reload restores the depth it was left at.
  */
 function pagesToRestore(): number {
   return loadedPages;
@@ -216,7 +200,7 @@ export async function loadLibrary(): Promise<void> {
          * Trash too — see the note on `selectedId`.
          *
          * DEFERRED while deeper pages are still to come. Judging it here on
-         * page zero alone is what §10.2's journey trips over: the script you
+         * page zero alone breaks the trip back from the editor: the script you
          * were editing is on row 700, page zero cannot contain it, and the
          * fallback replaced the selection with row 1 before the page holding it
          * had been read. The restore loop below makes the same decision once
@@ -280,15 +264,10 @@ export async function loadLibrary(): Promise<void> {
 }
 
 /**
- * Load the next page and append it (§10.2).
+ * Load the next page and append it.
  *
- * ---------------------------------------------------------------------------
- * WHY THIS HAD TO EXIST
- * ---------------------------------------------------------------------------
- * `loadLibrary` asks for page zero and a ceiling of `PAGE_SIZE`, and that was
- * the whole of the transport. The count line said "Showing 500 of 812", which
- * was honest — and the other 312 were unreachable by keyboard AND by pointer.
- * There was no gesture in the product that could see them.
+ * `loadLibrary` asks for page zero and a ceiling of `PAGE_SIZE`; this is the
+ * only way to the scripts past that, by keyboard or by pointer.
  *
  * Appending rather than replacing, and guarded three ways: nothing to fetch,
  * a fetch already running, and a generation that has moved. The last is the
@@ -319,15 +298,6 @@ export async function loadMoreScripts(): Promise<boolean> {
       // which for a keyed `{#each}` is a crash rather than a cosmetic fault.
       const seen = new Set(s.scripts.map((script) => script.id));
       const added = page.items.filter((item) => !seen.has(item.id));
-      /*
-       * A page that answered with nothing is the END, whatever `total` says.
-       *
-       * `total` is counted by a separate query and can disagree with the rows
-       * after a concurrent delete — and while it says there are more, the guard
-       * at the top of this function goes on offering Show more, which reads as
-       * a button that does nothing. Trusting the rows over the count is the
-       * right way round: the rows are what the list can actually display.
-       */
       /*
        * A SHORT page is the last one, whatever `total` says — and an empty one
        * does not move the cursor at all.
@@ -371,8 +341,8 @@ export function setLibraryView(view: LibraryView): void {
    * already current — which is exactly what somebody does coming back from the
    * editor. Clearing unconditionally meant that trip discarded the selection,
    * so "open a script, come back" always landed on the top of the list rather
-   * than on the script you had just been working in. That is the one journey
-   * §10.2 names: selection must survive returning from the editor.
+   * than on the script you had just been working in. Selection must survive
+   * returning from the editor.
    */
   if (get(state).view === view) {
     void loadLibrary();
@@ -566,9 +536,8 @@ export async function collectTrashTargets(): Promise<string[] | null> {
 /**
  * Delete exactly the scripts that were confirmed, and say how it went.
  *
- * It used to walk `state.scripts`, which is one page of Trash as narrowed by
- * whatever is in the search box, so "Empty Trash" could leave most of the trash
- * in it.
+ * Not `state.scripts`, which is one page of Trash as narrowed by whatever is
+ * in the search box: walking that, "Empty Trash" left most of the trash in it.
  *
  * The deletes are serial. These are SQLite writes behind IPC, so running them
  * together buys lock contention rather than speed, and one at a time is what

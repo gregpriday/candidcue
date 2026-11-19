@@ -1,11 +1,10 @@
 /**
- * Following-settings adapter (companion §47) between the Rust settings
+ * Following-settings adapter between the Rust settings
  * document and the UI view.
  *
  * These settings genuinely belong in Rust: they change how a *session*
  * behaves, so they must survive a
- * reinstall of the frontend's local storage and be readable by the backend
- * that bills the key. They therefore live in `AppSettings.following`
+ * reinstall of the frontend's local storage. They therefore live in `AppSettings.following`
  * (src-tauri/src/settings/mod.rs) rather than in the documented localStorage
  * overlay used for per-display presentation state.
  *

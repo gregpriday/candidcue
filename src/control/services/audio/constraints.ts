@@ -1,18 +1,18 @@
 /**
- * getUserMedia constraint builder (spec §28.3). Pure.
+ * getUserMedia constraint builder. Pure.
  */
 
 export interface AudioConstraintOptions {
   /** Explicit device, or undefined to follow the system default. */
   deviceId?: string;
-  /** Advanced toggles (spec §28.3) — default all on. */
+  /** Advanced toggles — default all on. */
   echoCancellation?: boolean;
   noiseSuppression?: boolean;
   autoGainControl?: boolean;
 }
 
 /**
- * Build the initial constraints per spec §28.3. These are defaults, not
+ * Build the initial constraints. These are defaults, not
  * guarantees; no sample-rate controls are exposed. `video` is always false.
  */
 export function buildAudioConstraints(options: AudioConstraintOptions = {}): MediaStreamConstraints {

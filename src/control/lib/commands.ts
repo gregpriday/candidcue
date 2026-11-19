@@ -1,5 +1,5 @@
 /**
- * The application command registry (desktop refinement §6.1).
+ * The application command registry.
  *
  * ---------------------------------------------------------------------------
  * ONE DEFINITION — AND WHAT STILL READS ITS OWN COPY
@@ -33,7 +33,7 @@
  * once, and they must not be separated:
  *
  *   1. it greys the native menu item out, so an impossible action is visibly
- *      impossible rather than failing after it is chosen (§6.3);
+ *      impossible rather than failing after it is chosen;
  *   2. it is checked again inside `runCommand` before the action fires, because
  *      a menu's enabled state is a snapshot pushed some milliseconds ago and the
  *      session can end in between;
@@ -95,9 +95,9 @@ export interface CommandContext {
   /** A take is running. Not the same as being on the Live route. */
   sessionActive: boolean;
   /**
-   * The running take sizes its type from a measured viewing distance (§17.2).
+   * The running take sizes its type from a measured viewing distance.
    *
-   * In the context because it decides an AVAILABILITY, and §6.3's rule is that
+   * In the context because it decides an AVAILABILITY, and the rule is that
    * an impossible action is greyed rather than refused after it is chosen.
    * Larger/Smaller Stage Text has nothing to move on a calibrated rig — Live
    * already declined and explained in a toast, which is the right answer for a
@@ -145,7 +145,7 @@ export interface CommandActions {
   closeScript(): void;
   closeWindow(): void;
   present(mode?: 'prompter' | 'reader'): void;
-  /** Rehearse in a window: voice following on, nothing reported (§practice). */
+  /** Rehearse in a window: voice following on, nothing reported. */
   practise(): void;
   find(): void;
   findNext(): void;
@@ -158,7 +158,7 @@ export interface CommandActions {
   stepScale(direction: 1 | -1 | 0): void;
   stageAppearance(): void;
   settings(): void;
-  /** One of the editor's insertions, by name (§11.4). */
+  /** One of the editor's insertions, by name. */
   insert(what: InsertKind): void;
   startTake(): void;
   playPause(): void;
@@ -238,7 +238,7 @@ function targetScriptId(context: CommandContext): string | null {
  * Used as a blanket veto on the document commands. Not because they would
  * crash — most would work — but because they all end by changing what is on
  * screen, and what is on screen is being read aloud by somebody standing at a
- * camera. §6.3's rule is that a menu must not offer an action whose consequence
+ * camera. A menu must not offer an action whose consequence
  * the user cannot see.
  */
 function presenting(context: CommandContext): boolean {
@@ -447,8 +447,8 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   // ---------------------------------------------------------------- Insert --
   /*
    * Every one of these is the SAME function the formatting row calls, reached
-   * through the route command bus so it lands on the live CodeMirror view
-   * (§11.4). They share `editing()`, so the whole menu greys out together the
+   * through the route command bus so it lands on the live CodeMirror view.
+   * They share `editing()`, so the whole menu greys out together the
    * moment there is no document to insert into.
    *
    * `insert.bold` and `insert.italic` carry ⌘B and ⌘I — the keys CodeMirror's
@@ -514,15 +514,11 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Settings…',
     accelerator: 'Mod+,',
     /*
-     * AVAILABLE DURING A TAKE, and that is what changed when Settings became a
-     * window (§14.1).
-     *
-     * As a ROUTE it had to be refused: opening it navigated the control window,
-     * which during a take means taking the stage off the screen. As a window it
-     * opens beside the take and disturbs nothing — and an operator hunting a
+     * AVAILABLE DURING A TAKE. Settings is a window of its own, so it opens
+     * beside the take and disturbs nothing — and an operator hunting a
      * microphone fault mid-take is precisely the person who needs it.
      *
-     * §14.1 states the rule directly: keep Settings available while the main
+     * The rule: keep Settings available while the main
      * window is in a non-destructive session state, and disable UNSAFE CHANGES
      * during an active take. That second half belongs to the individual
      * controls, next to the thing each one would break, not to the door.
@@ -554,10 +550,9 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Show Outline',
     accelerator: 'Mod+Alt+O',
     checked: (c) => c.outlineVisible,
-    // The editor's outline is the only one anybody sees. Live's console has an
-    // outline rail too, but a take replaces that console with the stage, so
-    // offering this mid-take flipped the editor's outline behind the presenter's
-    // back and they found it changed on the way out.
+    // The editor's outline is the only one anybody sees. Offering this mid-take
+    // flipped the editor's outline behind the presenter's back and they found
+    // it changed on the way out.
     available: (c) => editing(c),
     run: (a) => a.toggleOutline(),
   },
@@ -596,7 +591,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
      * editor-only meant the disabled menu item ate ⌘= during a take.
      *
      * Except on a CALIBRATED rig, which sizes its type from a measured viewing
-     * distance and has nothing for this to move (§17.2, §6.3). A reading window
+     * distance and has nothing for this to move. A reading window
      * is never that: these step its reader preference, and the session store
      * reports it as not rig-resolved for exactly that reason.
      */
@@ -631,7 +626,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
      * editor and did nothing at all when chosen: `dispatchRouteCommand` drops a
      * command with no listener, silently.
      *
-     * §6.3's rule is to disable rather than let an impossible action fail after
+     * The rule is to disable rather than let an impossible action fail after
      * it is invoked, and an item that fails INVISIBLY is the worst version of
      * that. The saved defaults live in Settings › Teleprompter, which is where
      * an editor-time adjustment belongs.
@@ -707,7 +702,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   'session.end-take': {
     id: 'session.end-take',
     /*
-     * "End Take" (CCUX-002). The one verb is still the point — this chord, the
+     * "End Take". The one verb is still the point — this chord, the
      * menu item and the shortcuts sheet must not be three names — but the noun
      * was wrong: a session is the RECORD, and what the presenter ends is the
      * attempt they just made in front of a camera. The command's own id has
@@ -747,8 +742,8 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Speaking Glass Settings',
     /*
      * Always enabled, because choosing it OPENS the window if it is not there.
-     * §20.4: "Bring an existing window forward instead of creating duplicates"
-     * — the Window menu entry and ⌘, are the same action, and Rust enforces the
+     * Bring an existing window forward instead of creating duplicates: the
+     * Window menu entry and ⌘, are the same action, and Rust enforces the
      * single instance.
      */
     available: () => true,
@@ -897,7 +892,7 @@ export function menuStateFor(context: CommandContext): MenuItemState[] {
 }
 
 /**
- * Render an accelerator for the platform it will be pressed on (§25.3).
+ * Render an accelerator for the platform it will be pressed on.
  *
  * macOS uses the glyphs because that is what macOS menus show and what users
  * scan for; everywhere else uses words, because Windows and Linux menus do. The

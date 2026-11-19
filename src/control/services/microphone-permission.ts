@@ -15,7 +15,7 @@ import { invokeOrMock, ipcInvoke } from './ipc';
 /**
  * Read the microphone permission. Never prompts, and never throws.
  *
- * Safe at launch and before every take (§28.1): the read is passive. Any
+ * Safe at launch and before every take: the read is passive. Any
  * failure — browser dev, an older backend, a platform that cannot say — is
  * `unsupported`, which callers treat as unknown. A readiness check that failed
  * because the permission could not be READ would turn a question into a gate.

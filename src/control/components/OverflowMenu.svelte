@@ -4,9 +4,8 @@
   This declares `role="menu"`/`role="menuitem"`, so it owes the full WAI-ARIA
   menu-button behaviour: the trigger says it opens a menu, opening moves focus
   into it, the arrows walk it as a single tab stop, and Escape closes it and
-  gives focus back. It previously declared the roles and implemented none of
-  that, which is a broken promise rather than a missing feature — and on the
-  Live transport this is the only route to "Hard pause — mic off".
+  gives focus back. Declaring the roles without that behaviour is a broken
+  promise rather than a missing feature.
 -->
 <script lang="ts">
   import { tick } from 'svelte';
@@ -24,7 +23,7 @@
     danger?: boolean;
     disabled?: boolean;
     /**
-     * A checkmark, for menu rows that report state (§18.3).
+     * A checkmark, for menu rows that report state.
      *
      * A tick in a reserved leading column is the platform convention, and the
      * alternative this replaces — an "active" pill inside a menu row — is a menu
@@ -200,9 +199,8 @@
    * ENTER or SPACE must highlight, though. Both keys reach a button as a
    * `click`, so treating every click as pointer-originated left a keyboard user
    * with focus inside a menu and NOTHING drawn to say where — the outline that
-   * used to do that job is suppressed now. On the Live transport that is the
-   * only route to "Hard pause — mic off", so the failure mode is arming a
-   * destructive-looking action invisibly.
+   * used to do that job is suppressed now, so the failure mode is arming an
+   * action — a destructive one, in some menus — invisibly.
    */
   function toggle(highlight: boolean): void {
     if (open) {
@@ -522,7 +520,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Right-aligned, muted, tabular — the platform convention (§18.3). */
+  /* Right-aligned, muted, tabular — the platform convention. */
   .shortcut {
     flex: 0 0 auto;
     color: var(--text-faint);

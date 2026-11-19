@@ -11,7 +11,7 @@ import type { IconName } from './icon-names';
 
 /**
  * `normal` is the overwhelming majority and is deliberately low-contrast.
- * §24.3: danger-red is for genuine faults, never for "not configured yet".
+ * Danger-red is for genuine faults, never for "not configured yet".
  */
 export type StatusBarTone = 'normal' | 'warning' | 'danger' | 'accent';
 
@@ -40,7 +40,7 @@ export interface StatusBarItem {
    */
   parts?: StatusBarPart[];
   /**
-   * Present only when clicking does something meaningful (§11.7).
+   * Present only when clicking does something meaningful.
    *
    * Its absence is what makes the item plain text rather than a button, and
    * therefore not a tab stop — a focusable thing that does nothing is worse for

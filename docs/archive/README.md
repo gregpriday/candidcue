@@ -18,13 +18,18 @@ always did.
 
 | Document | Cited in code as |
 |---|---|
-| [Product and Technical Specification](CandidCue_Product_and_Technical_Specification.md) | bare `§N` (mostly), `spec §N` in `src-tauri/`, `primary §N` |
-| [Smooth Following and Intelligent Alignment](CandidCue_Smooth_Following_and_Intelligent_Alignment_Specification.md) | `companion §N`, and bare numbers in the stage motion code |
+| [Product and Technical Specification](CandidCue_Product_and_Technical_Specification.md) | `Product spec §N` in `src/control/`, bare `§N` (mostly) elsewhere, `spec §N` in `src-tauri/`, `primary §N` |
+| [Smooth Following and Intelligent Alignment](CandidCue_Smooth_Following_and_Intelligent_Alignment_Specification.md) | `Smooth Following spec §N` in `src/control/`, `companion §N`, and bare numbers in the stage motion code |
 | [Intelligent Alignment, Navigation, and Scroll Control](CandidCue_Intelligent_Alignment_Navigation_Spec.md) | `spec §N` in `crates/` |
 | [Alignment Engine Technical Design](Alignment_Engine_Technical_Design.md) (formerly `docs/improvements/spec.md`) | `spec §N` in `crates/` and `bench/REPORT.md` |
 | [Intelligent Transcript Alignment and Free Navigation](CandidCue_Intelligent_Transcript_Alignment_and_Free_Navigation_Specification.md) | no citation style of its own; kept because it overrides the Smooth Following navigation policy |
 
 ## Reading a `§` in a comment
+
+Comments in `src/control/` name the document with every citation they keep
+(`Product spec §N`, `Smooth Following spec §N`, or `Reader Mode spec §N` for
+the current `docs/SpeakingGlass_Reader_Mode_Specification.md`). Elsewhere the
+older, shorter forms below still apply.
 
 Section numbers are per document, and the documents reuse them. Read the
 comment around a citation before trusting the number alone.

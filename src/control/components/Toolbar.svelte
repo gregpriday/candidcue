@@ -1,25 +1,25 @@
 <!--
-  The compact workspace toolbar (desktop refinement §8).
+  The compact workspace toolbar.
 
   ---------------------------------------------------------------------------
-  WHAT IT REPLACES, AND WHY
+  ONE ROW, NOT A PAGE HEADER
   ---------------------------------------------------------------------------
-  `PageHeader.svelte` gave every route a sticky band with a back control on its
-  own row, a 28px editorial title, a metadata line, and trailing actions — three
-  stacked bands adding up to ~103px of chrome before any content. That is a
-  well-made web page header and precisely the pattern that made this application
-  read as a sequence of pages: a heading that large says "you have arrived
-  somewhere new", and moving between the Library and a script is not arriving
-  somewhere new, it is changing the selected document in one workstation.
+  A web page header — a back control on its own row, a large editorial title,
+  a metadata line, stacked bands of chrome before any content — makes the
+  application read as a sequence of pages: a heading that large says "you have
+  arrived somewhere new", and moving between the Library and a script is not
+  arriving somewhere new, it is changing the selected document in one
+  workstation.
 
-  This is one 44px row: navigation, identity, spacer, status, actions. The title
-  is 15px and reads as a document name rather than a page heading.
+  This is one `--toolbar-h` row (44px; 52px under the Mac's overlay
+  titlebar): navigation, identity, spacer, status, actions. The title is 15px
+  and reads as a document name rather than a page heading.
 
   ---------------------------------------------------------------------------
   THE HEIGHT IS FIXED, AND THAT IS A FEATURE
   ---------------------------------------------------------------------------
-  §8.1 asks for the toolbar to keep its height when save state, compile status
-  or metadata appear and disappear — and this route's status genuinely does come
+  The toolbar keeps its height when save state, compile status or metadata
+  appear and disappear — and this route's status genuinely does come
   and go on every keystroke. A band that resized with it would shove the editor
   under the caret mid-word. So the row is `height: var(--toolbar-h)` rather than
   padded to size, every child is vertically centred in it, and anything that
@@ -28,8 +28,8 @@
   ---------------------------------------------------------------------------
   THE HEADING STAYS, EVEN THOUGH IT NO LONGER LOOKS LIKE ONE
   ---------------------------------------------------------------------------
-  §23.2's rule: reducing a visual page heading must not remove the document's
-  heading structure. Screen-reader users navigate by heading, and a route with
+  Reducing a visual page heading must not remove the document's heading
+  structure. Screen-reader users navigate by heading, and a route with
   no h1 is a route that announces nothing about what it is. So the title is
   still an `<h1>` — it is simply typeset at document scale instead of hero
   scale.
@@ -43,8 +43,8 @@
     title: string;
     /**
      * A short trailing detail rendered INLINE with the title, not on its own
-     * line. §8.1: keep metadata inline where it is continuously useful and move
-     * the rest to a status bar. Anything that changes per keystroke belongs in
+     * line: metadata stays inline where it is continuously useful and the
+     * rest goes to a status bar. Anything that changes per keystroke belongs in
      * the status bar; this is for things like "Trash" or a display name.
      */
     detail?: string;
@@ -89,11 +89,10 @@
   }: Props = $props();
 
   /*
-   * The input is a DRAFT of `title`, not the thing itself — carried over from
-   * PageHeader, where the reasoning was worked out: binding the element straight
-   * to the prop left no saved value to fall back on, so clearing the field
-   * committed nothing yet the header went on showing the blank, and Escape had
-   * nothing to restore from. `$derived` re-seeds when the saved title changes
+   * The input is a DRAFT of `title`, not the thing itself: bound straight to
+   * the prop, the element leaves no saved value to fall back on, so clearing
+   * the field commits nothing yet the header goes on showing the blank, and
+   * Escape has nothing to restore from. `$derived` re-seeds when the saved title changes
    * underneath (a rename from elsewhere, a different script loading).
    */
   /*
@@ -163,7 +162,7 @@
       /*
        * Abandon the edit, and stop the key here.
        *
-       * §23.1's layered-Escape rule: the most local transient thing wins. An
+       * Layered Escape: the most local transient thing wins. An
        * in-progress rename is more local than anything an ancestor would close,
        * so this consumes the key. It still does NOT rescue an editable title
        * placed inside a `Dialog` — that component listens in the capture phase
@@ -180,7 +179,7 @@
 
 <div class="toolbar-stack">
   <!--
-    A NAMED banner landmark (§23.2).
+    A NAMED banner landmark.
 
     `<header>` at the top level of a route is ALREADY a banner — the role is
     implicit and writing it out is redundant, which the a11y linter says too.
@@ -192,9 +191,8 @@
   <header class="toolbar" aria-label={`${title} toolbar`} data-tauri-drag-region={dragRegion}>
     {#if onback}
       <!--
-        In the SAME ROW as the title. §8.1 names the separate back row as the
-        pattern to remove: a control on its own line above a heading is a web
-        breadcrumb, and it cost 28px of every screen.
+        In the SAME ROW as the title: a control on its own line above a
+        heading is a web breadcrumb, and it costs 28px of every screen.
       -->
       <!-- `back-label`: a route with no room for the words (the editor's
            narrowest toolbar, #412) hides them visually, never from the
@@ -261,7 +259,7 @@
     flex: 0 0 auto;
     background: var(--bg-toolbar);
     /*
-     * A one-pixel divider, not a decorative border. §5.1: major panes meet with
+     * A one-pixel divider, not a decorative border. Major panes meet with
      * straight dividers, and the toolbar's bottom edge is a pane boundary — the
      * same line the sidebar draws down its trailing edge.
      */
@@ -321,8 +319,8 @@
     align-items: baseline;
     gap: var(--space-2);
     min-width: 0;
-    /* Shrinks before anything else. §21.3: preserve the document title and
-       Present at all practical widths — the title truncates, it does not
+    /* Shrinks before anything else. The document title and Present are
+       preserved at all practical widths — the title truncates, it does not
        disappear, and the actions never give up room to it. */
     flex: 0 1 auto;
   }
@@ -330,9 +328,9 @@
   /*
    * 15px, weight 600 — a document name, not a page heading.
    *
-   * The old 28px `--text-page-title` is what a marketing page uses to announce a
-   * section. Beside a native titlebar carrying the same words it was simply the
-   * same information twice, in a larger size.
+   * A 28px page title is what a marketing page uses to announce a section.
+   * Beside a native titlebar carrying the same words it is simply the same
+   * information twice, in a larger size.
    */
   .title {
     margin: 0;
@@ -374,7 +372,7 @@
   /*
    * Editable, but text at rest.
    *
-   * §11.2: text-like until hovered or focused, and no permanent pencil icon. A
+   * Text-like until hovered or focused, and no permanent pencil icon. A
    * field that always looks like a field turns the document's name into a form
    * control, and the name is the first thing on the screen.
    */

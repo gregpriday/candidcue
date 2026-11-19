@@ -1,5 +1,5 @@
 /**
- * SmoothFollowStore (companion §50.1) — the user-visible following state and
+ * SmoothFollowStore — the user-visible following state and
  * the controls that act on it.
  *
  * This store is the control window's single source of truth for "what is the
@@ -18,7 +18,7 @@
  * state machine is testable in node with no Svelte lifecycle, no timers, and
  * no Tauri runtime.
  *
- * Honesty rules (companion §3, §49):
+ * Honesty rules:
  *  - confidence is banded, never shown as a percentage;
  *  - a degraded condition always produces visible, specific copy;
  *  - nothing here claims the engine knows where the presenter is when the
@@ -49,7 +49,7 @@ import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-
  * State
  * ------------------------------------------------------------------------- */
 
-/** A local candidate the user may accept when the tracker is lost (§48). */
+/** A local candidate the user may accept when the tracker is lost. */
 export interface FollowCandidate {
   id: string;
   label: string;
@@ -58,7 +58,7 @@ export interface FollowCandidate {
   score: number;
 }
 
-/** One exceeded runtime budget (§63). */
+/** One exceeded runtime budget. */
 export interface BudgetBreach {
   id: RuntimeBudgetId;
   observed: number;
@@ -67,7 +67,7 @@ export interface BudgetBreach {
   atMs: number;
 }
 
-/** A user-visible degraded-state notice (Part XI). */
+/** A user-visible degraded-state notice. */
 export interface FollowNotice {
   id: FollowNoticeId;
   tone: FollowNoticeTone;
@@ -79,7 +79,7 @@ export interface FollowNotice {
 
 export type TranscriptFeedStatus = 'idle' | 'live' | 'interrupted' | 'low_confidence';
 
-/** Kinds of entry in the §64 diagnostics timeline. */
+/** Kinds of entry in the diagnostics timeline. */
 export type FollowTimelineKind =
   | 'state'
   | 'movement'
@@ -97,7 +97,7 @@ export interface FollowTimelineEntry {
   kind: FollowTimelineKind;
   summary: string;
   detail?: string;
-  /** Present on `movement` entries — the §65 record verbatim. */
+  /** Present on `movement` entries — the "why did it move?" record verbatim. */
   record?: MovementDecisionRecord;
 }
 
@@ -133,7 +133,7 @@ export interface SmoothFollowState {
   layoutGeneration: number;
   motionProfileId: string;
 
-  /** §48 — following can be paused without pausing the session. */
+  /** Following can be paused without pausing the session. */
   followingPaused: boolean;
 
   motion: {
@@ -160,9 +160,9 @@ export interface SmoothFollowState {
 
 export interface SmoothFollowStoreOptions {
   now?: () => number;
-  /** §64 ring buffer bound. Bounded by construction — never grows. */
+  /** Timeline ring buffer bound. Bounded by construction — never grows. */
   timelineCapacity?: number;
-  /** §65 ring buffer bound. */
+  /** Movement-record ring buffer bound. */
   movementCapacity?: number;
   actions?: Partial<FollowActions>;
 }
@@ -174,14 +174,14 @@ export interface SmoothFollowStoreOptions {
  * cycles).
  */
 export interface FollowActions {
-  /** Manual nudge in whole sentences; negative moves back (§48). */
+  /** Manual nudge in whole sentences; negative moves back. */
   nudge(deltaSentences: number): void;
-  /** "Set my place" — re-anchor around the current position (§48). */
+  /** "Set my place" — re-anchor around the current position. */
   reAnchor(): void;
-  /** Accept one of the offered local candidates when lost (§48). */
+  /** Accept one of the offered local candidates when lost. */
   acceptCandidate(candidate: FollowCandidate): void;
   /**
-   * Pause/resume automatic following without touching the session (§48).
+   * Pause/resume automatic following without touching the session.
    *
    * `deliberate` separates a decision from a symptom, and the stage is why it
    * has to. Somebody switching following off is a MODE, and the glass says so
@@ -193,7 +193,7 @@ export interface FollowActions {
    * the presenter for the microphone.
    */
   setFollowingPaused(paused: boolean, deliberate?: boolean): void;
-  /** Ask the stage to rebuild its line map after §62. */
+  /** Ask the stage to rebuild its line map after it was reported invalid. */
   rebuildStageLayout(): void;
 }
 
@@ -249,13 +249,13 @@ function initialState(following: FollowingSettings): SmoothFollowState {
  * ------------------------------------------------------------------------- */
 
 /**
- * The Part XI degraded-state matrix, most serious first. Every condition the
+ * The degraded-state matrix, most serious first. Every condition the
  * engine can be in has exactly one honest notice; nothing is silent.
  */
 export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
   const notices: FollowNotice[] = [];
 
-  // §62 invalid line map — motion is held, so this outranks everything else.
+  // Invalid line map — motion is held, so this outranks everything else.
   if (!state.lineMap.valid) {
     const copy = FOLLOW_NOTICE_COPY.invalid_line_map;
     notices.push({
@@ -267,7 +267,7 @@ export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
     });
   }
 
-  // §59 transcription interruption.
+  // Transcription interruption.
   if (state.transcript.status === 'interrupted') {
     const copy = FOLLOW_NOTICE_COPY.transcription_interrupted;
     notices.push({
@@ -278,7 +278,7 @@ export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
     });
   }
 
-  // §61 frame-performance degradation.
+  // Frame-performance degradation.
   if (state.motion.degraded) {
     const copy = FOLLOW_NOTICE_COPY.frame_performance;
     notices.push({
@@ -289,7 +289,7 @@ export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
     });
   }
 
-  // §60 low transcript confidence.
+  // Low transcript confidence.
   if (state.transcript.status === 'low_confidence') {
     const copy = FOLLOW_NOTICE_COPY.low_transcript_confidence;
     notices.push({
@@ -300,7 +300,7 @@ export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
     });
   }
 
-  // §63 runtime budgets — quiet, informational.
+  // Runtime budgets — quiet, informational.
   if (state.budgets.length > 0) {
     const copy = budgetNoticeCopy(state.budgets);
     notices.push({
@@ -354,14 +354,14 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
   reportBudgetBreach(breach: Omit<BudgetBreach, 'atMs'> & { atMs?: number }): void;
   clearBudget(id: RuntimeBudgetId): void;
 
-  /* --- user actions (§48) --- */
+  /* --- user actions --- */
   nudge(direction: 'back' | 'forward'): void;
   reAnchorHere(): void;
   acceptCandidate(candidateId: string): void;
   toggleFollowingPaused(): void;
   /** `deliberate` is false only for an automatic hold; see `FollowActions`. */
   setFollowingPaused(paused: boolean, deliberate?: boolean): void;
-  /** §62 recovery: ask the stage to rebuild its line map. */
+  /** Invalid-line-map recovery: ask the stage to rebuild its line map. */
   requestLayoutRebuild(): void;
 
   /* --- diagnostics --- */
@@ -369,7 +369,7 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
   snapshot(): SmoothFollowState;
 }
 
-/** Redacted support payload (§57.3, §64: "text is redacted by default"). */
+/** Redacted support payload: text is redacted by default. */
 export interface FollowDiagnosticsExport {
   kind: 'speaking-glass.follow-diagnostics';
   version: 1;
@@ -755,7 +755,7 @@ export function createSmoothFollowStore(
         notices: s.notices.map((n) => ({ id: n.id, title: n.title })),
         counts: s.counts,
         movements: s.movements,
-        // §57.3: timeline entries leave their free-text `detail` and duplicate
+        // Redacted: timeline entries leave their free-text `detail` and duplicate
         // movement `record` behind; retained movement records are exported
         // separately, in `movements`.
         timeline: s.timeline.map(({ record: _record, detail: _detail, ...rest }) => rest),
@@ -784,7 +784,7 @@ export function configureFollowActions(actions: Partial<FollowActions>): void {
   smoothFollow.setActions(actions);
 }
 
-/** Short status line for the Live header — plain language only (§48). */
+/** Short status line for the following state — plain language only. */
 export const followStatusLabel = derived(smoothFollow, (s): string => {
   if (s.followingPaused) return 'Following paused — the text stays put';
   if (!s.receivingFrames) return 'Ready to follow';

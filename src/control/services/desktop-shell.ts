@@ -1,6 +1,5 @@
 /**
- * The bridge between the application and its native window chrome
- * (desktop refinement §5, §6, §20.4).
+ * The bridge between the application and its native window chrome.
  *
  * Three one-way pushes and one inbound event:
  *
@@ -468,7 +467,7 @@ export async function pushWindowTitle(title: string, edited: boolean): Promise<v
 }
 
 /**
- * Open the Settings window, or bring it forward (§14.1).
+ * Open the Settings window, or bring it forward.
  *
  * Single-instance is enforced in Rust (`windows/preferences.rs`), not here: a
  * renderer that asks twice gets the same window both times, and no renderer can
@@ -567,7 +566,7 @@ export interface DragHoverPayload {
 export interface DragImportedPayload {
   scriptId: string | null;
   imported: number;
-  /** File NAMES only — Rust never sends the renderer a path (§50.7). */
+  /** File NAMES only — Rust never sends the renderer a path. */
   failed: string[];
   rejected: string[];
   warnings: string[];

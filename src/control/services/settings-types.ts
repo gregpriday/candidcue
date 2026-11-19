@@ -1,6 +1,6 @@
 /**
  * Validated application-settings view consumed by the Settings screen
- * (spec §18) and defaults used until `get_settings` lands in Rust.
+ * and defaults used until `get_settings` lands in Rust.
  */
 import {
   BUNDLED_MODEL_NAME,
@@ -102,7 +102,7 @@ export interface AppSettings {
     checkForUpdates: boolean;
   };
   /**
-   * Which panel a take belongs to, and how it presents (§14.2 A, §52.7).
+   * Which panel a take belongs to, and how it presents.
    *
    * Its own section rather than a corner of `teleprompter`, because the answer
    * is about a physical panel rather than about type.
@@ -112,26 +112,21 @@ export interface AppSettings {
    * test and the optical rigs belong to.
    *
    * ---------------------------------------------------------------------------
-   * EVERY FIELD HERE IS RUST-BACKED NOW, ONE MIGRATION AT A TIME
+   * EVERY FIELD HERE IS RUST-BACKED — DO NOT MOVE ONE BACK TO THE OVERLAY
    * ---------------------------------------------------------------------------
-   * This section used to be wholly overlay-backed on the grounds that all of it
-   * was per-machine. None of it is local any more.
-   *
-   * `displayFingerprint` stayed in the overlay longest, as "genuinely
-   * per-machine". Then Present started moving takes onto it, and a cleared
-   * browser store stopped meaning a wrong default and started meaning a take
-   * filling the desk monitor. It is Rust-backed now (#272). A fingerprint is a
-   * panel's name and size, not the Mac's, so an export restored onto another
-   * machine with the same prompter brings the pin back with the rigs.
+   * `displayFingerprint` is not "genuinely per-machine": Present moves takes
+   * onto it, so losing it to a cleared browser store means a take filling the
+   * desk monitor (#272). A fingerprint is a panel's name and size, not the
+   * Mac's, so an export restored onto another machine with the same prompter
+   * brings the pin back with the rigs.
    *
    * `presentationMode` is a statement about how somebody works, it is
    * the same answer on every machine they own, and losing it to a cleared
    * browser store is exactly the failure this codebase has already documented
-   * for the optical rigs. It is Rust-backed now; see `RustSettings` in
-   * settings.ts for the mapping and for how an existing overlay value is
-   * adopted rather than overwritten on the first read after the move.
+   * for the optical rigs. See `RustSettings` in settings.ts for the mapping and
+   * for how an older overlay value is adopted rather than overwritten.
    *
-   * `readerFrame` is Rust-backed too, for a plainer reason: it has to survive a
+   * `readerFrame` is Rust-backed for a plainer reason: it has to survive a
    * quit to be worth anything at all.
    */
   stage: {
@@ -158,31 +153,21 @@ export interface AppSettings {
      */
     displayFingerprint: string | null;
     /**
-     * The shape a take presents in (§ reader-mode spec).
+     * The shape a take presents in (Reader Mode spec §5.3 tables what the
+     * window layer does for each).
      *
-     * ----------------------------------------------------------------------
-     * THIS REPLACED A BOOLEAN THAT DID NOTHING
-     * ----------------------------------------------------------------------
-     * There used to be `fullscreen: boolean` here, with a switch in Settings
-     * labelled "Full screen". It was read in exactly three places — the stage
-     * preview, the display test, and its own toggle — and `lib/start-take.ts`
-     * never looked at it once. A real take called `enterPresentation()`
-     * unconditionally, so the switch had no effect on any take anybody has ever
-     * run.
+     * `prompter`: borderless, filling the monitor, above the menu bar.
+     * `reader`: an ordinary window, at desk distance, no mirror and no hood.
      *
-     * `prompter` is what every take did regardless: borderless, filling the
-     * monitor, above the menu bar. `reader` is the mode that boolean looked like
-     * it offered — an ordinary window, at desk distance, no mirror and no hood.
-     * See `migrateStageMode` for how the old field is read on the way in.
+     * It replaced a `fullscreen` boolean that no take ever read; see
+     * `migrateStageMode` for how that old field is read on the way in.
      */
     presentationMode: PresentationMode;
     /**
      * Where a reader-mode take last left its window, or `null` if one never has.
      *
-     * Read only when `general.restoreWindows` is on — that toggle shipped with
-     * no reader anywhere in the tree, which is the same defect the retired
-     * `fullscreen` boolean was culled for, and this is what gives it something
-     * to actually govern.
+     * Read only when `general.restoreWindows` is on; this frame is what that
+     * toggle governs.
      *
      * Prompter mode has no frame and never writes one: it fills whichever
      * monitor the window is already on, so there is nothing about its geometry
@@ -191,13 +176,14 @@ export interface AppSettings {
     readerFrame: ReaderFrame | null;
   };
   /**
-   * On-device speech-to-text (spec §18.2). There is no API key and no
-   * credential store — the recogniser is bundled with the app. What the UI
-   * holds is a record of WHICH recogniser heard a take, which is a question a
-   * diagnostics bundle has to answer about a session recorded months ago.
+   * On-device speech-to-text. There is no API key and no credential store —
+   * the model is installed from Settings › Speech. What the UI holds is which
+   * recogniser this installation is CONFIGURED with and the language it is
+   * told to expect, which a diagnostics bundle reports. Nothing stamps the
+   * model onto a session, so this cannot say what heard an older take.
    */
   speech: {
-    /** The bundled recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
+    /** The configured recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
     transcriptionModel: string;
     /** BCP-47 tag the recogniser is told to expect, e.g. `en-US`. */
     language: string;
@@ -206,7 +192,7 @@ export interface AppSettings {
     preferredDeviceId?: string;
     /**
      * The label `preferredDeviceId` carried when it was chosen, e.g.
-     * "Blue Yeti" (§28.1).
+     * "Blue Yeti".
      *
      * The id alone is not a durable name for a piece of hardware — WKWebView
      * salts device ids per origin and session, and a replug can change them —
@@ -222,7 +208,7 @@ export interface AppSettings {
     echoCancellation: boolean;
     autoGainControl: boolean;
     /**
-     * §28.4, 0-1, 0.5 = the A.6 defaults. The one Rust-owned field in this
+     * 0-1, 0.5 = `DEFAULT_VAD_CONFIG` unchanged. The one Rust-owned field in this
      * section. It no longer gates what is sent — the recogniser endpoints itself
      * — but it decides where the meter says the microphone can hear you and
      * when the dead-input detector gives up, which is room tuning worth
@@ -231,7 +217,7 @@ export interface AppSettings {
      */
     vadSensitivity: number;
     /**
-     * §28.1. Microphone access has been granted on this machine before.
+     * Microphone access has been granted on this machine before.
      *
      * Per-machine capture state, so it lives in the same local overlay as the
      * device id — a grant on this Mac says nothing about another one.
@@ -256,7 +242,7 @@ export interface AppSettings {
      * panel, and it belongs to the panel with the glass in front of it — it is
      * `optical.panelMirror` now (#206).
      */
-    /** Percent of the stage width the script column occupies (§14.2 E). */
+    /** Percent of the stage width the script column occupies. */
     columnWidthPercent: number;
     readingBandCenterPercent: number;
     phraseHighlight: boolean;
@@ -280,17 +266,14 @@ export interface AppSettings {
     /**
      * Luminance of the TEXT over the stage's unchanging black field.
      *
-     * This replaces the "Stage background" menu, which offered near-black and
-     * high-contrast black and delivered neither: `themeId`, `background` and
-     * `foreground` are written into every `StageSettings` and read by nothing,
-     * because `src/styles/stage.css` hard-codes `--stage-bg`. The two options
-     * rendered identically. What a presenter is actually reaching for when they
-     * go looking for a background control on a prompter is how hot the type
-     * burns against the glass — a bright rig washes out a soft face, a dark
-     * studio makes a strong one bloom — so that is the control that exists now.
+     * What a presenter is actually reaching for when they go looking for a
+     * background control on a prompter is how hot the type burns against the
+     * glass — a bright rig washes out a soft face, a dark studio makes a strong
+     * one bloom — so that is the control, not a background menu (a prompter's
+     * field is black only, `--stage-bg` in `src/styles/stage.css`).
      *
-     * (A READING WINDOW has a field choice now, `readerTheme` below, and the
-     * stage reads `themeId` for it. A prompter's field is still black only.)
+     * (A READING WINDOW has a field choice, `readerTheme` below, and the stage
+     * reads `themeId` for it.)
      */
     textIntensity: TextIntensity;
     fixedSpeedWpm: number;
@@ -376,18 +359,14 @@ export interface AppSettings {
    */
   optical: OpticalSettings;
   /**
-   * Smooth-following controls (companion §47). Values are understandable
+   * Smooth-following controls. Values are understandable
    * choices; they resolve to a versioned `SmoothFollowProfile` through
    * `lib/follow-profiles.ts` rather than exposing control-system parameters.
    */
   following: FollowingSettings;
   /*
-   * No `privacy` section. #180 took `diagnosticLogging` and `updateChannel` out
-   * of it — neither was ever read, so both were a stored preference that
-   * decided nothing behind a control that implied otherwise. #215 took the last
-   * field, `saveTranscript`: takes stopped writing transcripts (#214), so the
-   * retention window had nothing left to keep, and Rust dropped
-   * `general.saveTranscript` with that storage (#217). A `privacy` section
+   * No `privacy` section. None of its fields was ever read (#180), and takes no
+   * longer store transcripts (#214), so it went (#215). A `privacy` section
    * still sitting in the localStorage overlay is ignored.
    *
    * If a privacy setting genuinely ships, it comes back Rust-owned, and must
@@ -548,9 +527,9 @@ export function activeOpticalProfile(
  * that, which is how the two would eventually disagree about what a valid
  * profile is.
  *
- * It is only reserved by convention: somebody could name a prompter rig this and
- * have it adopted as their reading profile. That is a strange thing to do and a
- * harmless outcome — the profile they get is the one they calibrated.
+ * It is only reserved by convention: somebody could name a prompter rig this.
+ * `derivedReaderProfile` adopts a stored profile under this name only if it
+ * is actually a reading rig, and derives one otherwise.
  */
 export const READER_RIG_NAME = 'Reading window';
 
@@ -673,8 +652,7 @@ function derivedReaderProfile(
    *
    * `READER_RIG_NAME` is reserved by convention, and the convention is not
    * enforceable: somebody can name a prompter rig "Reading window" in the
-   * calibration wizard and land it on this key. The earlier note here called that
-   * "a strange thing to do and a harmless outcome", which was wrong — the profile
+   * calibration wizard and land it on this key. That is not harmless — the profile
    * would arrive with its hood crop, its mirror and its 2.5 m distance, and every
    * one of those is wrong for a window on a desk.
    *
@@ -1166,7 +1144,7 @@ export interface ClearResult {
   kind: string;
   /** Number of entries removed. */
   clearedFiles: number;
-  /** Bytes actually reclaimed — a size, not a count (C6). */
+  /** Bytes actually reclaimed — a size, not a count. */
   clearedBytes: number;
 }
 
@@ -1243,24 +1221,16 @@ export const DEFAULT_STAGE_APPEARANCE = {
   /*
    * The bundled face, not the system one.
    *
-   * `system-sans` was the default for as long as the high-legibility stack was
-   * unreachable from the Settings menu, which made it a default by omission
-   * rather than by choice. Atkinson Hyperlegible Next ships in the bundle
-   * (`src/styles/fonts.css`), renders identically on every machine, needs no
-   * network, and disambiguates exactly the characters a prompter loses at
-   * distance — I/l/1 and 0/O. On a beamsplitter that is the whole job.
-   *
-   * WHO THIS ACTUALLY MOVES — and it is more than new profiles.
+   * Atkinson Hyperlegible Next ships in the bundle (`src/styles/fonts.css`),
+   * renders identically on every machine, needs no network, and disambiguates
+   * exactly the characters a prompter loses at distance — I/l/1 and 0/O. On a
+   * beamsplitter that is the whole job.
    *
    * A stored `fontFamilyId` wins: `loadSettings` merges the overlay OVER these
-   * defaults, so anyone who has ever chosen a family keeps it. But the overlay
-   * only holds fields that were written, so an existing installation that never
-   * touched the teleprompter font has nothing stored and DOES move to the
-   * bundled face on upgrade. That is deliberate rather than overlooked: the
-   * high-legibility stack was unreachable from the picker until now, so nobody
-   * on `system-sans` chose it — they were handed it. The change gives them the
-   * face the product ships for the job, and the picker (where it now appears
-   * first) takes it back in one click.
+   * defaults, so anyone who has ever chosen a family keeps it. The overlay only
+   * holds fields that were written, so an installation that never touched the
+   * teleprompter font gets this face, and the picker (where it appears first)
+   * changes it in one click.
    *
    * `DEFAULT_STAGE_APPEARANCE` is also the fallback for any caller that omits
    * `fontFamilyId` — previews, tests, `buildStageSettings` with no overrides —
@@ -1279,16 +1249,10 @@ export const DEFAULT_STAGE_APPEARANCE = {
  * 130, because that is what RUST hands out, and Rust is what a real install
  * actually loads: `fixed_speed_wpm: 130` in `src-tauri/src/settings/mod.rs`, and
  * `fromRustDocument` maps `stageBehavior.fixedSpeedWpm` straight over whatever
- * this file said. The literal here used to be 150 — a number no packaged build
- * has ever started at, because Rust's value always overwrote it before anybody
- * saw it.
- *
- * That was harmless while nothing read it, and stops being harmless the moment
- * Settings offers to restore it: a fresh install would open on Rust's 130,
- * label it "Set by you", and offer to "reset" it to a 150 the user never chose.
- * That is precisely the defect #124 exists to remove — a control describing a
- * state the app is not in — so the two sides are made to agree rather than the
- * disagreement being papered over in the UI.
+ * this file says. A different literal here would never reach a real install,
+ * but Settings offers to restore this default: a fresh install would open on
+ * Rust's 130, label it "Set by you", and offer to "reset" it to a number the
+ * user never chose — a control describing a state the app is not in (#124).
  *
  * Still deliberately NOT the two similarly-named constants elsewhere:
  *

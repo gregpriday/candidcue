@@ -1,5 +1,5 @@
 /**
- * Stage window/display service (spec §46.6). Exact command names, camelCase
+ * Stage window/display service. Exact command names, camelCase
  * payloads, matching the Rust registrations in src-tauri/src/app.rs.
  *
  * High-level command actions never reach the stage: control translates them
@@ -33,7 +33,7 @@ export async function listDisplays(): Promise<DisplayDescriptor[]> {
 
 /**
  * The panel the CONTROL window is on right now, or null when it cannot be
- * named (CCUX-004) — from any window, Settings included, because Rust looks the
+ * named — from any window, Settings included, because Rust looks the
  * control window up by label rather than asking whoever called.
  *
  * It is where a prompter take opens when nothing pinned is connected
@@ -48,10 +48,8 @@ export async function currentWindowDisplay(): Promise<DisplayDescriptor | null> 
 }
 
 /**
- * C12: this used to be typed `| null`. Rust's `identify_displays` returns an
- * `IdentificationSession` or an error — never null — and the mock returns one
- * too, so the null branch was unreachable and every `?.` guarding it was
- * protecting against nothing.
+ * Never null: Rust's `identify_displays` returns an `IdentificationSession` or
+ * an error, and the mock returns one too.
  */
 export async function identifyDisplays(): Promise<IdentificationSession> {
   return invokeOrMock<IdentificationSession>('identify_displays', undefined, () =>
@@ -70,13 +68,13 @@ export async function closeStage(sessionId: string): Promise<void> {
 }
 
 /**
- * Present (or un-present) the stage.
+ * Present (or un-present) the separate stage window.
  *
  * `native` opts into OS fullscreen and defaults to false. The default is
  * BORDERLESS: a frameless window sized to the monitor's exact bounds and
  * pinned always-on-top. On macOS `setFullscreen(true)` allocates a new Space,
  * animates into it, and steals focus from the control window the operator is
- * driving — none of which a teleprompter wants (spec §52.7).
+ * driving — none of which a teleprompter wants.
  */
 export async function setStageFullscreen(
   sessionId: string,
@@ -90,7 +88,7 @@ export async function setStageFullscreen(
   );
 }
 
-/** §29.2 step 3 — publish the full StageSessionEnvelope to the stage. */
+/** Publish the full StageSessionEnvelope to the separate stage window. */
 export async function publishStageDocument(
   sessionId: string,
   envelope: StageSessionEnvelope,
@@ -114,17 +112,16 @@ export async function publishStageDirective(
 }
 
 /**
- * C12: also used to be typed `| null`. Rust's `get_stage_status` returns a
- * `StageStatus` unconditionally — "no stage" is `exists: false`, not null — so
- * the browser-dev mock now answers the same way instead of returning null and
- * making every caller write a check that can never fire in Tauri.
+ * Never null: Rust's `get_stage_status` returns a `StageStatus`
+ * unconditionally — "no stage" is `exists: false` — and the browser-dev mock
+ * answers the same way.
  */
 export async function getStageStatus(): Promise<StageStatus> {
   return invokeOrMock<StageStatus>('get_stage_status', undefined, () => mockStage.stageStatus());
 }
 
 /**
- * Which step of the handshake a stalled stage got stuck on (§43.3).
+ * Which step of the handshake a stalled stage got stuck on.
  *
  * The timeout used to say only "the stage did not finish preparing in time",
  * which names no step and suggests nothing to try. The coordinator already
@@ -175,8 +172,10 @@ const STAGE_BOOT_TIMEOUT_MS = 30000;
 const STAGE_HANDSHAKE_TIMEOUT_MS = 12000;
 
 /**
- * §29.2/§43.3: after publish_stage_document, wait for the stage handshake
- * (hydrated + layout ready + fonts) before going full screen. Listens for the
+ * After publish_stage_document, wait for the separate stage window's handshake
+ * (hydrated + layout ready + fonts) before going full screen. Its caller is
+ * `stage-preview-session.ts`; a take's stage is embedded in the control window
+ * and does not wait on this. Listens for the
  * Rust-relayed `stage://ready` event and polls get_stage_status as a backstop.
  * Resolves immediately outside the Tauri runtime (browser dev).
  *
@@ -274,11 +273,8 @@ export async function waitForStageReady(
  * Notice a monitor being plugged, unplugged or rearranged.
  *
  * Rust polls the display topology every two seconds and emits
- * `app://device-or-display-change` when it moves — and until this existed
- * NOTHING listened. The 1.0 readiness review named it directly: an emitted
- * event with no consumer has no product effect, so the watcher was burning a
- * timer to tell nobody, and a display list on screen went stale the moment
- * somebody unplugged a monitor.
+ * `app://device-or-display-change` when it moves. This is what keeps a display
+ * list on screen from going stale the moment somebody unplugs a monitor.
  *
  * The payload is deliberately ignored. It says the topology CHANGED; what it
  * changed to is `list_displays`, which is the one answer that cannot be stale
@@ -294,8 +290,8 @@ export function onDisplayTopologyChange(handler: () => void): () => void {
     if (cancelled) stop();
     else unlisten = stop;
   })().catch(() => {
-    // A missing listener means the list refreshes when a section is opened,
-    // which is what happened before this existed. Not worth escalating.
+    // A missing listener means the list refreshes only when a section is
+    // opened. Not worth escalating.
   });
   return () => {
     cancelled = true;

@@ -1,5 +1,5 @@
 /**
- * Opening Settings, from anywhere in the control window (§14.1).
+ * Opening Settings, from anywhere in the control window.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS NOT `navigate({ name: 'settings' })` ANY MORE

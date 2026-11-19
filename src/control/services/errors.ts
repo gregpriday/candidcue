@@ -1,14 +1,14 @@
 /**
- * IPC and transport error presentation (spec §44.12, Appendix E.7): every
+ * IPC and transport error presentation: every
  * failure that reaches a person is authored copy that says what happened and
  * what to do about it.
  *
  * The rule this file enforces is narrow and absolute: **no stable error code
  * is ever shown to the user**. Codes are an internal contract — they cross the
- * IPC boundary inside `AppError`, they are thrown as `RealtimeTransportError`,
- * and several of them are carried as bare strings through the realtime
- * session hooks (`onSessionFailure(code, fatal)`), which is how
- * `QUOTA_EXHAUSTED` used to end up rendered verbatim in a toast.
+ * IPC boundary inside `AppError`, they are thrown on an `Error` as `.code`,
+ * and several of them are carried as bare strings through the voice session
+ * hooks (`onSessionFailure(code, fatal)`), which is how a bare code once ended
+ * up rendered verbatim in a toast.
  *
  * `describeError` therefore resolves a code from every shape a failure can
  * arrive in, and any string that still looks like a code is replaced rather
@@ -221,7 +221,7 @@ export const RECOGNISER_CODES = Object.keys(RECOGNISER_COPY) as Array<keyof type
  * Human copy for every code that can reach a person.
  *
  * Each entry answers two questions in order: what happened, and what the
- * person can do next. A quota exhaustion, an auth failure and a network drop
+ * person can do next. A missing model, a busy microphone and a failed download
  * are three different sentences with three different remedies — collapsing
  * them into one apologetic line is the same defect as showing the code.
  *
@@ -302,17 +302,11 @@ const ERROR_COPY: Record<string, string> = {
 
   /* -- transcription transport -------------------------------------------- */
   //
-  // `REALTIME_CONNECT_FAILED`, `REALTIME_PROVIDER_ERROR` and
-  // `REALTIME_CONFIG_REJECTED` used to be here. They described a hosted
-  // recogniser reached over a websocket — a firewall to check, a provider to
-  // be down, a session to configure. Transcription is on-device: there is no
-  // connection to open and no provider to report anything, so copy telling a
-  // presenter to check their VPN describes a failure that cannot occur.
-  //
-  // The three that remain keep their codes — the session store still raises
-  // them — but their copy now describes the recogniser that actually exists.
-  // A presenter told to check their internet connection about an ONNX graph
-  // failing to start goes and looks at their router.
+  // The session store raises these, and their copy describes the on-device
+  // recogniser. Transcription has no connection to open and no provider to
+  // report anything, so copy telling a presenter to check their internet
+  // connection about an ONNX graph failing to start sends them to look at
+  // their router.
   REALTIME_NEGOTIATION_FAILED:
     'Speaking Glass could not start the speech recogniser for this take. Try starting the take again; if it keeps failing, reinstall the language in Settings › Speech.',
   REALTIME_CONNECTION_LOST:
@@ -374,9 +368,6 @@ const ERROR_COPY: Record<string, string> = {
     return `The window could not be closed. ${osCopy().quit} Speaking Glass instead.`;
   },
   WINDOW_CLOSE_REFUSED: 'Only the main window can close itself this way.',
-  // Not in APP_ERROR_CODES: raised by the window layer and by Preflight's own
-  // post-show check (§52.7).
-
 
   /* -- updates ------------------------------------------------------------ */
 
@@ -501,8 +492,8 @@ function record(code: string | null, shown: string): void {
  *
  * Four shapes exist in this codebase and all four have reached a user:
  *  1. `AppError` from IPC — `{ code, userMessage, … }`;
- *  2. `RealtimeTransportError` — an `Error` carrying `.code`;
- *  3. a bare code string, from the realtime session hooks;
+ *  2. an `Error` carrying `.code`;
+ *  3. a bare code string, from the voice session hooks;
  *  4. `new Error(result.code)` — audio acquisition throws the code AS the
  *     message (`voice-session.ts`, `voice-live.ts`), so `err.message` is a
  *     code, not prose.

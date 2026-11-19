@@ -1,5 +1,5 @@
 /**
- * Modal focus-trap arithmetic (spec §20), kept out of the component so it is
+ * Modal focus-trap arithmetic, kept out of the component so it is
  * directly testable. The component owns the DOM; this owns the decision.
  */
 

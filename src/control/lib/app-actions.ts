@@ -40,11 +40,11 @@ export async function createAndOpenScript(kind: 'new' | 'sample' = 'new'): Promi
 }
 
 /**
- * Import a Markdown file; the file name becomes the initial title (§13.1).
+ * Import a Markdown file; the file name becomes the initial title.
  *
  * The picker no longer runs here. Rust shows it and imports the chosen file in
  * one operation, so no path ever crosses IPC — the control webview cannot name
- * a file to read (spec §50.7). A `null` result means the operator cancelled.
+ * a file to read. A `null` result means the operator cancelled.
  */
 export async function importMarkdown(): Promise<void> {
   try {
@@ -62,26 +62,22 @@ export async function importMarkdown(): Promise<void> {
 /*
  * No `openExternal`.
  *
- * There used to be one here: a helper that took a URL, tried
- * `@tauri-apps/plugin-opener`, and fell back to `window.open`. It had exactly
- * one importer, App.svelte, which never called it — and it could not have
- * worked anyway, because the 1.0 readiness pass removed the `opener:default`
- * grant from the control capability, so the plugin call would have thrown and
- * the fallback would have tried to navigate a webview whose CSP forbids remote
- * origins.
+ * A helper here that takes a URL cannot work: the control capability has no
+ * `opener:default` grant, so the plugin call throws, and a `window.open`
+ * fallback would try to navigate a webview whose CSP forbids remote origins.
  *
- * What replaced it is `openWebDestination` in `services/desktop-shell.ts`: the
+ * What does the job is `openWebDestination` in `services/desktop-shell.ts`: the
  * frontend names a DESTINATION and `src-tauri/src/web.rs` owns the URL. Nothing
  * in this window should grow a function that takes a URL again.
  */
 
 /**
- * Export a script (spec §21.6).
+ * Export a script.
  *
  * Rust shows the save dialog and writes the file in the same operation, so no
  * destination crosses IPC. The old flow picked the destination here and passed
  * it back, which meant an arbitrary absolute path reached `File::create` and
- * truncated whatever was there (spec §50.7). `title` now only seeds the
+ * truncated whatever was there. `title` now only seeds the
  * dialog's default file name.
  */
 export async function exportScriptToFile(

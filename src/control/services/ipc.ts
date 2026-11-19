@@ -7,8 +7,9 @@
  *    falling back to the clearly-marked mock backend;
  *  - command names stay auditable in one grep (`ipcInvoke(`).
  *
- * Command names are the EXACT snake_case names from spec §46; payload keys
- * are camelCase (Tauri's default argument casing).
+ * Command names are the EXACT snake_case names registered in
+ * src-tauri/src/app.rs; payload keys are camelCase (Tauri's default argument
+ * casing).
  */
 
 export type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -42,9 +43,8 @@ export async function ipcInvoke<T>(command: string, args?: Record<string, unknow
 
 /**
  * Invoke a backend command, falling back to the typed mock backend ONLY when
- * the Tauri runtime itself is absent (plain-browser dev). Every command in
- * spec §46 is registered in src-tauri/src/app.rs, so inside Tauri all errors
- * — including NOT_IMPLEMENTED stubs — propagate as real AppError payloads.
+ * the Tauri runtime itself is absent (plain-browser dev). Inside Tauri all
+ * errors — including NOT_IMPLEMENTED — propagate as real AppError payloads.
  */
 export async function invokeOrMock<T>(
   command: string,

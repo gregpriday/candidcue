@@ -1,7 +1,7 @@
 <!--
   Status capsule. The leading dot is a FILL painted the true tone color;
   small accent text uses --accent-strong for AA contrast in the light theme.
-  Tone is never the only signal — the label always names the state (§20).
+  Tone is never the only signal — the label always names the state.
 -->
 <script lang="ts">
   export type PillTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger' | 'live';

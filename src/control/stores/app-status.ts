@@ -1,5 +1,5 @@
 /**
- * AppStatusStore (spec §45.2) — startup facts: version, first-launch flag.
+ * AppStatusStore — startup facts: version, first-launch flag.
  */
 import { writable } from 'svelte/store';
 import * as settingsService from '../services/settings';

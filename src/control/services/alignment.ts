@@ -11,10 +11,9 @@
  *     summary;
  *   - forwarding an explicit "I am here" when the presenter navigates.
  *
- * There is no aligner, no ledger, no tokenizer and no worker on this side any
- * more. Everything that used to be here is now one `invoke` and one event
- * subscription, because the thing it was doing is being done somewhere it can
- * see the audio clock.
+ * There is no aligner, no ledger, no tokenizer and no worker on this side, and
+ * none belongs here: matching is done in Rust, where it can see the audio
+ * clock.
  */
 import type { AlignmentSnapshot, CompiledScript } from '../../shared/contracts';
 import { CONTROL_EVENT, isAlignmentSnapshot } from '../../shared/contracts';
@@ -94,8 +93,8 @@ export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
      *
      * These were the same thing, and the conflation was a following defect:
      * `SentenceUnit` is a NAVIGATION unit, and a list item is deliberately one
-     * of them however many sentences it contains (§25.5, see `singleSentence`
-     * in `compile.ts`). So a multi-sentence bullet reported ONE boundary — at
+     * of them however many sentences it contains (see `singleSentence` in
+     * `compile.ts`). So a multi-sentence bullet reported ONE boundary — at
      * the end of the item — and the display could be carried straight across
      * the full stop inside it. Prose got the braking; a bulleted script did
      * not.
@@ -118,8 +117,8 @@ export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
 /**
  * Begin aligning `compiled` against the transcription session `generation`.
  *
- * The generation ties the two together so a frame from a socket that has
- * already been replaced can never reach a newer engine — Rust checks it on
+ * The generation ties the two together so a frame from a recogniser session
+ * that has already been replaced can never reach a newer engine — Rust checks it on
  * every frame, and this is where the pairing is established.
  */
 export async function startAlignment(

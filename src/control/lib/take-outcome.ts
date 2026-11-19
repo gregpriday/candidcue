@@ -1,5 +1,5 @@
 /**
- * What just happened, in one sentence (CCUX-006, CCUX-007).
+ * What just happened, in one sentence.
  *
  * ---------------------------------------------------------------------------
  * A DECISION SURFACE, NOT A REPORT
@@ -42,10 +42,11 @@ export interface TakeOutcomeInput {
    * Whether voice following was even possible this take.
    *
    * False when the take was started past a missing speech model — which
-   * readiness deliberately allows, because a take can still roll at a pace and
-   * be driven by hand — or its model was found but would not load. Without this
-   * the summary told those presenters to go and test their microphone, which
-   * was never the problem. Fed from `SessionSummary.voiceFollowingAvailable`.
+   * readiness deliberately allows, because a take can still be moved by hand
+   * or auto-scrolled at a set pace — or its model was found but would not
+   * load. Without this the summary told those presenters to go and test their
+   * microphone, which was never the problem. Fed from
+   * `SessionSummary.voiceFollowingAvailable`.
    */
   voiceFollowingAvailable?: boolean;
   /**
@@ -74,7 +75,7 @@ export interface TakeOutcomeInput {
    * which is judged on `durationSeconds` as before.
    */
   listenedSeconds?: number;
-  /** Times the realtime transport dropped and came back. */
+  /** Times the speech recognition session dropped and came back. */
   reconnects: number;
   /** Times the operator moved the script by hand. */
   manualJumps: number;

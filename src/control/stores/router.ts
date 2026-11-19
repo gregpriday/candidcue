@@ -1,7 +1,6 @@
 /**
- * Store-based route machine (spec §10, §45.1). Routes mirror the spec's
- * route list; navigation runs registered guards so unsaved conflicts and
- * active sessions can block a transition.
+ * Store-based route machine. Navigation runs registered guards so unsaved
+ * conflicts and active sessions can block a transition.
  */
 import { get, writable, type Readable } from 'svelte/store';
 
@@ -11,15 +10,16 @@ export type SettingsSection =
   | 'audio'
   | 'stage'
   | 'teleprompter'
-  /** Companion §47 follow settings. */
+  /** Voice-following settings. */
   | 'following'
   | 'privacy';
 
 export type LibraryView = 'all' | 'recent' | 'trash';
 
 /**
- * There is no route between Editor and Live. Present opens the stage directly
- * (`lib/start-take.ts`); what the old Preflight page configured is in Settings.
+ * There is no route between Editor and Live. Present reshapes this window into
+ * the prompter or a reading window directly (`lib/start-take.ts`); a take is
+ * configured in Settings.
  *
  * `calibrate` is the one exception to "everything is set in Settings", and it
  * earns it by being the only screen that DRIVES THE RIG: it opens a real stage

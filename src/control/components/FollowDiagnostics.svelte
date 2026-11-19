@@ -1,14 +1,14 @@
 <!--
-  "Why did it move?" and the diagnostics timeline (companion §64, §65).
+  "Why did it move?" and the diagnostics timeline.
 
   Kept behind a disclosure so the calm default UI is untouched. The movement
   records are always available — they are the answer to the only question a
   presenter asks about a teleprompter that moved oddly. The full timeline
   (assist dispositions, budget breaches) appears when developer
-  diagnostics are switched on in Settings, per primary §15.2.
+  diagnostics are switched on in Settings.
 
-  Text is redacted by default (§57.3): records carry ids, scores, states, and
-  timings — never script or transcript content.
+  Text is redacted: records carry ids, scores, states, and timings — never
+  script or transcript content.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
@@ -18,7 +18,7 @@
 
   interface Props {
     follow: SmoothFollowState;
-    /** §15.2 developer mode — reveals the full §64 timeline. */
+    /** Developer diagnostics — reveals the full timeline. */
     developerMode?: boolean;
   }
   let { follow, developerMode = false }: Props = $props();

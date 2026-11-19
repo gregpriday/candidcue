@@ -1,7 +1,8 @@
 /**
- * Stage envelope construction (spec §29.2 step 3, §43.3): projects an
- * immutable CompiledScript into the StageSessionEnvelope the stage window
- * hydrates from, resolving asset URLs through Rust.
+ * Stage envelope construction: projects an immutable CompiledScript into the
+ * StageSessionEnvelope a stage hydrates from — the stage embedded in the
+ * control window for a take, and the separate stage window for Settings'
+ * preview — resolving asset URLs through Rust.
  */
 import type {
   ReadingCueStyle,
@@ -111,7 +112,7 @@ export interface StageSettingsOverrides {
  * The PROMPTER's field is black, and only black.
  *
  * `themeId`, `background` and `foreground` stay on the wire as required fields
- * of `StageSettings`. They were kept because §52 `display_profiles` rows
+ * of `StageSettings`. They were kept because `display_profiles` rows once
  * persisted that document; the rows are gone (#232), so dropping the fields is
  * now a contract change rather than a data migration. For a prompter nothing
  * READS `background`/`foreground` — the stage's tokens are the colours — which
@@ -710,13 +711,13 @@ function bandHalfHeightPercentFor(
 /**
  * Project a compiled script into the stage's render document. Sentences and
  * take layout hints are populated so the current-phrase underlay and take
- * headers render without re-parsing (spec §16.2).
+ * headers render without re-parsing.
  */
 export function buildStageRenderDocument(
   script: CompiledScript,
   assets: StageRenderDocument['assets'] = {},
 ): StageRenderDocument {
-  // Take markers → layout hints on their carrying block (§21.4).
+  // Take markers → layout hints on their carrying block.
   const takeByBlock = new Map<string, string>();
   for (const cue of script.cues) {
     if (cue.cueType === 'take') takeByBlock.set(cue.blockId, cue.label);
@@ -750,17 +751,17 @@ export function buildStageRenderDocument(
   };
 }
 
-/** Resolve local asset URLs through Rust (asset-protocol scope, §47.8). */
+/** Resolve local asset URLs through Rust (asset-protocol scope). */
 export async function resolveDocumentAssets(
   script: CompiledScript,
 ): Promise<StageRenderDocument['assets']> {
   // The compiler's `img-<hash>` ids are node keys derived from the authored
   // URL, never database ids, so the href must travel with them: Rust resolves
-  // by canonical path and answers under the id we sent (§24.1).
+  // by canonical path and answers under the id we sent.
   try {
     return await resolveAssetUrls(script.scriptId, localImageRequests(script.assets));
   } catch {
-    // Unresolvable assets degrade to alt text on the stage (§24.2).
+    // Unresolvable assets degrade to alt text on the stage.
     return {};
   }
 }
@@ -779,9 +780,9 @@ export interface EnvelopeInput {
    * live preview is the only one. Rust validates it as optional ("a session
    * generation, WHEN CARRIED, must also be current"), and the number is minted
    * by `start_session`, which a preview never calls. Supplying any literal
-   * there would be the C1 defect in miniature: the payload would publish
-   * successfully only when the coordinator happened to be on that number, and
-   * be silently dropped otherwise.
+   * there would make the payload publish successfully only when the
+   * coordinator happened to be on that number, and be silently dropped
+   * otherwise.
    *
    * A take must always pass it. `start-take.ts` takes it from the session
    * record Rust returns, which is the invariant `ipc-command-reachability`
@@ -793,7 +794,7 @@ export interface EnvelopeInput {
   initialTokenIndex?: number;
   assets?: StageRenderDocument['assets'];
   /**
-   * §47 follow settings. Resolved here into the §55 motion profile the stage's
+   * Follow settings. Resolved here into the motion profile the stage's
    * engine runs on, so the Follow feel the user chose is in force from the
    * first frame. Omitted settings mean the stage keeps its own default profile.
    */

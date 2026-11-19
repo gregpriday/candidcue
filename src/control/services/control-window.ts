@@ -65,19 +65,17 @@ export interface ControlPresentationState {
    * under.
    *
    * This is what a take should be calibrated against, and the reason is that
-   * `mmPerCssPx` is the whole basis of the angular model. Presenting has always
-   * used whichever monitor this window was already on rather than the pinned
-   * one, and until Rust reported which that was, `startTake` sized its type
-   * from the PIN — so an operator with an external prompter pinned who pressed
-   * Present at their laptop got a take measured in the external panel's
-   * millimetres, which is a confidently wrong physical size rather than a near
+   * `mmPerCssPx` is the whole basis of the angular model. Where the window
+   * lands is decided in Rust — the pinned panel when it is connected, otherwise
+   * the monitor the window is on — so a take sized from the PIN rather than
+   * from this answer would, with the pin unplugged, be measured in the wrong
+   * panel's millimetres: a confidently wrong physical size rather than a near
    * miss.
    *
    * Absent when the window is not presenting, when the monitor could not be
    * identified, and in plain-browser dev, where there are no monitors to name.
    * A caller that gets nothing falls back to its own guess, which may well name
-   * a panel this answer did not — that is what a guess is, and it is the one
-   * takes were composed from before this field existed.
+   * a panel this answer did not — that is what a guess is.
    */
   displayFingerprint?: string;
 }
@@ -88,11 +86,9 @@ export interface ControlPresentationState {
  * `prompter` fills a monitor: borderless, above the menu bar, black behind the
  * webview. Which monitor is `displayFingerprint` — the panel pinned in
  * Settings › Prompter — when it is set and connected, and otherwise whichever
- * one the window is already on. It used to be only the latter, on the argument
- * that moving the window was taking it away from the person driving it; on a
- * real rig that meant dragging the editor onto the prompter glass before every
- * take and back off it after, which "Show test on this display" had already
- * shown was not necessary. `windows/present.rs` has the full account.
+ * one the window is already on. Moving it is deliberate: presenting only in
+ * place meant dragging the editor onto the prompter glass before every take
+ * and back off it after. `windows/present.rs` has the full account.
  *
  * `reader` presents in place and moves no geometry at all, so the viewport is
  * already the size it is going to be and `awaitViewportSettled` matches on its

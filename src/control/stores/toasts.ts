@@ -1,5 +1,5 @@
 /**
- * Notification store (spec §45.2 NotificationStore) backing the Toast region.
+ * Notification store backing the Toast region.
  */
 import { get, writable, type Readable } from 'svelte/store';
 

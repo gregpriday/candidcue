@@ -1,5 +1,5 @@
 /**
- * Every way of starting a take, through one readiness check (CCUX-013, #301).
+ * Every way of starting a take, through one readiness check (#301).
  *
  * The check used to live in the editor, and only the editor's own Present
  * button and split menu went through it. File › Present (⌘↩, which the menu
@@ -156,7 +156,7 @@ export async function resolveTakeReadiness(
   intent: LaunchIntent = {},
 ): Promise<ReadinessVerdict> {
   // Both passive: a device list and the OS's answer about access, neither of
-  // which can prompt (§28.1).
+  // which can prompt.
   const [mic, micPermission] = await Promise.all([
     pinnedMicrophone(),
     readMicrophonePermission(),
@@ -313,7 +313,7 @@ export async function startAnyway(): Promise<void> {
  * a refusal (#303).
  *
  * The one place before a take that may show the OS prompt, because it is an
- * explicit action (§28.1) — and the reason it exists: on a first take the
+ * explicit action — and the reason it exists: on a first take the
  * prompt used to appear only after Present had turned the window into the
  * prompter. The probe stream is released at once; the take opens its own.
  *

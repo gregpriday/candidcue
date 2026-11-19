@@ -1,17 +1,17 @@
 /**
- * Audio failure-state detection (spec §28.6).
+ * Audio failure-state detection.
  *
  * Covers the locally detectable failures: permission denied/dismissed, no
  * input devices, device busy, device unplugged, track ended, silent input.
- * Transport-side failures (negotiation, connection loss, missing transcript
- * events) live in the realtime package.
+ * Recogniser-side failures arrive as `failed` frames from Rust and are
+ * handled in `voice-session.ts`.
  */
 import type { AppErrorCode } from '../../../shared/contracts';
 import type { AudioLevelSnapshot } from '../../../shared/contracts';
 import type { Clock, MediaStreamTrackLike } from './types';
 import { DEFAULT_SILENT_INPUT_MS } from './defaults';
 
-/** Map a getUserMedia rejection to a stable app error code (spec §28.6/E.7). */
+/** Map a getUserMedia rejection to a stable app error code. */
 export function classifyGetUserMediaError(error: unknown): AppErrorCode {
   const name =
     typeof error === 'object' && error !== null && 'name' in error
@@ -63,7 +63,7 @@ export function watchTrackHealth(
 }
 
 /**
- * Silent-input detector (spec §28.6 "silent input", §28.5 no-signal warning).
+ * Silent-input detector.
  * Feed it level snapshots; it raises MIC_NO_SIGNAL after a sustained period
  * with no signal present, and resets as soon as signal returns.
  */

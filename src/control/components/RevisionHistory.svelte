@@ -1,10 +1,9 @@
 <!--
-  Revision browser (spec §21.4).
+  Revision browser.
 
-  Speaking Glass has been writing revision snapshots since the scripts repo landed —
-  on the first save, on the 5-minute cadence, before a session, when the file
-  changes outside the app — and until now nothing could read one back. This is
-  the reader: list, preview, restore.
+  Rust writes revision snapshots — on the first save, on the 5-minute cadence,
+  before a session, when the file changes outside the app. This is the
+  reader: list, preview, restore.
 
   Restoring is undoable, and the guarantee is Rust's: `restore_revision` routes
   through `save_script` with `revisionReason: "before_restore"`, so the text it

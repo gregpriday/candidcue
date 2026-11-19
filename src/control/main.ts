@@ -8,8 +8,9 @@ import { applyPlatformAttribute } from './lib/platform';
 import { followSystemAppearance } from './lib/appearance';
 import { applyWindowMaterial } from './lib/window-material';
 
-// Bind the real audio/realtime services behind the voice facade before any
-// screen asks for microphones (falls back to the mock in plain-node tests).
+// Bind the real audio and transcription services behind the voice facade
+// before any screen asks for microphones (falls back to the mock in plain-node
+// tests).
 bindRealVoiceFacadeIfAvailable();
 
 // Before the first paint, so no rule that depends on it lands one frame late.

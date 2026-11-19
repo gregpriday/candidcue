@@ -1574,9 +1574,9 @@
   >
     {#snippet status()}
       <!--
-        A status LIGHT plus text, not a pill (§9.4, §12.3).
+        A status LIGHT plus text, not a pill.
         This is a continuous health state — is the prompter showing? — which is
-        exactly the category §9.4 says to draw as a light and a word. It also
+        exactly the category drawn as a light and a word. It also
         keeps its place and its width as the state changes, so the toolbar does
         not shuffle while the stage is coming up.
       -->
@@ -2223,12 +2223,12 @@
       </div>
 
       <!--
-        PINNED, and the positions never move (§15.1).
+        PINNED, and the positions never move.
 
         These used to sit at the bottom of the scrolling content, so on a long step
         they were below the fold and on a short one they floated mid-screen — and
-        Back/Skip/Next changed x-position with the width of their own labels. §15.1
-        asks for a workflow footer whose controls are in the same place on every
+        Back/Skip/Next changed x-position with the width of their own labels. A
+        workflow footer keeps its controls in the same place on every
         step: Back on the left, the primary on the right, and the escape hatch
         beside it without competing.
       -->
@@ -2282,7 +2282,7 @@
   }
 
   /*
-   * The prompter's state: a light and a word (§9.4, §12.3).
+   * The prompter's state: a light and a word.
    *
    * A fixed-width dot beside text that changes, so the toolbar's geometry is
    * the same whichever of the three states is showing — and the state is never
@@ -2314,7 +2314,7 @@
 
   .steps {
     /* The width of the Settings section rail beside it, so stepping into the
-       wizard does not shift the content edge (§15.2). One-line labels are
+       wizard does not shift the content edge. One-line labels are
        what let it stay this narrow. */
     flex: 0 0 calc(var(--space-5) * 9);
     display: flex;
@@ -2381,7 +2381,7 @@
     cursor: default;
     color: var(--text-muted);
   }
-  /* Flat, per §15.2 — a tonal fill, no elevation, no raised card. The Settings
+  /* Flat — a tonal fill, no elevation, no raised card. The Settings
      rail's neutral "you are here", not an accent wash beside a grey hover. */
   .step-item.active,
   .step-item.active:hover {
@@ -3184,7 +3184,7 @@
     background: var(--bg-toolbar);
   }
   /* Back on the left, everything else on the right — a fixed geometry, so the
-     primary action is in the same place on every step (§15.1). */
+     primary action is in the same place on every step. */
   .step-actions-spacer {
     flex: 1 1 auto;
   }

@@ -1,11 +1,5 @@
 /**
- * Script asset service (spec §46.3, §50.7).
- *
- * C10: these wrappers did not exist. The editor's "Insert image" button typed
- * the literal string `![Image description](./assets/image.png)` into the
- * document — a path that has never existed — so `import_image` had zero
- * callers and the Rust-side picker and the MIME/size validation were
- * unreachable from the product.
+ * Script asset service.
  *
  * As with import/export of scripts, the picker runs in Rust: there is no
  * `sourceFile` argument for the webview to forge.
@@ -27,7 +21,7 @@ export interface ResolvedAssetUrl {
   mime: string;
 }
 
-/** The images in a compile worth asking about: remote ones are never loaded (§24.2). */
+/** The images in a compile worth asking about: remote ones are never loaded. */
 export function localImageRequests(assets: readonly CompiledAsset[]): AssetUrlRequest[] {
   return assets
     .filter((a) => !a.remote && a.kind === 'image')
@@ -35,8 +29,7 @@ export function localImageRequests(assets: readonly CompiledAsset[]): AssetUrlRe
 }
 
 /**
- * Resolve local images to scoped urls through Rust (asset-protocol scope,
- * §47.8).
+ * Resolve local images to scoped urls through Rust (asset-protocol scope).
  *
  * Rust leaves out every id it could not find — unknown, gone from disk, or
  * outside the script's asset directory — so an absent id means "not found". A

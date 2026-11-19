@@ -1,16 +1,16 @@
 /**
- * Follow settings semantics (companion §47) and the mapping from the
- * understandable user controls onto a versioned `SmoothFollowProfile` (§55).
+ * Follow settings semantics and the mapping from the
+ * understandable user controls onto a versioned `SmoothFollowProfile`.
  *
  * Design rules this module enforces:
  *
- *  - Every number is derived from `DEFAULT_SMOOTH_FOLLOW_PROFILE` (companion
- *    Appendix A). There are no new absolute tuning constants here — only
+ *  - Every number is derived from `DEFAULT_SMOOTH_FOLLOW_PROFILE`. There are
+ *    no new absolute tuning constants here — only
  *    documented ratios of the published starting values, so re-tuning the
- *    appendix re-tunes every feel automatically.
- *  - §47.1: a feel must never weaken section safety or retake evidence gates,
+ *    default profile re-tunes every feel automatically.
+ *  - A feel must never weaken section safety or retake evidence gates,
  *    so `alignment` is copied through untouched.
- *  - §47.3 voice lead is GONE, control and all: it moved the display ahead of
+ *  - Voice lead is GONE, control and all: it moved the display ahead of
  *    the reader, which the alignment engine now treats as a defect to be
  *    measured rather than a comfort to be offered. Nothing here may reintroduce
  *    a setting whose effect is "claim the reader is further along than heard".
@@ -21,37 +21,37 @@ import {
 } from '../../shared/contracts';
 
 /* ---------------------------------------------------------------------------
- * User-facing setting values (§47)
+ * User-facing setting values
  * ------------------------------------------------------------------------- */
 
-/** §47.1 follow feel. */
+/** Follow feel. */
 export type FollowFeel = 'calm' | 'balanced' | 'responsive';
 
-/** The persisted §47 settings block. */
+/** The persisted follow settings block. */
 export interface FollowingSettings {
   feel: FollowFeel;
-  /** Versioned motion-profile family id (§55); see `MOTION_PROFILE_FAMILIES`. */
+  /** Versioned motion-profile family id; see `MOTION_PROFILE_FAMILIES`. */
   motionProfileId: string;
-  /** §15.2 / §64: reveals the diagnostics timeline in Take controls → Why did it move? */
+  /** Reveals the diagnostics timeline in Take controls → Why did it move? */
   developerDiagnostics: boolean;
 }
 
 export const FOLLOW_FEELS: FollowFeel[] = ['calm', 'balanced', 'responsive'];
 
 /**
- * Defaults. Every value comes from the specification's stated default, and the
- * profile id comes from the Appendix A profile itself rather than a literal.
+ * Defaults. The profile id comes from `DEFAULT_SMOOTH_FOLLOW_PROFILE` itself
+ * rather than a literal.
  */
 export function defaultFollowingSettings(): FollowingSettings {
   return {
-    feel: 'balanced', // §47.1 "Balanced — default"
+    feel: 'balanced', // the default feel
     motionProfileId: DEFAULT_SMOOTH_FOLLOW_PROFILE.id,
-    developerDiagnostics: false, // primary §15.2: developer panel off by default
+    developerDiagnostics: false, // developer panel off by default
   };
 }
 
 /* ---------------------------------------------------------------------------
- * Option copy (§42.1 cost visibility, Appendix A.4 scheduling behavior)
+ * Option copy
  * ------------------------------------------------------------------------- */
 
 export interface FollowOption<T extends string> {
@@ -79,26 +79,17 @@ export const FOLLOW_FEEL_OPTIONS: Array<FollowOption<FollowFeel>> = [
 ];
 
 /*
- * `FIDELITY_MODE_OPTIONS` used to live here, and Settings rendered it.
- *
- * All three of its descriptions were written against live coaching — which
- * words earn a tip, how many omissions are worth mentioning. That feature was
- * removed, and nothing replaced it: `resolveFollowProfile` below builds a take's
- * motion from `family` and `feel`, and `fidelityMode` reached the settings
- * document and Rust's validator without ever being read to decide anything.
- *
- * So the copy promised behaviour that could not happen, attached to a control
- * that changed nothing. The option list is gone with the control (#124).
- *
- * The field went after it (#218), along with `semanticRequestLimit`, the cap on
- * a hosted sidecar that no longer exists. A document that still carries either
- * one loads as it always did: `AppSettings` does not deny unknown fields, and
- * the adapter in `settings-following.ts` never reads or sends them. Rust's
+ * No fidelity-mode options: `resolveFollowProfile` below builds a take's motion
+ * from `family` and `feel` alone. The control went in #124 and its
+ * `fidelityMode` field in #218, along with `semanticRequestLimit`. A document
+ * that still carries either one loads as it always did: `AppSettings` does not
+ * deny unknown fields, and the adapter in `settings-following.ts` never reads
+ * or sends them. Rust's
  * half went with #219, so the next write takes `fidelityMode` off disk.
  */
 
 /* ---------------------------------------------------------------------------
- * Motion profile families (§55)
+ * Motion profile families
  * ------------------------------------------------------------------------- */
 
 export interface MotionProfileFamily {
@@ -109,7 +100,7 @@ export interface MotionProfileFamily {
 }
 
 /**
- * Versioned profile families the user may choose between. Only the Appendix A
+ * Versioned profile families the user may choose between. Only the default
  * starting profile ships today; more appear as the motion corpus grows, and
  * each keeps its own id so eval snapshots stay comparable.
  */
@@ -134,7 +125,7 @@ export function motionProfileFamily(id: string): MotionProfileFamily {
 /**
  * Documented ratios of the base profile. `balanced` is the identity.
  *
- * THE THREE §30.3 CATCH-UP BOUNDS.
+ * THE THREE CATCH-UP BOUNDS.
  *
  * `catchUpMaxDurationMs`, `catchUpReleaseMs` and `catchUpDecayCorridors` are
  * spread through by `applyFeel`, so leaving them out of this table is a
@@ -153,20 +144,22 @@ export function motionProfileFamily(id: string): MotionProfileFamily {
  *   balanced    1.60      1440      4160      12000          499 px
  *   responsive  1.84      1656      5502      13800          579 px
  *
- * (stop ≈ v²/2a + v·a/2j — the same estimate the appendix quotes as ~565 px for
- * balanced. The v²/2a half is identical at every feel, because the feel scales
- * the multiplier and the acceleration by the same ratio; the jerk half is not,
- * because acceleration is scaled twice over — once by the feel and once by the
- * boost — while jerk is scaled once.)
+ * (stop ≈ v²/2a + v·a/2j — the same estimate the default profile quotes as
+ * ~565 px for balanced. The v²/2a half is identical at every feel, because the
+ * feel scales the multiplier and the acceleration by the same ratio; the jerk
+ * half is not, because acceleration is scaled twice over — once by the feel
+ * and once by the boost — while jerk is scaled once.)
  *
- *  - `catchUpDecayCorridors` IS scaled, by the feel ratio. The appendix sizes
- *    14 corridors (~605 px) so the decay LEADS the plant's own braking rather
- *    than being masked by it, and notes the decay is decoration below about 13.
+ *  - `catchUpDecayCorridors` IS scaled, by the feel ratio. The default
+ *    profile sizes 14 corridors (~605 px) so the decay LEADS the plant's own
+ *    braking rather than being masked by it, and notes the decay is
+ *    decoration below about 13.
  *    That threshold is a property of the plant, and the plant just moved: at
  *    responsive, 14 corridors is 605 px against a 579 px stop — inside the
- *    margin the appendix calls decoration. Scaling by the feel ratio (calm 12,
- *    responsive 16) holds decay ÷ stopping distance at 1.21 / 1.21 / 1.19, so
- *    every feel gets the same shaped approach into the corridor.
+ *    margin the default profile calls decoration. Scaling by the feel ratio
+ *    (calm 12, responsive 16) holds decay ÷ stopping distance at
+ *    1.21 / 1.21 / 1.19, so every feel gets the same shaped approach into the
+ *    corridor.
  *  - `catchUpReleaseMs` IS scaled, by the same ratio and for the same reason.
  *    The release exists so a limit never moves faster than a jerk-limited plant
  *    can follow it, and the time to swing acceleration across its own range is
@@ -179,7 +172,7 @@ export function motionProfileFamily(id: string): MotionProfileFamily {
  *    and a half seconds of visibly abnormal motion — long AND ineffective,
  *    which is the worst pair for a feel chosen to be unobtrusive. 2 s is the
  *    trade calm would make. Responsive is NOT extended: the cap is a ceiling on
- *    how long an exception may run, and §47.1 lets a feel tighten a bound but
+ *    how long an exception may run, and a feel may tighten a bound but
  *    never relax one — the same rule that copies `alignment` through untouched.
  *    Nothing is stranded either way, because the residual gap closes at the base
  *    900 px/s, which no feel changes.
@@ -220,7 +213,7 @@ function scale(base: number, ratio: number | undefined, decimals = 0): number {
 }
 
 /**
- * §47.1 — feel only touches motion comfort limits.
+ * Feel only touches motion comfort limits.
  *
  * It used to reshape prediction horizons too. Those are gone: prediction is the
  * alignment engine's, it is benchmarked there, and a per-feel horizon would be
@@ -239,7 +232,7 @@ export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFo
       maxAccelerationPxS2: scale(base.motion.maxAccelerationPxS2, ratios.motion.maxAccelerationPxS2),
       maxJerkPxS3: scale(base.motion.maxJerkPxS3, ratios.motion.maxJerkPxS3),
       restDeadbandPx: scale(base.motion.restDeadbandPx, ratios.motion.restDeadbandPx, 2),
-      // §30.3. The catch-up bounds move with the plant the feel just retuned —
+      // The catch-up bounds move with the plant the feel just retuned —
       // see the arithmetic on FEEL_RATIOS for why two of the three are scaled
       // and why the duration cap only ever comes down.
       catchUpMaxDurationMs: scale(
@@ -255,7 +248,7 @@ export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFo
   };
 }
 
-/** The full §47 → §55 resolution used by the session and the stage handoff. */
+/** The full settings → profile resolution used by the session and stage handoff. */
 export function resolveFollowProfile(following: FollowingSettings): SmoothFollowProfile {
   const family = motionProfileFamily(following.motionProfileId);
   return applyFeel(family.profile, following.feel);

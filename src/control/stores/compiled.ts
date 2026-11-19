@@ -1,7 +1,6 @@
 /**
- * CompiledScriptStore (spec §45.2) — the latest immutable compile result.
- * Requests are tagged with the editor revision; stale results are discarded
- * (spec §45.3).
+ * CompiledScriptStore — the latest immutable compile result.
+ * Requests are tagged with the editor revision; stale results are discarded.
  */
 import { writable } from 'svelte/store';
 import { compileScript, type CompileOutput, type CompileOverrides } from '../services/compiler';

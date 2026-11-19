@@ -95,13 +95,11 @@
     border-color: var(--border-strong);
   }
   /*
-   * A press DARKENS; it does not shrink (§23.5, §9.3).
+   * A press DARKENS; it does not shrink.
    *
    * `transform: scale(0.98)` is a mobile-app affordance and it is what a
-   * toolbar full of them reads as. §23.5 asks for nonessential hover lift and
-   * button scaling to be removed, and §9.3 says the same about press scaling
-   * specifically. What replaces it is a real press state — one the previous
-   * recipe did not have at all, because the transform was doing that job.
+   * toolbar full of them reads as. No hover lift and no press scaling: the
+   * press state is a darker fill instead.
    */
   .button:active:not(:disabled) {
     background: var(--bg-secondary);

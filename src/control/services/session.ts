@@ -2,20 +2,16 @@
  * Live-session alignment driver — the seam between the session store and the
  * Rust alignment engine.
  *
- * ---------------------------------------------------------------------------
- * WHAT THIS IS NOT ANY MORE
- * ---------------------------------------------------------------------------
- * This used to host a deterministic aligner in a Web Worker, feed it
- * provider-neutral transcript events, and receive positions back. All of that
- * moved to Rust, beside the socket that produces the transcripts and the audio
- * clock the engine's timing is calibrated against. What remains is a thin
- * lifecycle object: start, stop, move, and a subscription.
+ * The aligner runs in Rust, beside the recogniser that produces the
+ * transcripts and the audio clock the engine's timing is calibrated against.
+ * What lives here is a thin lifecycle object: start, stop, move, and a
+ * subscription.
  *
  * Two implementations share one interface:
  *  - the REAL driver talks to `cc_align::Engine` through `services/alignment`;
  *  - a MOCK driver (timer-driven) covers environments with no Tauri runtime —
  *    node unit tests and plain browser dev — so the Live screen stays fully
- *    exercisable without a microphone or an API key.
+ *    exercisable without a microphone or a speech model.
  */
 import type { AlignmentSnapshot, CompiledScript, SentenceUnit } from '../../shared/contracts';
 import { ALIGNMENT_RELOCATIONS } from '../../shared/contracts';
@@ -85,7 +81,7 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
   let lastSnapshot: AlignmentSnapshot | null = null;
   let disposed = false;
   /**
-   * §9.1 — hold position until the user explicitly starts prompting.
+   * Hold position until the user explicitly starts prompting.
    *
    * The engine has no pause: it is a pure function of the frames it is given,
    * so pausing means not giving it any. Gating on this side rather than asking

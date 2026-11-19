@@ -1,12 +1,11 @@
 /**
  * ============================================================================
- * MOCK BACKEND — awaiting Rust integration.
+ * MOCK BACKEND — plain-browser dev only.
  *
- * A typed in-memory stand-in for the spec §46 command surface. It exists so
- * every control-window screen is fully drivable before the Rust commands
- * land. `invokeOrMock` in `ipc.ts` only routes here when the real command is
- * unregistered or the app runs outside Tauri; once a Rust command ships, the
- * matching mock path silently stops being used.
+ * A typed in-memory stand-in for the Rust command surface, so every
+ * control-window screen is drivable in a browser without Tauri. `invokeOrMock`
+ * in `ipc.ts` routes here only when the Tauri runtime is absent; inside Tauri
+ * every failure is a real `AppError`.
  *
  * Nothing outside `src/control/services/` may import this module.
  * ============================================================================
@@ -66,7 +65,7 @@ function defaultScriptSettings(): ScriptDocument['settings'] {
 class MockState {
   scripts = new Map<string, MockScriptRecord>();
   settings: AppSettings = defaultAppSettings();
-  /** Only redacted metadata is retained — never the key itself. */
+  /** Whether the scripts have been read from localStorage yet. */
   loaded = false;
 
   load(): void {
@@ -501,9 +500,8 @@ export const mockStage = {
     };
   },
   /**
-   * C12: browser dev used to answer `null` here, which is why the service
-   * declared `StageStatus | null`. Rust always returns a status — "no stage"
-   * is `exists: false` — so the mock says the same thing.
+   * Rust always returns a status — "no stage" is `exists: false` — so the
+   * mock says the same thing rather than answering `null`.
    */
   stageStatus(): StageStatus {
     return {

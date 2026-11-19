@@ -1,5 +1,5 @@
 /**
- * Microphone permission flow helpers (spec §28.1).
+ * Microphone permission flow helpers.
  *
  * Rules encoded here:
  * - Never trigger the OS permission prompt on launch. `queryMicrophonePermission`
@@ -42,7 +42,7 @@ export type MicAccessResult =
       /**
        * True when the pinned device was busy and the system default was taken
        * instead. The caller is told rather than quietly handed a different
-       * microphone — §28.2 says which input is in use is the user's business.
+       * microphone — which input is in use is the user's business.
        */
       fellBackToDefault: boolean;
     }
@@ -60,8 +60,9 @@ export type MicAccessResult =
  * the window at roughly 200–500 ms — and a `getUserMedia` inside that window is
  * rejected with `NotReadableError` or `AbortError` rather than made to wait.
  *
- * This app hands the microphone over exactly there: the Preflight meter holds a
- * capture, the take releases it and immediately opens its own. Whether the
+ * This app hands the microphone over exactly there: Settings' level meter
+ * holds a capture, and the transcription test releases it and immediately
+ * opens its own. Whether the
  * handover lands inside CoreAudio's window depends on how long the intervening
  * work took, which is why the symptom is "sometimes it does not pick up the
  * microphone" rather than a reproducible failure — the same code path, decided
@@ -89,7 +90,7 @@ export interface MicAcquireRetry {
    *
    * It is the right trade for a TAKE — presenting from the built-in microphone
    * beats not presenting, and the pipeline says so out loud when it happens.
-   * It is the wrong one everywhere else: a Preflight meter that silently
+   * It is the wrong one everywhere else: a Settings meter that silently
    * measured a different microphone from the one named above it, or a
    * transcription test that passed on an input the take will not use, is a
    * diagnostic that lies. Those callers would rather fail and say the device
@@ -105,10 +106,10 @@ const defaultSleep = (ms: number): Promise<void> =>
 
 /**
  * Open the microphone (this is the call that may trigger the OS prompt —
- * invoke it only from an explicit user action such as the onboarding
- * microphone step or a mic test, per spec §28.1).
+ * use it only from an explicit user action such as Settings' Allow button, a
+ * mic test or a take).
  *
- * Verifies an active audio track (spec §29.2 step 4); a stream with no live
+ * Verifies an active audio track; a stream with no live
  * track is treated as MIC_DEVICE_MISSING and closed.
  *
  * A device that is merely BUSY is retried with backoff (see
@@ -179,18 +180,18 @@ export async function requestMicrophoneAccess(
 }
 
 /**
- * Codes that mean "the device exists, something else has it" (§28.6).
+ * Codes that mean "the device exists, something else has it".
  *
  * Only this one. `MIC_DEVICE_MISSING` covers NotFound and Overconstrained —
  * the pinned device is gone, or there are no inputs at all — and neither
- * changes by asking again; retrying them would just delay the picker (§28.2)
+ * changes by asking again; retrying them would just delay the picker
  * that is the actual remedy. `MIC_PERMISSION_DENIED` is an answer, not a race.
  */
 function isBusy(code: AppErrorCode): boolean {
   return code === 'MIC_DEVICE_LOST';
 }
 
-/** Stop every track and drop references (spec §28.7 retention rules). */
+/** Stop every track and drop references. */
 export function releaseStream(stream: MediaStreamLike | null | undefined): void {
   if (!stream) return;
   for (const track of stream.getTracks()) {

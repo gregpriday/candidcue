@@ -1,12 +1,12 @@
 /**
  * Real VoiceFacade implementation — binds the audio package (permissions,
  * device enumeration, level meter) and the on-device speech-to-text session to
- * the seam the Preflight/Live screens consume (spec §14.2 C, §28, §29).
+ * the seam Settings and the Live screen consume.
  *
- * Bound once at control startup via `bindVoiceFacade` when the WebView exposes
- * mediaDevices. The transcription test needs the Tauri runtime — the socket
- * and the API key live in Rust — so in a plain browser it degrades to the same
- * scripted walkthrough the mock uses.
+ * Bound once at startup, in the control and Settings windows, via
+ * `bindVoiceFacade` when the WebView exposes mediaDevices. The transcription
+ * test needs the Tauri runtime — the recogniser lives in Rust — so in a plain
+ * browser it degrades to the same scripted walkthrough the mock uses.
  */
 import type {
   AudioDeviceInfo,
@@ -99,15 +99,15 @@ export function createRealVoiceFacade(): VoiceFacade {
         if (result.code === 'MIC_PERMISSION_DENIED') return 'denied';
         throw new Error(result.code);
       }
-      // Permission was the goal; release the probe stream immediately (§28.7).
+      // Permission was the goal; release the probe stream immediately.
       releaseStream(result.stream);
       return 'granted';
     },
 
     /**
-     * Passive only (spec §28.1): the Permissions API, never getUserMedia. The
-     * `change` subscription is what makes a grant issued in System Settings
-     * while Preflight is open take effect without a reload. Some platforms
+     * Passive only: the Permissions API, never getUserMedia. The `change`
+     * subscription is what makes a grant issued in System Settings while
+     * Settings is open take effect without a reload. Some platforms
      * cannot query 'microphone' at all — those report 'unsupported' and the
      * UI falls back to the explicit button.
      */
@@ -164,7 +164,7 @@ export function createRealVoiceFacade(): VoiceFacade {
         const devices = mediaDevices();
         if (!devices) return;
         /*
-         * §28.3: the same processing the take will open with. Passing only the
+         * The same processing the take will open with. Passing only the
          * device left every toggle at the `getUserMedia` default of ON, so a
          * meter — or a check — could report a healthy level that default AGC
          * had manufactured, and the take would then open with AGC off and hear
@@ -225,13 +225,13 @@ export function createRealVoiceFacade(): VoiceFacade {
     },
 
     /**
-     * §14.2 C — "say something and watch the words appear".
+     * The transcription test — "say something and watch the words appear".
      *
-     * The cheapest end-to-end proof that the key works, the microphone works,
+     * The cheapest end-to-end proof that the model works, the microphone works,
      * and the two are connected. It is deliberately the same path a take uses:
      * one `getUserMedia`, a PCM tap at the pinned rate, and the Rust session.
      * A test that exercised a different path would be able to pass while a take
-     * heard nothing, which is exactly the situation this screen exists to rule
+     * heard nothing, which is exactly the situation this test exists to rule
      * out.
      */
     async startTranscriptionTest(
@@ -299,9 +299,9 @@ export function createRealVoiceFacade(): VoiceFacade {
         /*
          * The SAME call a take makes.
          *
-         * There is nothing left to configure — one bundled model, no key, no
-         * language — so the test and the take are now identical by construction
-         * rather than by a shared builder. That is what this had to guarantee:
+         * There is nothing to configure here — Rust reads the selected model
+         * itself and the call carries no options — so the test and the take
+         * are identical by construction. That is what this had to guarantee:
          * a microphone test that exercises a configuration the take will not use
          * cannot answer the only question it is asked.
          */
@@ -336,7 +336,7 @@ export function createRealVoiceFacade(): VoiceFacade {
   };
 }
 
-/** Browser-dev fallback for the transcription test (no credential minting). */
+/** Browser-dev fallback for the transcription test (no recogniser to reach). */
 function scriptedTranscriptionTest(
   events: TranscriptTestEvents,
   setState: (state: RealtimeState) => void,

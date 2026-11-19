@@ -1,5 +1,5 @@
 <!--
-  CodeMirror 6 Markdown editor (spec §13.2): line wrapping on, no line
+  CodeMirror 6 Markdown editor: line wrapping on, no line
   numbers, restrained syntax styling, full-bleed on its panel (no
   border-inside-border). The instance is exposed via `getView()` for the
   toolbar insert controls.
@@ -7,9 +7,8 @@
   ---------------------------------------------------------------------------
   THERE IS DELIBERATELY NO CUSTOM CONTEXT MENU HERE
   ---------------------------------------------------------------------------
-  Desktop refinement §11.9 asks for editor context actions — and then says, in
-  the same line, "without replacing standard text editing commands". In a
-  webview those two cannot both be had: the only way to show a custom menu on
+  Editor context actions and the standard text editing commands cannot both
+  be had in a webview: the only way to show a custom menu on
   right-click is to `preventDefault()` the platform's, and the platform's is
   carrying spelling suggestions, Look Up, Share, text substitutions and
   Services. A hand-rolled menu offering "Insert cue" in exchange for all of that
@@ -18,7 +17,7 @@
 
   So the editor keeps the system menu, and the insertions it would have offered
   live in two places instead: the formatting row above the text, where they are
-  visible and tooltipped, and the native INSERT MENU (§11.4). Both call the same
+  visible and tooltipped, and the native INSERT MENU. Both call the same
   functions in `lib/markdown-insert.ts` — the menu reaches this component
   through the route command bus, so a menu item and the button beside it cannot
   drift into meaning different things.
@@ -116,7 +115,7 @@
   interface Props {
     value: string;
     placeholder?: string;
-    /** Accessible name for the editing surface (spec §20). */
+    /** Accessible name for the editing surface. */
     ariaLabel?: string;
     onchange?: (value: string) => void;
     /**
@@ -150,13 +149,12 @@
   }
 
   /**
-   * Find and Replace, driven from the native Edit menu (§11.9).
+   * Find and Replace, driven from the native Edit menu.
    *
-   * `searchKeymap` was already installed, so ⌘F worked for anybody who knew it
-   * existed. Nothing NAMED it — there was no menu, so Find, Find Next, Find
-   * Previous and Replace were four undiscoverable keys. These are the same
-   * CodeMirror commands the keymap binds, exposed so `Editor.svelte` can hand
-   * the menu's commands to the live view.
+   * The menu is what makes Find, Find Next, Find Previous and Replace
+   * discoverable rather than four keys only the initiated know. These are the
+   * same CodeMirror commands the keymap binds, exposed so `Editor.svelte` can
+   * hand the menu's commands to the live view.
    *
    * `openSearchPanel` focuses its own field, which is the behaviour anybody
    * pressing Find expects; Replace opens the same panel with the replace row
@@ -242,7 +240,7 @@
           cmPlaceholder(placeholder),
           /*
            * CodeMirror's contenteditable is the editing surface; without the
-           * label it is an unnamed textbox to a screen reader (spec §20).
+           * label it is an unnamed textbox to a screen reader.
            *
            * Spelling on: CodeMirror turns it off because it is built for code,
            * and this is prose — a script full of typos with nothing underlined,
