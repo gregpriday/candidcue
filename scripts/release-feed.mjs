@@ -538,6 +538,69 @@ async function sha256OfResponse(response) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* ---------------------------------------------------------- cache lifetimes */
+
+/** What the upload asks R2 to serve each versioned file with. */
+export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+/** What the upload asks R2 to serve each feed entry with. */
+export const UNCACHED_CACHE_CONTROL = 'no-cache, no-store, must-revalidate';
+
+/**
+ * The directives of a Cache-Control header: lower-cased names, each mapped to
+ * its value (unquoted) or to `true` when it has none. A comma inside a quoted
+ * value does not split it.
+ */
+export function cacheDirectives(header) {
+  const directives = new Map();
+  for (const part of (header ?? '').match(/(?:[^,"]|"[^"]*")+/g) ?? []) {
+    const eq = part.indexOf('=');
+    const name = (eq === -1 ? part : part.slice(0, eq)).trim().toLowerCase();
+    if (!name) continue;
+    directives.set(name, eq === -1 ? true : part.slice(eq + 1).trim().replace(/^"(.*)"$/s, '$1'));
+  }
+  return directives;
+}
+
+/**
+ * Why a versioned file's Cache-Control is not the year-long, immutable
+ * lifetime the upload asked for, or `null` when it is. A shorter or missing
+ * lifetime means an upload that lost its `--cache-control`, or an edge rule
+ * rewriting it; either way the file is not being served as the issue (#293)
+ * and the release notes promise.
+ */
+export function immutableCacheProblem(header) {
+  const directives = cacheDirectives(header);
+  const maxAge = directives.get('max-age');
+  const refusing = ['no-cache', 'no-store', 'private'].filter((name) => directives.has(name));
+  if (
+    !directives.has('immutable') ||
+    typeof maxAge !== 'string' ||
+    !/^\d+$/.test(maxAge) ||
+    Number(maxAge) < 31_536_000 ||
+    refusing.length > 0
+  ) {
+    return `served with Cache-Control "${header ?? ''}", not "${IMMUTABLE_CACHE_CONTROL}"`;
+  }
+  return null;
+}
+
+/**
+ * Why a feed entry's Cache-Control lets a cache keep it, or `null` when it
+ * does not. `no-store` keeps it out of every cache; a bare `no-cache` makes
+ * anything that kept it anyway revalidate. A `no-cache` naming header fields
+ * (`no-cache="Set-Cookie"`) only drops those fields, so it does not count.
+ */
+export function uncachedProblem(header) {
+  const directives = cacheDirectives(header);
+  if (directives.get('no-cache') !== true || !directives.has('no-store')) {
+    return (
+      `served with Cache-Control "${header ?? ''}", not "${UNCACHED_CACHE_CONTROL}", ` +
+      'which lets a stale entry outlive this release'
+    );
+  }
+  return null;
+}
+
 /**
  * Every staged file is served at its public URL with the bytes that were
  * staged.
@@ -546,6 +609,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * the edge as immutable, so a re-run that rebuilt a payload under a version
  * that was already uploaded once would be served the OLD bytes beside a feed
  * entry carrying the NEW signature — and every client would reject it.
+ *
+ * And with the lifetime the upload set: `public, max-age=31536000,
+ * immutable`. Only the name of a file that never changes may be cached for a
+ * year, and nothing else reads the header back.
  */
 export async function verifyFiles(stageDir, { fetchFn = fetch, log = console.log, attempts = 5, delayMs = 10_000 } = {}) {
   const release = readRelease(stageDir);
@@ -558,8 +625,13 @@ export async function verifyFiles(stageDir, { fetchFn = fetch, log = console.log
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const response = await fetchWithTimeout(url, {}, fetchFn);
+        const cacheProblem = immutableCacheProblem(response.headers.get('cache-control'));
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;
+          await response.body?.cancel();
+        } else if (cacheProblem) {
+          last = cacheProblem;
+          await response.body?.cancel();
         } else {
           const actual = await sha256OfResponse(response);
           if (actual === expected) {
@@ -597,11 +669,11 @@ export async function verifyFeed(stageDir, { fetchFn = fetch, log = console.log,
         // Asked for as a client asks, with no cache-buster: what matters is
         // what an installed copy is served.
         const response = await fetchWithTimeout(url, { headers: { 'cache-control': 'no-cache' } }, fetchFn);
-        const cacheControl = response.headers.get('cache-control') ?? '';
+        const cacheProblem = uncachedProblem(response.headers.get('cache-control'));
         if (response.status !== 200) {
           last = `HTTP ${response.status}`;
-        } else if (!/no-cache/.test(cacheControl)) {
-          last = `served with Cache-Control "${cacheControl}", which lets a stale entry outlive this release`;
+        } else if (cacheProblem) {
+          last = cacheProblem;
         } else if (!isDeepStrictEqual(await response.json(), expected)) {
           last = 'served content differs from the staged entry';
         } else {

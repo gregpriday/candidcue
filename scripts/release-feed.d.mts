@@ -71,5 +71,10 @@ export declare function writeOnce(
 export declare function checkOrigin(stageDir: string, publicUrl: string): void;
 export declare function newestStable(tags: readonly string[]): string | null;
 export declare function rustLines(text: string): string[];
+export declare const IMMUTABLE_CACHE_CONTROL: string;
+export declare const UNCACHED_CACHE_CONTROL: string;
+export declare function cacheDirectives(header: string | null | undefined): Map<string, string | true>;
+export declare function immutableCacheProblem(header: string | null | undefined): string | null;
+export declare function uncachedProblem(header: string | null | undefined): string | null;
 export declare function verifyFiles(stageDir: string, options?: NetworkOptions): Promise<void>;
 export declare function verifyFeed(stageDir: string, options?: NetworkOptions): Promise<void>;
