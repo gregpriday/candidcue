@@ -189,7 +189,13 @@
     onpresentationtoggle?: () => void;
     /** §48. Voice following is off; the presenter is driving the script. */
     followPaused?: boolean;
-    /** The follow control was activated. The host owns the decision (§16.9). */
+    /**
+     * The follow control was activated. The host owns the decision (§16.9).
+     *
+     * Absent means "do not offer it", like `onpresentationtoggle`: a Read take
+     * (#243) has no voice to follow, and a ticked "Follow voice" over a take
+     * that never listens would claim the one thing it is not doing.
+     */
     onfollowtoggle?: () => void;
     /**
      * §practice. This reading is a rehearsal, so say so on the way out.
@@ -332,14 +338,18 @@
           },
         ]
       : []),
-    {
-      kind: 'checkbox' as const,
-      group: 'mode' as const,
-      id: 'follow' as const,
-      label: TAKE_ACTIONS.follow,
-      checked: !followPaused,
-      select: () => onfollowtoggle?.(),
-    },
+    ...(onfollowtoggle
+      ? [
+          {
+            kind: 'checkbox' as const,
+            group: 'mode' as const,
+            id: 'follow' as const,
+            label: TAKE_ACTIONS.follow,
+            checked: !followPaused,
+            select: () => onfollowtoggle?.(),
+          },
+        ]
+      : []),
     /*
      * IN A READING WINDOW, NAMED FOR WHAT IT DOES — WHICH IS NOT "FILL THE DISPLAY".
      *

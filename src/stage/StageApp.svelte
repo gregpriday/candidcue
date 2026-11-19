@@ -160,6 +160,14 @@
      */
     practice?: boolean;
     /**
+     * Whether this take listens at all (#243). False for a Read take, which
+     * opens no microphone and no recogniser: the dock then offers no "Follow
+     * voice" and the diagnostic transcript strip, which would only ever say
+     * "listening", is not drawn. Absent is true — a standalone stage window and
+     * an older host keep exactly what they had.
+     */
+    voiceInput?: boolean;
+    /**
      * "Show nothing", the host's own switch, mirrored the same way
      * `followPaused` is — directly, not through a directive, for the same
      * generation-0 reason.
@@ -686,6 +694,8 @@
    * second opinion could only ever disagree with it.
    */
   const followPaused = $derived(embedded ? (embedded.followPaused ?? false) : app.followPaused);
+  /** See `voiceInput` on the bridge. */
+  const voiceInput = $derived(embedded?.voiceInput ?? true);
   /**
    * A paused take holds a reading window's text still — see `takePaused` on the
    * bridge. Only the motion engine hears it: the hold chip and the dock read
@@ -2898,7 +2908,7 @@
         exactly what they were before, in different planes, parting company
         whenever anybody turned mirroring on.
       -->
-      {#if showDiagnostics && app.envelope !== null && !app.blanked && !dockPopoverOpen}
+      {#if showDiagnostics && voiceInput && app.envelope !== null && !app.blanked && !dockPopoverOpen}
         <div class="transcript-tap" class:silent={transcriptWords.length === 0}>
           <span class="transcript-tap-words">
             {transcriptWords.length > 0 ? transcriptWords : 'listening — no words yet'}
@@ -2953,7 +2963,7 @@
         readout={!app.blanked}
         revealed={dockVisible}
         {followPaused}
-        onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
+        onfollowtoggle={voiceInput ? () => sendIntent({ kind: 'toggle_follow' }) : undefined}
         presentationMode={embedded?.presentationMode ?? 'prompter'}
         onpresentationtoggle={embedded?.onpresentationtoggle}
         practice={embedded?.practice ?? false}

@@ -1357,6 +1357,21 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(lastAck()).toBe('Auto-scroll off');
   });
 
+  it('does not let the follow switch stop a Read take’s roll (#243)', async () => {
+    await startScript('manual');
+    toggleAutoScroll();
+    expect(get(session).autoScroll.running).toBe(true);
+
+    // The menu key and the stage's intent both arrive here; there is no voice
+    // to hand the script to, so the switch does nothing at all.
+    toggleVoiceFollow();
+
+    const s = get(session);
+    expect(s.autoScroll.running, 'the roll is still moving the script').toBe(true);
+    expect(s.voiceFollow).toBe(false);
+    expect(s.followPausedByUser).toBe(false);
+  });
+
   it('ignores an end report from a roll the voice has already taken over', async () => {
     await startScript();
     toggleAutoScroll();

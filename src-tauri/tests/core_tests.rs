@@ -685,7 +685,9 @@ async fn settings_defaults_patch_and_conflict() {
     .expect("update");
     assert_eq!(updated.revision, 2);
     assert_eq!(updated.value.stage_behavior.fixed_speed_wpm, 150);
-    assert_eq!(updated.value.stage_behavior.prompt_mode, "voice");
+    // A fresh profile opens takes in Read (#243), and an unrelated patch
+    // leaves that choice alone.
+    assert_eq!(updated.value.stage_behavior.prompt_mode, "manual");
 
     // Persistence roundtrip.
     let reloaded = settings::get_settings(&h.pool).await.unwrap();

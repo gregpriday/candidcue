@@ -3149,6 +3149,13 @@ export function toggleBlankStage(): void {
  */
 export function toggleVoiceFollow(): void {
   /*
+   * A Read take has no voice to follow (#243): nothing listens, so the switch
+   * would only move a flag — and turning it "on" would stop a running
+   * Auto-scroll, handing the script to a voice that is not there. The dock and
+   * the drawer do not offer it in that take; this covers the keys.
+   */
+  if (get(state).mode !== 'voice') return;
+  /*
    * Toggles the presenter's own switch, NOT `voiceFollow`.
    *
    * `voiceFollow` also goes false for an automatic hold, and toggling off that

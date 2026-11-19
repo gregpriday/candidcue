@@ -93,10 +93,16 @@ export type SessionMode = 'voice' | 'manual' | 'fixed';
  * 'fixed' reads as "Roll at pace" rather than "Fixed speed" so the summary, the
  * settings readout and the live control all name one thing one way. The stored
  * value is untouched — this is a display mapping, not a migration.
+ *
+ * 'manual' is Read (#243): a take that opens with no microphone and no speech
+ * model, moved by hand and by Auto-scroll. It keeps the stored value it always
+ * had — Rust's session command and the sessions table's CHECK both accept it,
+ * and every 'manual' row ever written was exactly that take — so naming it is
+ * the whole change.
  */
 export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
   voice: 'Follow voice',
-  manual: 'Manual',
+  manual: 'Read',
   fixed: 'Roll at pace',
 };
 

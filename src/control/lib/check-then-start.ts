@@ -24,7 +24,7 @@ import { isMicrophoneRefused, readMicrophonePermission } from '../services/micro
 import { describeError } from '../services/errors';
 import { showToast } from '../stores/toasts';
 import type { AppSettings, PresentationMode } from '../services/settings-types';
-import type { AudioDeviceInfo } from '../../shared/contracts';
+import type { AudioDeviceInfo, MicrophonePermission } from '../../shared/contracts';
 import { compiled } from '../stores/compiled';
 import { takeDestination } from '../stores/destination';
 import { editor } from '../stores/editor';
@@ -148,12 +148,23 @@ export async function resolveTakeReadiness(
   scriptId: string,
   intent: LaunchIntent = {},
 ): Promise<ReadinessVerdict> {
-  // Both passive: a device list and the OS's answer about access, neither of
-  // which can prompt (§28.1).
-  const [mic, micPermission] = await Promise.all([
-    pinnedMicrophone(),
-    readMicrophonePermission(),
-  ]);
+  /*
+   * Both passive: a device list and the OS's answer about access, neither of
+   * which can prompt (§28.1). And neither asked at all for a Read take (#243):
+   * it opens no microphone, so nothing about one is a finding, and a take that
+   * needs no microphone has no business enumerating inputs to launch.
+   *
+   * Read off the mode as it stands now; `startTake` reads it again when it
+   * loads the document, and that later answer is the one the take opens in.
+   */
+  const voiceTake = get(settings).general.defaultSessionMode === 'voice';
+  const [mic, micPermission]: [
+    Awaited<ReturnType<typeof pinnedMicrophone>>,
+    MicrophonePermission,
+  ] = voiceTake
+    ? await Promise.all([pinnedMicrophone(), readMicrophonePermission()])
+    : // `unsupported` is the answer that says nothing (see `ReadinessInput`).
+      [{ label: null, available: true }, 'unsupported'];
 
   /*
    * Everything else is read AFTER the await. The model's answer is live, and

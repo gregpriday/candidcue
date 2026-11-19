@@ -29,8 +29,15 @@
      * Unwired callers keep the old reading of the store flag.
      */
     heldByUser?: boolean;
+    /**
+     * Whether the take listens at all (#243). A Read take does not, so it has
+     * no voice to hold or to follow, and the switch between the two is not
+     * offered. The single steps and the assertion still are: they are how a
+     * Read take is moved by hand. Unwired callers keep the switch.
+     */
+    voiceInput?: boolean;
   }
-  let { follow, part = 'all', heldByUser }: Props = $props();
+  let { follow, part = 'all', heldByUser, voiceInput = true }: Props = $props();
 
   const userHold = $derived(heldByUser ?? follow.followingPaused);
 </script>
@@ -89,14 +96,16 @@
     under the buttons put the same sentence on screen twice.
   -->
   {#if part !== 'candidates'}
-    <div class="routine">
-      <Button
-        variant={follow.followingPaused && userHold ? 'primary' : 'default'}
-        title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
-        onclick={() => smoothFollow.toggleFollowingPaused()}
-      >
-        {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
-      </Button>
+    <div class="routine" class:no-voice={!voiceInput}>
+      {#if voiceInput}
+        <Button
+          variant={follow.followingPaused && userHold ? 'primary' : 'default'}
+          title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
+          onclick={() => smoothFollow.toggleFollowingPaused()}
+        >
+          {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
+        </Button>
+      {/if}
       <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
       <Button onclick={() => smoothFollow.nudge('back')}>{TAKE_ACTIONS.previousSentence}</Button>
       <Button onclick={() => smoothFollow.nudge('forward')}>{TAKE_ACTIONS.nextSentence}</Button>
@@ -116,6 +125,11 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
+  }
+  /* Three controls without the switch: the assertion takes the first row
+     whole, and the two steps keep their pair beneath it. */
+  .routine.no-voice > :global(:first-child) {
+    grid-column: 1 / -1;
   }
 
   .candidates {

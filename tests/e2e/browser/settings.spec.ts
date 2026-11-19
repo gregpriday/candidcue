@@ -600,30 +600,59 @@ test('measuring another rig opens the wizard on a new name, not the applied one'
   await expect(page.getByLabel('Rig name')).not.toHaveValue('Desk hood');
 });
 
-test('a session mode stored by an older build is admitted, not papered over', async ({ page }) => {
-  // `fromRustDocument` still accepts a persisted 'manual', and startTake passes
-  // it straight into the session — so a readout hardcoded to "Follow voice"
-  // would be the same defect one layer along, and removing the Select would
-  // have taken away the only way back.
-  await installTauriShim(page, { welcomed: true, promptMode: 'manual' });
+test('Session mode is a choice between Follow voice and Read (#243)', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
   await page.goto('/control.html');
   await openSettingsSection(page, 'General');
 
-  await expect(page.getByText('Manual', { exact: true })).toBeVisible();
-  // The way back is named in the readout's own vocabulary, in the sentence and
-  // on the button alike: "Switch to voice follow" leading to a value that reads
-  // "Follow voice" is two names for one mode.
+  const mode = page.getByLabel('Session mode');
+  await expect(mode).toHaveValue('voice');
   await expect(
     page.getByText(
-      'Saved by an earlier version. Takes in this mode do not follow your voice; ' +
-        'switch back to Follow voice to prompt normally.',
+      'Takes open listening, and the script follows your voice. Needs the speech data in ' +
+        'Settings › Speech and the microphone.',
       { exact: true },
     ),
   ).toBeVisible();
 
-  await page.getByRole('button', { name: 'Switch to Follow voice', exact: true }).click();
-  // The store changes before the save is awaited, so the readout alone would
-  // pass on a way back that never reached the backend.
+  await mode.selectOption('manual');
+  // The store changes before the save is awaited, so the select alone would
+  // pass on a choice that never reached the backend.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__E2E__.calls.some(
+          (c) =>
+            c.command === 'update_settings' &&
+            (c.args as { patch?: { stageBehavior?: { promptMode?: unknown } } }).patch
+              ?.stageBehavior?.promptMode === 'manual',
+        ),
+      ),
+    )
+    .toBe(true);
+  await expect(mode).toHaveValue('manual');
+  await expect(
+    page.getByText(
+      'Takes open without the microphone or speech data. Scroll by hand, or press A to ' +
+        'auto-scroll at the pace in Teleprompter › Auto-scroll pace.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  // Only the two modes a take can open in; no permanently disabled rows.
+  await expect(mode.locator('option')).toHaveText(['Follow voice', 'Read']);
+  await expect(page.getByText(/not available in this release/)).toHaveCount(0);
+});
+
+test('Speech offers voice following once the data is installed and takes open in Read (#243)', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true, promptMode: 'manual' });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Speech');
+
+  const turnOn = page.getByRole('button', { name: 'Follow my voice in takes', exact: true });
+  await expect(turnOn).toBeVisible();
+  await turnOn.click();
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -636,28 +665,44 @@ test('a session mode stored by an older build is admitted, not papered over', as
       ),
     )
     .toBe(true);
-  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Saved by an earlier version/)).toHaveCount(0);
+  await expect(turnOn).toHaveCount(0);
 });
 
-test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
-  await installTauriShim(page, { welcomed: true });
+test('a session mode stored by an older build is admitted, not papered over', async ({ page }) => {
+  // `fromRustDocument` still accepts a persisted 'fixed', and startTake passes
+  // it straight into the session — so a select that showed "Follow voice" or
+  // "Read" over it would describe a state the app is not in.
+  await installTauriShim(page, { welcomed: true, promptMode: 'fixed' });
   await page.goto('/control.html');
   await openSettingsSection(page, 'General');
 
-  await expect(page.getByText('Session mode', { exact: true })).toBeVisible();
-  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  // The dropdown is gone, and with it the two permanently disabled rows.
-  await expect(page.getByLabel('Default session mode')).toHaveCount(0);
-  await expect(page.getByText(/not available in this release/)).toHaveCount(0);
-  // It says where the pace actually lives — Teleprompter, not "below" in General.
+  const mode = page.getByLabel('Session mode');
+  await expect(mode).toHaveValue('fixed');
   await expect(
     page.getByText(
-      'Every take opens listening. Auto-scroll can still roll the script at a set pace ' +
-        '(Teleprompter › Auto-scroll pace).',
+      'Saved by an earlier version. Takes in this mode do not follow your voice; ' +
+        'choose Follow voice or Read.',
       { exact: true },
     ),
   ).toBeVisible();
+
+  await mode.selectOption('voice');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__E2E__.calls.some(
+          (c) =>
+            c.command === 'update_settings' &&
+            (c.args as { patch?: { stageBehavior?: { promptMode?: unknown } } }).patch
+              ?.stageBehavior?.promptMode === 'voice',
+        ),
+      ),
+    )
+    .toBe(true);
+  await expect(mode).toHaveValue('voice');
+  await expect(page.getByText(/Saved by an earlier version/)).toHaveCount(0);
+  // Nothing offers the earlier version's mode once it has been replaced.
+  await expect(mode.locator('option')).toHaveText(['Follow voice', 'Read']);
 });
 
 test('Following drops the dead Script fidelity control', async ({ page }) => {

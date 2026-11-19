@@ -313,10 +313,10 @@ test('general', async ({ page }) => {
   await fold(page, 'general--smallest');
 });
 
-test('general: a mode saved by an older build', async ({ page }) => {
+test('general: Read mode', async ({ page }) => {
   await boot(page, { shim: { promptMode: 'manual' } }, null);
-  await expect(page.getByRole('button', { name: /^Switch to/ })).toBeVisible();
-  await fold(page, 'general-legacy-mode');
+  await expect(page.getByLabel('Session mode')).toHaveValue('manual');
+  await fold(page, 'general-read-mode');
 });
 
 /* ---------------------------------------------------------------- Speech */

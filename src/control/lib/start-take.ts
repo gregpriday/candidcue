@@ -721,7 +721,13 @@ export async function startTake(
     sessionId = record.id;
 
     const assets = await resolveDocumentAssets(compiled.script);
-    const micDeviceId = await resolvePinnedMicrophone(s);
+    /*
+     * Only a voice take opens a microphone, so only a voice take resolves the
+     * pin (#243). A Read take must not list inputs, nor toast that a pinned
+     * microphone is missing over a take that was never going to use it.
+     */
+    const micDeviceId =
+      s.general.defaultSessionMode === 'voice' ? await resolvePinnedMicrophone(s) : undefined;
 
     /*
      * ------------------------------------------------------------------------

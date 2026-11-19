@@ -244,6 +244,34 @@ describe('checkThenStartTake', () => {
     expect(get(takeReadinessPrompt)).toBeNull();
   });
 
+  it('launches a Read take with no model, a refused microphone and a missing pin, without asking about any of them (#243)', async () => {
+    pinYeti();
+    settingsDoc.update((s) => ({
+      ...s,
+      general: { ...s.general, defaultSessionMode: 'manual' },
+    }));
+    model.set(MISSING);
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    // A named list without the pinned input: a voice take would report it.
+    h.listMicrophones.mockResolvedValue([{ ...YETI, deviceId: 'other', label: 'Built-in' }]);
+
+    await checkThenStartTake('script-1');
+
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(get(takeReadinessPrompt)).toBeNull();
+    // Not asked at all, rather than asked and ignored.
+    expect(h.listMicrophones).not.toHaveBeenCalled();
+    expect(h.readMicrophonePermission).not.toHaveBeenCalled();
+  });
+
+  it('still reports the microphone to a voice take on the same setup', async () => {
+    pinYeti();
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    await checkThenStartTake('script-1');
+    expect(h.readMicrophonePermission).toHaveBeenCalled();
+    expect(findingIds()).toContain('mic_permission_denied');
+  });
+
   it('checks a practice like a take, and resumes it as a practice', async () => {
     model.set(MISSING);
     await checkThenStartTake('script-1', { practice: true });

@@ -2002,6 +2002,9 @@ import { onShortcut } from '../lib/shortcuts';
          * practice — the window is how it opens, not what it is.
          */
         practice: $session.practice,
+        // A Read take (#243) listens to nothing, so the stage offers nothing
+        // that would follow a voice.
+        voiceInput: $session.mode === 'voice',
         /*
          * Already confirmed, so it does not go through `requestEndSession`.
          * The stage raises this from two gestures and both have asked: the
@@ -2186,7 +2189,7 @@ import { onShortcut } from '../lib/shortcuts';
         "raw alignment and performance details behind disclosure".
       -->
       <p class="region-label">Following</p>
-      <FollowControls follow={$smoothFollow} />
+      <FollowControls follow={$smoothFollow} voiceInput={$session.mode === 'voice'} />
 
       <Disclosure label="Follow diagnostics">
         <FollowDiagnostics
@@ -2511,7 +2514,12 @@ import { onShortcut } from '../lib/shortcuts';
         onnoticeaction={handleNoticeAction}
       />
 
-      <FollowControls follow={$smoothFollow} part="routine" heldByUser={$session.followPausedByUser} />
+      <FollowControls
+        follow={$smoothFollow}
+        part="routine"
+        heldByUser={$session.followPausedByUser}
+        voiceInput={$session.mode === 'voice'}
+      />
 
       {@render stageFaultNotice()}
 

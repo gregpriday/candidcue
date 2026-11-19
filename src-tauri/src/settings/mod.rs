@@ -645,6 +645,25 @@ fn migrate_in_place(settings: &mut AppSettings) {
     }
 }
 
+/// The document a profile with no settings row starts from.
+///
+/// `AppSettings::default()` with one difference: takes open in Read
+/// (`'manual'`, #243). Turning voice following on is a choice the presenter
+/// makes in Settings, so a new install can put a script on the prompter and
+/// scroll it before it has downloaded a speech model or asked for the
+/// microphone.
+///
+/// Deliberately NOT the field's `Default`. That default is also what serde
+/// fills in for a document written before the field existed, and every such
+/// document belongs to somebody whose takes have always followed their voice;
+/// changing it would switch their takes off under them. Only a row this
+/// function writes starts in Read.
+pub fn first_run_settings() -> AppSettings {
+    let mut value = AppSettings::default();
+    value.stage_behavior.prompt_mode = "manual".into();
+    value
+}
+
 pub async fn get_settings(pool: &SqlitePool) -> Result<RevisionedSettings, AppError> {
     let row: Option<(String, i64)> =
         sqlx::query_as("SELECT value_json, revision FROM settings WHERE key = ?")
@@ -658,7 +677,7 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<RevisionedSettings, AppEr
             Ok(RevisionedSettings { revision, value })
         }
         None => {
-            let value = AppSettings::default();
+            let value = first_run_settings();
             let json = serde_json::to_string(&value)
                 .map_err(|e| AppError::Internal(format!("settings serialize: {e}")))?;
             sqlx::query(
@@ -1157,6 +1176,31 @@ mod tests {
     /// The Listener is gone; the merge behaviour it was covering is not, so
     /// the test moved to a field that still exists rather than leaving with it.
     /// (It moved again when `blankColor` went with #219.)
+    /// A new profile opens takes in Read (#243); a document that already
+    /// exists, including one written before `promptMode` did, keeps voice.
+    #[test]
+    fn only_a_first_run_document_starts_in_read() {
+        let fresh = first_run_settings();
+        assert_eq!(fresh.stage_behavior.prompt_mode, "manual");
+        assert_eq!(
+            AppSettings {
+                stage_behavior: StageBehaviorSettings {
+                    prompt_mode: "voice".into(),
+                    ..fresh.stage_behavior.clone()
+                },
+                ..fresh.clone()
+            },
+            AppSettings::default(),
+            "the session mode is the only thing a first run changes"
+        );
+
+        let older: AppSettings =
+            serde_json::from_value(serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 140 } }))
+                .expect("deserializes");
+        assert_eq!(older.stage_behavior.prompt_mode, "voice");
+        assert!(validate(&fresh).is_ok());
+    }
+
     #[test]
     fn a_null_patch_value_restores_a_fields_default() {
         let mut base = serde_json::to_value(AppSettings {
