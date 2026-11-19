@@ -1,4 +1,5 @@
 import { chromium, expect, type Browser } from '@playwright/test';
+import { openScript } from './library';
 import { installTauriShim } from './tauri-shim';
 
 /**
@@ -62,15 +63,18 @@ async function compileOnce(browser: Browser): Promise<void> {
      * Present opens a real take now — a session record, microphone transport
      * and fullscreen presentation — which is a great deal of machinery to run
      * for a warm-up. The editor reaches the same worker import and stops there.
+     *
+     * Through the Library's own row helper, too. A locator spelled out here
+     * once matched the row's "Actions for Dependency warm-up" button instead
+     * of the row: double-clicking that opens no editor, so every attempt timed
+     * out and the warm-up never ran, silently, behind ninety seconds of waits.
      */
-    await page
-      .getByRole('listbox')
-      .getByRole('button', { name: /Dependency warm-up/ })
-      .first()
-      .dblclick();
-    // The worker's own result line: it appears only once the compile chain has
-    // loaded and returned, which is the thing being waited for.
-    await expect(page.getByText('Ready to present.')).toBeVisible({ timeout: 30_000 });
+    await openScript(page, WARMUP_SCRIPT.title);
+    // The editor's clean-compile line: it appears only once the compile chain
+    // has loaded and returned, which is the thing being waited for. Its wording
+    // depends on whether a speech model is installed, which is not this hook's
+    // business.
+    await expect(page.getByText(/Ready to present\.|The script is ready\./)).toBeVisible({ timeout: 30_000 });
     // Let any optimizer-triggered reload land and settle before we leave.
     await page.goto('/control.html');
     await page.waitForLoadState('networkidle');
