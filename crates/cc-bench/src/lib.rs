@@ -12,6 +12,7 @@ pub mod passgold;
 pub mod perceptual;
 pub mod plan;
 pub mod projection;
+pub mod provenance;
 pub mod replay;
 pub mod report;
 pub mod robustness;

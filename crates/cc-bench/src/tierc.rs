@@ -38,6 +38,11 @@ pub struct TierCResult {
     /// `table` cannot stand in for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scoring: Option<ScoringTable>,
+    /// What produced this result, including every layout exactly as rendered
+    /// — `focus_lead_atoms` too, which the layout NAME does not carry. `None`
+    /// on results saved before it existed; see `SuiteResult::provenance`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Provenance>,
 }
 
 /// The Tier C rows the language gate reads, from one set of runs at the
@@ -233,7 +238,14 @@ pub fn run_tier_c(
 
     // The synthetic corpus is not a language's evidence, so it carries no
     // scoring table and the gate refuses it.
-    Ok(finish(label, config, runs, headline, pools))
+    let mut result = finish(label, config, runs, headline, pools);
+    result.provenance = Some(crate::provenance::Provenance::of_replay(
+        crate::provenance::Source::Synthetic,
+        false,
+        layouts,
+        Default::default(),
+    ));
+    Ok(result)
 }
 
 /// Tier C over captured live fixtures — the same stage model, real recogniser
@@ -258,14 +270,22 @@ pub fn run_tier_c_captured(
         .collect();
     dirs.sort();
     anyhow::ensure!(!dirs.is_empty(), "no captured runs in {}", runs_dir.display());
+    let mut captures = std::collections::BTreeMap::new();
+    let mut scripts = std::collections::BTreeMap::new();
 
     for dir in dirs {
         let manifest: RunManifest =
             serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+        let capture = crate::provenance::read_capture(&dir, &manifest.name)?;
+        crate::provenance::insert_run(&mut captures, &manifest.name, capture)?;
         let gold: GoldTimeline =
             serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
         let events = crate::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
         let source = std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+        scripts.insert(
+            manifest.name.clone(),
+            crate::provenance::script_digest(&source),
+        );
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
         if let Some(captured) = manifest.atom_count {
             anyhow::ensure!(
@@ -294,6 +314,13 @@ pub fn run_tier_c_captured(
     }
 
     let mut result = finish(label, config, runs, headline, pools);
+    // Tier C compiles scripts the ordinary way only; it has no app-token path.
+    result.provenance = Some(crate::provenance::Provenance::of_replay(
+        crate::provenance::Source::Captured { runs: captures },
+        false,
+        layouts,
+        scripts,
+    ));
     // The gate's rows again, over the scoring fixtures alone.
     let core: Vec<&PerceptualMetrics> = result
         .runs
@@ -950,7 +977,24 @@ fn finish(
         runs,
         by_layout,
         scoring: None,
+        provenance: None,
     }
+}
+
+/// The stage as it ships: the headline layout with no focus lead.
+///
+/// The sweep's presets carry `focus_lead_atoms: 3.0`, a reading corridor that
+/// exists only in this harness, so the as-shipped rig is the 60 Hz preset with
+/// that lead taken back out — what `--layouts 60hz --focus-lead 0` renders.
+/// The language gate compares a Tier C result's recorded layout against this
+/// field for field, because the NAME `60hz` is the same either way.
+pub fn shipped_headline_layout() -> Layout {
+    let mut layout = default_layouts()
+        .into_iter()
+        .find(|l| l.name == HEADLINE_LAYOUT)
+        .expect("the headline layout is one of the presets");
+    layout.focus_lead_atoms = 0.0;
+    layout
 }
 
 /// Default layout sweep.

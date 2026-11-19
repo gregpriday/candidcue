@@ -67,6 +67,11 @@ pub struct SuiteResult {
     /// `table` is aggregated over every fixture including the diagnostics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scoring: Option<ScoringTable>,
+    /// What produced this result: language, recogniser, build. `None` on every
+    /// result saved before it existed — those still load, and the language
+    /// gate refuses them as lacking provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Provenance>,
 }
 
 /// Gate rows aggregated over the scoring fixtures only.
@@ -231,6 +236,12 @@ pub fn run_tier_a(
         table,
         runs,
         scoring: None,
+        provenance: Some(crate::provenance::Provenance::of_replay(
+            crate::provenance::Source::Synthetic,
+            false,
+            &[],
+            Default::default(),
+        )),
     })
 }
 
@@ -808,16 +819,25 @@ pub fn run_tier_b(
         .collect();
     dirs.sort();
     anyhow::ensure!(!dirs.is_empty(), "no captured runs in {}", runs_dir.display());
+    let app_tokens = std::env::var("CC_BENCH_APP_TOKENS").is_ok();
+    let mut captures = std::collections::BTreeMap::new();
+    let mut scripts = std::collections::BTreeMap::new();
 
     for dir in dirs {
         let manifest: RunManifest =
             serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+        let capture = crate::provenance::read_capture(&dir, &manifest.name)?;
+        crate::provenance::insert_run(&mut captures, &manifest.name, capture)?;
         let gold: GoldTimeline =
             serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
         let events = read_events_jsonl(&dir.join("events.jsonl"))?;
         let performance_text = std::fs::read_to_string(dir.join("performance.txt"))?;
         let source =
             std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+        scripts.insert(
+            manifest.name.clone(),
+            crate::provenance::script_digest(&source),
+        );
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
         if let Some(captured) = manifest.atom_count {
             anyhow::ensure!(
@@ -837,7 +857,7 @@ pub fn run_tier_b(
         // `CC_BENCH_APP_TOKENS=1`: compile the script the way a take does and
         // score against gold mapped into that compile's atoms. See
         // `crate::app_tokens` for why the two compiles differ.
-        let (script, gold) = if std::env::var("CC_BENCH_APP_TOKENS").is_ok() {
+        let (script, gold) = if app_tokens {
             let app = crate::app_tokens::compile_like_app(
                 &source,
                 cc_align::CompileOptions::default(),
@@ -1050,6 +1070,12 @@ pub fn run_tier_b(
         table,
         runs,
         scoring: Some(scoring),
+        provenance: Some(crate::provenance::Provenance::of_replay(
+            crate::provenance::Source::Captured { runs: captures },
+            app_tokens,
+            &[],
+            scripts,
+        )),
     })
 }
 

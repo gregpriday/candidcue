@@ -71,6 +71,20 @@ pub struct ModelFiles {
     pub bpe_vocab: Option<String>,
 }
 
+impl ModelFiles {
+    /// Every file in the model directory the recogniser reads, by name.
+    pub fn loaded_files(&self) -> Vec<&str> {
+        let mut files = vec![
+            self.encoder.as_str(),
+            self.decoder.as_str(),
+            self.joiner.as_str(),
+            TOKENS_FILE,
+        ];
+        files.extend(self.bpe_vocab.as_deref());
+        files
+    }
+}
+
 /// Which precision to take when a bundle ships a role at both.
 ///
 /// Per role rather than per bundle, because the right answer differs by role
@@ -269,7 +283,11 @@ fn role_of_name(name: &str) -> Option<&'static str> {
 /// zero for all three (see `OnlineRecognizerConfig::default`), which disables
 /// the rules rather than applying the documented values, so they must be set
 /// explicitly or `enable_endpoint` silently does nothing.
-#[derive(Debug, Clone)]
+///
+/// Serialisable because a benchmark capture records the exact config its
+/// recogniser was loaded with (`cc-bench`'s `capture.json`): a number is only
+/// evidence about a recogniser if the file says how that recogniser was set.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LocalSttConfig {
     /// Directory holding the four files in [`MODEL_FILES`].
     pub model_dir: PathBuf,
