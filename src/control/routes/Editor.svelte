@@ -42,7 +42,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { scriptActionLabels } from '../lib/script-action-labels';
   import { presentMenuItems, type PresentMenuItem } from '../lib/present-menu';
-  import { PRACTICE_LABEL } from '../../shared/take-vocabulary';
+  import { NOUNS, PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
   import { startMenuItems } from '../lib/present-menu';
@@ -839,6 +839,29 @@ import type { PresentationMode } from '../services/settings-types';
       : $takeDestination
         ? destinationAnnouncement($takeDestination)
         : '',
+  );
+
+  /*
+   * The shape the main click opens, by its own name (#412).
+   *
+   * Whatever was last chosen from the Present menu, which may have been days
+   * ago — and a toolbar too narrow for the whole destination line used to say
+   * nothing at all, so the only way to know was to open the menu and look for
+   * the tick. Read from the setting rather than from the resolved destination,
+   * so it is on the glass before the displays have been asked about.
+   */
+  const presentModeNoun = $derived(
+    $settings.stage.presentationMode === 'reader' ? NOUNS.reader : NOUNS.prompter,
+  );
+
+  /*
+   * The readout beside Present steps aside, at every width, while a failed
+   * save or a conflict stands in the toolbar's status slot — its words already
+   * cost the title its room — and while the stage is opening, when Present's
+   * own label grows and the destination can no longer be chosen anyway.
+   */
+  const presentReadoutYields = $derived(
+    $editor.saveState === 'error' || $editor.saveState === 'conflict' || $takeStarting,
   );
 
   const VOICE_REMEDY: Record<string, string> = {
@@ -2398,7 +2421,7 @@ import type { PresentationMode } from '../services/settings-types';
             its own, says it, and this stays quiet rather than say it twice.
           -->
           <span class="sr-only" role="status" aria-live="polite">{presentStatusAnnouncement}</span>
-          <div class="present-status">
+          <div class="present-status" class:yield={presentReadoutYields}>
             {#if voiceModelProblem}
               {@const problem = voiceModelProblem}
               {@const section = problem.action?.settingsSection ?? 'speech'}
@@ -2439,6 +2462,25 @@ import type { PresentationMode } from '../services/settings-types';
                 </span>
               </p>
             {/if}
+            <!--
+              THE SHAPE ALONE, for a toolbar with no room for the whole line
+              (#412). Hidden by default and revealed by the container queries
+              at the foot of the styles, so a narrow bar — or an engine without
+              size queries — drops it whole rather than clipping it.
+
+              Silent to a screen reader while the live region above is saying
+              the destination, which already starts with the shape; heard as
+              plain text beside the voice warning, which the region says
+              instead.
+            -->
+            <span
+              class="present-mode"
+              class:mismatch={$takeDestination?.mismatch != null}
+              title={$takeDestination
+                ? ($takeDestination.mismatch?.detail ?? $takeDestination.summary)
+                : undefined}
+              aria-hidden={!voiceModelProblem && $takeDestination ? 'true' : undefined}
+            >{presentModeNoun}</span>
           </div>
           <SplitButton
             variant="primary"
@@ -3543,7 +3585,7 @@ import type { PresentationMode } from '../services/settings-types';
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    width: 34ch;
+    gap: var(--space-1);
     min-width: 0;
     font-size: var(--text-2xs);
   }
@@ -3555,14 +3597,16 @@ import type { PresentationMode } from '../services/settings-types';
    * presses Present, and at that moment they look for it.
    */
   .present-destination {
+    /* Revealed by the toolbar's width — see the queries at the foot. */
+    display: none;
     margin: 0;
     font-size: var(--text-2xs);
     line-height: 1.3;
     color: var(--text-muted);
     text-align: right;
     /* Wide enough for "Teleprompter · Built-in Retina Display" without an
-       ellipsis on a normal window; the media query below drops it entirely
-       rather than letting it shrink to a stub. */
+       ellipsis on a normal window; the queries below drop it entirely rather
+       than letting it shrink to a stub. */
     max-width: 34ch;
     min-width: 0;
   }
@@ -3580,6 +3624,33 @@ import type { PresentationMode } from '../services/settings-types';
    */
   .present-destination.mismatch {
     color: var(--warning);
+  }
+
+  /*
+   * The shape alone (#412): the destination line's first words, in its voice,
+   * for a toolbar with no room for the rest. Never shrunk — `flex: none` and
+   * no ellipsis, because "Telepr…" reads as a fault. It is revealed only at
+   * widths where it fits whole.
+   */
+  .present-mode {
+    display: none;
+    flex: none;
+    white-space: nowrap;
+    font-size: var(--text-2xs);
+    line-height: 1.3;
+    color: var(--text-muted);
+  }
+  .present-mode.mismatch {
+    color: var(--warning);
+  }
+  /* Steps aside for a save issue or a launch (`presentReadoutYields`). The
+     voice warning stays: it is the thing to fix before a take. */
+  .present-status.yield {
+    width: auto;
+  }
+  .present-status.yield .present-destination,
+  .present-status.yield .present-mode {
+    display: none;
   }
 
   /*
@@ -3611,7 +3682,14 @@ import type { PresentationMode } from '../services/settings-types';
   }
   /* The app's inline-link mark, in the warning's colour: a quiet underline
      that firms on hover (Welcome's `.link`, the toasts' actions). */
+  /* Collapsed to the glyph by default — the words go to the tooltip and the
+     accessible name, which is the whole detail — and opened by the wide query
+     at the foot. */
   .present-voice-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip: rect(0, 0, 0, 0);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3644,34 +3722,93 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /*
-   * The destination is the first thing to go when the toolbar runs out of room.
+   * WHAT STANDS BESIDE PRESENT, BY THE TOOLBAR'S OWN WIDTH (#412).
    *
-   * §21.3: collapse optional things before compressing the core. Present is the
-   * core; a line naming the panel is a convenience, and a squeezed one that
-   * shows "Telepr…" is worse than none — it looks like a fault rather than a
-   * readout. The readiness sheet still carries it at any width.
+   * §21.3: collapse optional things before compressing the core. The script's
+   * title and Present are the core and keep their room at every width; a
+   * readout is optional, and a squeezed one that shows "Telepr…" is worse than
+   * none — it looks like a fault rather than a readout. So each step below is
+   * taken only where its whole text fits beside a title at its full width.
    *
-   * Not even the shape alone, which was tried: at the 980px minimum "Reading
-   * window" costs the script title 35px, and the toolbar's actions never give
-   * up room (Toolbar.svelte), so a sixteen-character title was clipped
-   * mid-word. Inside the Present menu the tick and "same as clicking Present"
-   * answer the question at every width.
+   * The toolbar's width, not the window's: the sidebar (180–360px, or hidden)
+   * and the macOS traffic-light inset both come out of the bar, and a window
+   * breakpoint saw neither. At 1101px with the default sidebar the whole line
+   * came back in its 34ch slot and cut "Recording lesson" to 73px.
+   *
+   * Measured in Chromium with the default sidebar (`present-mode-readout.spec.ts`),
+   * the bar's content box is about 715px at the 980px minimum window:
+   *
+   *   ≥ 961px   the whole destination line, in its fixed 34ch slot;
+   *   704–960   the shape alone, "Teleprompter" or "Reading window";
+   *   ≤ 795     …and the bar pays for it (below);
+   *   < 704     nothing — a 360px sidebar at the minimum window leaves nothing
+   *             rigid to pay with. Inside the Present menu the tick and "same
+   *             as clicking Present" answer the question at every width.
+   *
+   * The thresholds keep 15–25px in hand for wider platform fonts. Hidden is
+   * the default and the queries reveal, so an engine without size queries
+   * shows nothing rather than squeezing the title.
    */
-  @media (max-width: 1100px) {
+  @container toolbar (min-width: 704px) {
+    .present-mode {
+      display: block;
+    }
+    /* The shape follows the warning glyph, so the glyph keeps its padding
+       rather than tucking into Present. */
+    .present-voice {
+      margin-right: 0;
+    }
+  }
+  @container toolbar (min-width: 961px) {
+    .present-status {
+      width: 34ch;
+    }
     .present-destination {
+      display: block;
+    }
+    .present-mode {
       display: none;
     }
-    .present-status {
-      width: auto;
+    .present-voice {
+      margin-right: -6px;
     }
-    /* The warning keeps its glyph at any width; the words go to the tooltip
-       and the accessible name, which is the whole detail. */
     .present-voice-text {
+      position: static;
+      width: auto;
+      height: auto;
+      clip: auto;
+    }
+  }
+
+  /*
+   * Where the shape costs the title room, the bar's spacing pays instead —
+   * about 90px, against the ~80px "Reading window" needs — and the spacing
+   * the toolbar row itself owns (its 12px gaps) is left alone.
+   *
+   *   - "‹ Library" becomes its chevron, the back affordance every narrow
+   *     toolbar settles on; the word is hidden visually, so it is still the
+   *     button's name;
+   *   - the actions close up from 8px to 4px;
+   *   - the spacer gives up its 8px floor (the row's own gaps still part the
+   *     title from the actions);
+   *   - Edit / Preview / Both lose 4px a side.
+   *
+   * Through the knobs Toolbar and SegmentedControl publish, set on the bar's
+   * children: a container query cannot restyle the container itself.
+   */
+  @container toolbar (max-width: 795px) {
+    .page :global(.toolbar > *) {
+      --toolbar-actions-gap: var(--space-1);
+      --toolbar-spacer-min: 0px;
+      --segment-pad-x: var(--space-2);
+    }
+    .page :global(.toolbar .back-label) {
       position: absolute;
       width: 1px;
       height: 1px;
       overflow: hidden;
       clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
     }
   }
 </style>

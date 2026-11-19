@@ -94,7 +94,8 @@
     background: transparent;
     color: var(--text-secondary);
     height: var(--control-h-sm);
-    padding: 0 var(--space-3);
+    /* `--segment-pad-x` lets a crowded toolbar close the segments up (#412). */
+    padding: 0 var(--segment-pad-x, var(--space-3));
     border-radius: 7px;
     font-size: var(--text-sm);
     font-weight: 600;
