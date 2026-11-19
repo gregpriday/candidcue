@@ -26,14 +26,18 @@ name: Release (macOS)
 #   APPLE_API_ISSUER           the key's issuer UUID
 #   APPLE_API_KEY_ID           the key id
 #
-# Until they exist this workflow fails at the signing step, which is the
-# correct behaviour: an unsigned build is not a release, and a workflow that
-# quietly produced one would be worse than no workflow.
+# Until they exist this workflow fails in its gates, naming every one that is
+# missing, before a single test runner or build starts — dry runs included.
+# That is the correct behaviour: an unsigned build is not a release, and a
+# workflow that quietly produced one would be worse than no workflow.
 #
-# The updater signing key (`TAURI_SIGNING_PRIVATE_KEY` and its password) and
-# the R2 credentials (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-# `R2_ENDPOINT`, `SPEAKING_GLASS_R2_BUCKET`) are shared with the other two release
-# workflows, as is the `SPEAKING_GLASS_PUBLIC_URL` repository variable.
+# The updater signing key (`TAURI_SIGNING_PRIVATE_KEY`, checked in the same
+# gate, and its password, which may be empty) and the R2 credentials
+# (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`,
+# `SPEAKING_GLASS_R2_BUCKET`, checked by the publish job, which is the only one
+# that can see secrets kept on its environment) are shared with the other two
+# release workflows, as is the optional `SPEAKING_GLASS_PUBLIC_URL` repository
+# variable. `scripts/release-credentials.mjs` is the list.
 #
 # ## Read-only builds, a separate job that publishes
 #
@@ -140,6 +144,22 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}" --check
 
+      # Before anything is built, and by name. GitHub hands a workflow an
+      # empty string for a secret that does not exist, and each one would
+      # otherwise surface as some tool's error at the end of a long build.
+      # Dry runs too: there is no unsigned fallback, because a dry run exists
+      # to prove the signing a release depends on (release-credentials.mjs).
+      - name: Every signing credential must be present
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/release-credentials.mjs build macos
+
       - name: Completeness, versions and the native licence review
         run: >
           node scripts/release-verify.mjs
@@ -147,6 +167,8 @@ jobs:
 
   frontend:
     name: Frontend (typecheck, node, dom)
+    # Not one runner on a run whose gates already refused it.
+    needs: gates
     runs-on: macos-15
     permissions:
       contents: read
@@ -170,6 +192,8 @@ jobs:
 
   rust:
     name: Rust (${{ matrix.workspace }})
+    # Not one runner on a run whose gates already refused it.
+    needs: gates
     runs-on: macos-15
     permissions:
       contents: read
@@ -211,6 +235,8 @@ jobs:
 
   browser:
     name: Browser journeys
+    # Not one runner on a run whose gates already refused it.
+    needs: gates
     runs-on: macos-15
     permissions:
       contents: read
@@ -351,10 +377,10 @@ jobs:
           # Named for what it holds so it cannot be confused with
           # APPLE_API_KEY, which Tauri expects to be the key ID.
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY }}
-          # The updater payload's signature. `tauri build` exits 0 and writes
-          # no .sig at all when these are missing; `release-feed.mjs stage`
-          # refuses that, and verifies the signature against the key the app
-          # ships with.
+          # The updater payload's signature. The gates refuse a missing key
+          # before anything is built; `release-feed.mjs stage` refuses a
+          # payload with no .sig, and verifies the signature against the key
+          # the app ships with.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # ------------------------------------------------------------

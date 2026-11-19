@@ -129,9 +129,51 @@ same `v*` tag starts all three. Each is a full vertical slice (gates, tests,
 build, inspection, R2, GitHub Release) and publishes the moment its own
 pipeline is green, so a failing Windows run never strands a good macOS build.
 
+### The credentials, by name
+
+Every credential is a secret you add by hand; none is in the repository.
+`scripts/release-credentials.mjs` is the list, and each workflow checks it
+before it spends anything, naming every secret that is missing at once:
+
+| Secret | Holds | Needed by | Checked |
+|---|---|---|---|
+| `APPLE_CERTIFICATE` | the Developer ID Application `.p12`, base64 | macOS | Gates |
+| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password | macOS | Gates |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <Name> (<TEAM ID>)` | macOS | Gates |
+| `APPLE_API_KEY` | the App Store Connect API key `.p8`, base64 | macOS | Gates |
+| `APPLE_API_KEY_ID` | that key's ID | macOS | Gates |
+| `APPLE_API_ISSUER` | that key's issuer UUID | macOS | Gates |
+| `TAURI_SIGNING_PRIVATE_KEY` | the updater private key matching `plugins.updater.pubkey` | all three | Gates |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password; leave unset for a key made without one | all three | by the signing itself |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | an R2 API token that can write the bucket | publishing | Publish |
+| `R2_ENDPOINT` | the account's R2 S3 endpoint | publishing | Publish |
+| `SPEAKING_GLASS_R2_BUCKET` | the bucket the public origin serves | publishing | Publish |
+
+The signing secrets are checked in each workflow's `Gates` job, and every test
+runner and build waits for it, so a missing one fails the run in a minute or
+two rather than at the end of a build. Dry runs are no exception: there is no
+unsigned fallback, because proving the signing is what a dry run is for (CI
+already builds and inspects every unsigned package). Keep the signing secrets
+at repository level; the build jobs name no environment, so they cannot see
+environment secrets.
+
+The R2 secrets are checked as the first step of each `publish` job instead,
+because that is the only job that names the `release-stable` /
+`release-prerelease` environment, and so the only one that can see R2 secrets
+kept there. A tag pushed without them builds, stages and then stops before
+publishing anything; add them and re-run only the failed `publish` job. The
+`SPEAKING_GLASS_PUBLIC_URL` repository variable is optional: unset, the feed
+uses `https://updates.speakingglass.com`.
+
+### The dry run
+
 Dispatch each one against `develop` with `dry_run` ticked (the default). They
 build, sign where they sign, inspect and stage the release, and the `publish`
-jobs do not run.
+jobs do not run. A dry run is not entirely private: on macOS it submits the
+app and the disk image to Apple's notary service, and on every OS it uploads
+the staged release to GitHub Actions artifact storage for 90 days. It writes
+nothing to R2 and creates no GitHub Release, so it proves nothing about the
+R2 secrets.
 
 ```bash
 for os in macos windows linux; do
