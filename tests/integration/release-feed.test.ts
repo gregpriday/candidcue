@@ -274,10 +274,15 @@ function fakeFetch(routes: Record<string, Route | (() => Route)>) {
 const quiet = { log: () => {}, attempts: 2, delayMs: 0 };
 
 /** `routes` with the one at `url` served under `cacheControl` (none when undefined). */
-function withHeader(routes: Record<string, Route>, url: string, cacheControl: string | undefined) {
+function withHeader(
+  routes: Record<string, Route>,
+  url: string,
+  cacheControl: string | undefined,
+): Record<string, Route> {
   const route = routes[url];
   if (!route) throw new Error(`no route for ${url}`);
-  return { ...routes, [url]: { ...route, headers: cacheControl === undefined ? {} : { 'cache-control': cacheControl } } };
+  const headers: Record<string, string> = cacheControl === undefined ? {} : { 'cache-control': cacheControl };
+  return { ...routes, [url]: { ...route, headers } };
 }
 
 describe('the monotonic gate', () => {
