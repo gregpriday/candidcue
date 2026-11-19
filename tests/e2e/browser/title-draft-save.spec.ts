@@ -115,7 +115,9 @@ test('the save shortcut typed in the title field writes the title being typed', 
   const errors = watchPageErrors(page);
   await typeTitle(page, 'Renamed rehearsal');
 
-  await titleField(page).press('ControlOrMeta+s');
+  // Control, not ControlOrMeta: Playwright's Desktop Chrome device reports a
+  // Windows user agent on every host, so the page's primary modifier is Ctrl.
+  await titleField(page).press('Control+s');
 
   await expect.poll(() => persistedTitle(page)).toBe('Renamed rehearsal');
   await expect(titleField(page)).toBeFocused();
