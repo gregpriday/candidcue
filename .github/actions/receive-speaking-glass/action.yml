@@ -18,6 +18,10 @@ inputs:
     description: Where to put it, relative to the workspace
     required: false
     default: verified
+  extra_files:
+    description: Space-separated globs, relative to the artifact, that must each match at least one file in it (the files publishing attaches beside stage/)
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -45,3 +49,31 @@ runs:
         else
           shasum -a 256 -c "${sums[0]}"
         fi
+
+    # The files publishing attaches beside stage/ (macOS: the SBOMs and the
+    # provenance) are checked here too, so a missing one stops the build's
+    # own handover check in a dry run, and stops publishing before anything
+    # is written to R2, rather than after the feed already announces the
+    # release. Split on whitespace without glob expansion, then each pattern
+    # expanded under the received artifact only, never the checkout.
+    - name: Every declared extra file must have survived it too
+      shell: bash
+      env:
+        RECEIVED: ${{ inputs.path }}
+        EXTRA_FILES: ${{ inputs.extra_files }}
+      run: |
+        set -euo pipefail
+        read -r -a patterns <<<"$EXTRA_FILES"
+        for pattern in ${patterns[@]+"${patterns[@]}"}; do
+          found=0
+          for match in "$RECEIVED"/$pattern; do
+            if [ -f "$match" ]; then
+              found=1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::'$pattern' matches no file in the received artifact"
+            exit 1
+          fi
+          echo "$pattern: received"
+        done

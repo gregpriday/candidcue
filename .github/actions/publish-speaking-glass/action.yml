@@ -39,10 +39,26 @@ inputs:
 runs:
   using: composite
   steps:
+    # First, and by name. A secret that does not exist reaches here as an
+    # empty string, which `required: true` above does not refuse, and would
+    # otherwise surface as an S3 error after the tag and feed checks. Here
+    # rather than in the gates: this is the only job that names the release
+    # environment, so the only one that can see R2 secrets kept on it, and a
+    # re-run of only this job checks them again.
+    - name: Every publishing credential must be present
+      shell: bash
+      env:
+        R2_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
+        R2_SECRET_ACCESS_KEY: ${{ inputs.r2_secret_access_key }}
+        R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+        SPEAKING_GLASS_R2_BUCKET: ${{ inputs.r2_bucket }}
+      run: node scripts/release-credentials.mjs publish
+
     - uses: ./.github/actions/receive-speaking-glass
       with:
         artifact_name: ${{ inputs.artifact_name }}
         path: verified
+        extra_files: ${{ inputs.extra_assets }}
 
     # `--verify-tag` only checks that the tag EXISTS. A tag deleted and
     # recreated at another commit while this ran would satisfy it, and the
@@ -134,11 +150,16 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         EXTRA_ASSETS: ${{ inputs.extra_assets }}
-        PUBLIC_URL: ${{ inputs.public_url }}
       run: |
         set -euo pipefail
         TAG="${GITHUB_REF_NAME}"
         VERSION="$(node -p "require('./verified/stage/release.json').version")"
+        # The origin the files were staged for, which the checks above held
+        # equal to the one publishing was given. Not the raw input: an unset
+        # repository variable arrives empty, and the feed script falls back
+        # to its default origin where a bare `${PUBLIC_URL}` would print a
+        # link with no host in it.
+        PUBLIC_URL="$(node -p "require('./verified/stage/release.json').publicUrl.replace(/\\/+$/, '')")"
         # The notes come from CHANGELOG.md, reviewed with the code they describe.
         node scripts/release-notes.mjs "$TAG" > "$RUNNER_TEMP/notes.md"
         {
@@ -149,9 +170,18 @@ runs:
         } >> "$RUNNER_TEMP/notes.md"
 
         files=(verified/stage/files/*/*)
-        for pattern in $EXTRA_ASSETS; do
+        # Split on whitespace and NOT glob-expanded here: an unquoted
+        # `$EXTRA_ASSETS` in a `for` list expands `sbom/*` against the
+        # CHECKOUT, whose sbom/ holds only the committed inputs, and the SBOMs
+        # the build generated were silently never attached. Each pattern is
+        # expanded under verified/ only; receiving the artifact already
+        # refused one that matches nothing there.
+        read -r -a patterns <<<"$EXTRA_ASSETS"
+        for pattern in ${patterns[@]+"${patterns[@]}"}; do
           for match in verified/$pattern; do
-            [ -f "$match" ] && files+=("$match")
+            if [ -f "$match" ]; then
+              files+=("$match")
+            fi
           done
         done
 
