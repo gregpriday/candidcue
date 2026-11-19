@@ -35,13 +35,8 @@
   import { speechModelReadiness } from './stores/speech-model-readiness';
   import TakeReadinessSheet from './components/TakeReadinessSheet.svelte';
   import UpdateNotice from './components/UpdateNotice.svelte';
-  import LegacyLibraryNotice from './components/LegacyLibraryNotice.svelte';
-  import { getLegacyLibraryNotice, revealLegacyLibrary } from './services/legacy-library';
-  import {
-    dismissLegacyLibraryNotice,
-    legacyLibrary,
-    setLegacyLibraryNotice,
-  } from './stores/legacy-library';
+  import { getLegacyLibraryNotice } from './services/legacy-library';
+  import { setLegacyLibraryNotice } from './stores/legacy-library';
   import { createUpdateController } from './stores/updates';
   import { checkForUpdate, installUpdate, listenForUpdateProgress } from './services/updates';
   import {
@@ -691,11 +686,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
         /*
          * Whether the CandidCue library was left behind at launch (#454).
-         * Asked beside the boot status and settled before either way out of
-         * here, so the recovery screen can say it and Welcome has it on its
-         * first paint: the sample there is a script, and a script here is
-         * what ends the automatic copy. A notice that cannot be read is no
-         * notice; it never holds up the boot.
+         * Asked beside the boot status. The app waits for it before its first
+         * route, so Welcome has it on its first paint: the sample there is a
+         * script, and a script here is what ends the automatic copy. The
+         * recovery screen does NOT wait for it: nothing may stand between a
+         * damaged database and its repairs. A notice that cannot be read is
+         * no notice.
          */
         const legacyNotice = getLegacyLibraryNotice().catch(() => null);
 
@@ -725,13 +721,17 @@ import { rememberReaderFrame } from './lib/reader-frame';
             dataDirectory: '',
           }),
         );
-        const notice = await legacyNotice;
-        if (disposed) return;
-        setLegacyLibraryNotice(notice);
         if (!boot.databaseReady) {
+          if (disposed) return;
           recoveryStatus = boot;
+          void legacyNotice.then((notice) => {
+            if (!disposed) setLegacyLibraryNotice(notice);
+          });
           return;
         }
+        const legacy = await legacyNotice;
+        if (disposed) return;
+        setLegacyLibraryNotice(legacy);
 
         const status = await initAppStatus();
 
@@ -813,6 +813,20 @@ import { rememberReaderFrame } from './lib/reader-frame';
             // An older build has no such command. The diagnostics file and the
             // log still hold the report.
           });
+
+        /*
+         * The CandidCue library notice is drawn by Welcome and the Library
+         * (#454). A launch that opens a script instead is pointed there once.
+         */
+        const firstRoute = get(route).name;
+        if (legacy !== null && firstRoute !== 'welcome' && firstRoute !== 'library') {
+          showToast(
+            'Your scripts from CandidCue are not in this library. The Library says where they are ' +
+              'and how to bring them in.',
+            'info',
+            { action: { label: 'Open Library', run: () => void navigate({ name: 'library', view: 'all' }) } },
+          );
+        }
 
         if (settingsWarning !== null) {
           showToast(
@@ -1515,21 +1529,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     there — can still be installed. `hidden` for the whole of a take: an update
     found then is held and appears when the take ends, never on the glass.
   -->
-  <!--
-    The CandidCue library notice (#454), floating everywhere but Welcome, which
-    shows it inline above the buttons that create a script. Hidden for a take
-    like the update card, and back when it ends.
-  -->
-  {#if $legacyLibrary.notice !== null && !$legacyLibrary.dismissed && !($session.active || $takeStarting || $presentingPhase !== 'off') && !(ready && recoveryStatus === null && $route.name === 'welcome')}
-    <LegacyLibraryNotice
-      notice={$legacyLibrary.notice}
-      placement="floating"
-      libraryOpen={recoveryStatus === null}
-      revealLabel={osCopy().revealInFileManager}
-      onreveal={revealLegacyLibrary}
-      ondismiss={dismissLegacyLibraryNotice}
-    />
-  {/if}
   <UpdateNotice
     notice={$updateNotice}
     hidden={$session.active || $takeStarting || $presentingPhase !== 'off'}

@@ -480,7 +480,6 @@
       {#if $legacyLibrary.notice !== null && !$legacyLibrary.dismissed}
         <LegacyLibraryNotice
           notice={$legacyLibrary.notice}
-          placement="inline"
           libraryOpen={true}
           revealLabel={osCopy().revealInFileManager}
           onreveal={revealLegacyLibrary}

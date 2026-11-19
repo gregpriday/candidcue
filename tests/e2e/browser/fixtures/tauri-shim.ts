@@ -159,6 +159,14 @@ export interface ShimConfig {
    * Unset, there was nothing to say, as on a clean install.
    */
   legacyLibraryNotice?: Record<string, unknown>;
+  /**
+   * Commands whose replies are held from BEFORE the app boots, until the spec
+   * releases them with `__E2E__.setHeld(command, false)`. `setHeld` itself is
+   * only callable after navigation, by which time the boot has asked.
+   */
+  heldAtBoot?: string[];
+  /** `general.openTo` in the settings document: where a launch lands. */
+  openTo?: 'library' | 'last_script';
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -276,7 +284,7 @@ function shimBody(config: ShimConfig): void {
     value: {
       schemaVersion: 1,
       general: {
-        openTo: 'library',
+        openTo: config.openTo ?? 'library',
       },
       ...(config.following ? { following: config.following } : {}),
       stageBehavior: {
@@ -520,6 +528,7 @@ function shimBody(config: ShimConfig): void {
   if (config.listDisplaysDelayMs !== undefined) {
     control.delay['list_displays'] = config.listDisplaysDelayMs;
   }
+  for (const command of config.heldAtBoot ?? []) control.held[command] = true;
   (window as unknown as { __E2E__: typeof control }).__E2E__ = control;
 
   /**

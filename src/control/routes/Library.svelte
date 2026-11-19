@@ -101,6 +101,10 @@
   import { updateWorkspace, workspace } from '../stores/workspace';
   import type { ScriptSummary } from '../../shared/contracts';
   import type { ScriptSort } from '../services/scripts-types';
+  import LegacyLibraryNotice from '../components/LegacyLibraryNotice.svelte';
+  import { revealLegacyLibrary } from '../services/legacy-library';
+  import { dismissLegacyLibraryNotice, legacyLibrary } from '../stores/legacy-library';
+  import { osCopy } from '../lib/os-copy';
 
   let searchInput: HTMLInputElement | null = $state(null);
   let listElement: HTMLElement | null = $state(null);
@@ -770,6 +774,22 @@
 
   <div class="list-area" bind:this={scrollElement}>
     <!--
+      Where the CandidCue library went, when this launch could not bring it
+      across (#454). At the head of the list, in the page: an empty library
+      is exactly where somebody looks for scripts that did not arrive.
+    -->
+    {#if $legacyLibrary.notice !== null && !$legacyLibrary.dismissed && !inTrash}
+      <div class="legacy-notice-slot">
+        <LegacyLibraryNotice
+          notice={$legacyLibrary.notice}
+          libraryOpen={true}
+          revealLabel={osCopy().revealInFileManager}
+          onreveal={revealLegacyLibrary}
+          ondismiss={dismissLegacyLibraryNotice}
+        />
+      </div>
+    {/if}
+    <!--
       A refresh that failed with rows on screen: the list is stale, not wrong, so
       it stays and the failure is reported over it as a persistent bar (§10.7).
       Deliberately not a toast — `danger` toasts never expire, and a debounced
@@ -1061,6 +1081,11 @@
     display: flex;
     justify-content: center;
     padding: var(--space-4) 0 var(--space-2);
+  }
+
+  .legacy-notice-slot {
+    max-width: 640px;
+    margin: var(--space-2) 0 var(--space-4);
   }
 
   .list-area {

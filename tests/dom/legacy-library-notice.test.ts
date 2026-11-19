@@ -22,11 +22,13 @@ const FAILED: Notice = {
   reason: 'CandidCue has not finished a recovery (restore-pending.json is still there)',
 };
 
-const ABANDONED: Notice = { kind: 'abandoned', oldFolder: OLD };
+// With a reason, which Rust never sends for this kind, so the test proves the
+// failed-only paragraphs are gated on the KIND rather than on what is present.
+const ABANDONED: Notice = { kind: 'abandoned', oldFolder: OLD, reason: 'never shown' };
 
 function renderNotice(
   notice: Notice,
-  options: { placement?: 'inline' | 'floating'; libraryOpen?: boolean; reveal?: () => Promise<void> } = {},
+  options: { libraryOpen?: boolean; reveal?: () => Promise<void> } = {},
 ) {
   const handlers = {
     onreveal: vi.fn(options.reveal ?? (async () => {})),
@@ -35,7 +37,6 @@ function renderNotice(
   const result = render(LegacyLibraryNotice, {
     props: {
       notice,
-      placement: options.placement ?? 'inline',
       libraryOpen: options.libraryOpen ?? true,
       revealLabel: 'Reveal in Finder',
       ...handlers,
@@ -63,11 +64,12 @@ describe('LegacyLibraryNotice', () => {
     expect(card.getAttribute('aria-labelledby')).toBeTruthy();
     expect(card.textContent).toMatch(/not copied/);
     expect(text(card, 'legacy-library-path')).toBe(OLD);
-    expect(text(card, 'legacy-library-reason')).toContain('restore-pending.json');
+    expect(text(card, 'legacy-library-reason')).toBe(FAILED.reason);
+    expect(card.querySelector('[data-testid="legacy-library-kept"]')).toBeNull();
 
     const next = text(card, 'legacy-library-next-launch');
     expect(next).toMatch(/tries again each time it opens/);
-    expect(next).toMatch(/only while this library has no scripts/);
+    expect(next).toMatch(/only while this library is still empty/);
     expect(next).toMatch(/sample script included/);
     expect(next).toMatch(/not tried again/);
   });
@@ -76,8 +78,10 @@ describe('LegacyLibraryNotice', () => {
     const { card } = renderNotice(ABANDONED);
     expect(card.dataset['kind']).toBe('abandoned');
     expect(text(card, 'legacy-library-path')).toBe(OLD);
-    expect(card.textContent).toMatch(/will not copy the old one again/);
+    expect(text(card, 'legacy-library-kept')).toMatch(/kept it as it is and will not copy the old one over it/);
+    expect(text(card, 'legacy-library-kept')).toMatch(/still in their old folder/);
     expect(card.querySelector('[data-testid="legacy-library-reason"]')).toBeNull();
+    expect(card.textContent).not.toContain('never shown');
     // The retry warning is about a decision that has already been made.
     expect(card.querySelector('[data-testid="legacy-library-next-launch"]')).toBeNull();
   });
@@ -86,9 +90,9 @@ describe('LegacyLibraryNotice', () => {
     for (const notice of [FAILED, ABANDONED]) {
       const { card, unmount } = renderNotice(notice);
       const recover = text(card, 'legacy-library-recover');
-      expect(recover).toMatch(/^To bring an old script into this library/);
+      expect(recover).toMatch(/^To bring an old script's text into this library/);
       expect(recover).toContain('File › Import Markdown…');
-      expect(recover).toContain('script.md');
+      expect(recover).toMatch(/open scripts, then a script's folder, and choose script\.md/);
       // The whole-library route says what it costs.
       expect(recover).toContain('Restore from export…');
       expect(recover).toMatch(/replaces everything here/);
@@ -96,10 +100,12 @@ describe('LegacyLibraryNotice', () => {
     }
   });
 
-  it('on the recovery screen, puts the import off until the library opens', () => {
-    const { card } = renderNotice(ABANDONED, { placement: 'floating', libraryOpen: false });
-    expect(card.classList.contains('floating')).toBe(true);
-    expect(text(card, 'legacy-library-recover')).toMatch(/^Once Speaking Glass can open its library, bring/);
+  it('on the recovery screen, puts both ways in off until the library opens', () => {
+    const { card } = renderNotice(ABANDONED, { libraryOpen: false });
+    const recover = text(card, 'legacy-library-recover');
+    expect(recover).toMatch(/^Once Speaking Glass can open its library, bring/);
+    // One sentence governs both: the restore is not offered as available now.
+    expect(recover.indexOf('Restore from export…')).toBeGreaterThan(recover.indexOf('Once'));
   });
 
   it('shows the folder or puts the card away, and nothing else', () => {
@@ -107,10 +113,21 @@ describe('LegacyLibraryNotice', () => {
     expect(buttons(card).map((b) => b.textContent?.trim())).toEqual(['Dismiss', 'Reveal in Finder']);
     const [dismiss, reveal] = buttons(card);
     reveal!.click();
-    dismiss!.click();
     flushSync();
     expect(handlers.onreveal).toHaveBeenCalledTimes(1);
+    expect(handlers.ondismiss).not.toHaveBeenCalled();
+    dismiss!.click();
+    flushSync();
     expect(handlers.ondismiss).toHaveBeenCalledTimes(1);
+    expect(handlers.onreveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('says nothing more when the folder was shown', async () => {
+    const { card } = renderNotice(FAILED);
+    buttons(card)[1]!.click();
+    await tick();
+    await tick();
+    expect(card.querySelector('[role="alert"]')).toBeNull();
   });
 
   it('says so when the folder cannot be shown, and keeps the path on screen', async () => {

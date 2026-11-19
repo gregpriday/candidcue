@@ -41,6 +41,9 @@
   import { requestConfirm } from '../stores/confirm';
   import { relativeTime } from '../lib/format';
   import { osCopy } from '../lib/os-copy';
+  import LegacyLibraryNotice from '../components/LegacyLibraryNotice.svelte';
+  import { revealLegacyLibrary } from '../services/legacy-library';
+  import { dismissLegacyLibraryNotice, legacyLibrary } from '../stores/legacy-library';
 
   const { status }: { status: recovery.BootStatusReport } = $props();
 
@@ -545,6 +548,21 @@
           {@render rebuildOption(false)}
         {/if}
       </section>
+    {/if}
+
+    <!--
+      The CandidCue library notice (#454), after the repairs and before help:
+      it may be the only launch that says it, and it changes nothing on disk,
+      so it never stands in front of what fixes the database.
+    -->
+    {#if $legacyLibrary.notice !== null && !$legacyLibrary.dismissed}
+      <LegacyLibraryNotice
+        notice={$legacyLibrary.notice}
+        libraryOpen={false}
+        revealLabel={os.revealInFileManager}
+        onreveal={revealLegacyLibrary}
+        ondismiss={dismissLegacyLibraryNotice}
+      />
     {/if}
 
     <section class="help" aria-labelledby="help-title">

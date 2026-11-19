@@ -9,10 +9,10 @@ import { watchPageErrors } from './fixtures/page-errors';
  * cannot, the window opens on an empty library while the old scripts are still
  * on disk. Creating a script here, the Welcome sample included, is what the
  * next launch reads as "keep this library", so the notice has to be on Welcome
- * BEFORE those buttons, and on the first paint rather than after a delay. These
- * prove the shell side: that the boot asks, where the card lands on each kind
- * of screen, and that a reload says it again. The Rust side (which outcome is
- * reported) is `legacy_data.rs`'s own tests.
+ * ABOVE those buttons, and there before they can be pressed. These prove the
+ * shell side: that the boot asks and waits, where the card lands on each
+ * screen, that recovery never waits for it, and that a reload says it again.
+ * Which outcome Rust reports is `legacy_data.rs`'s own tests.
  */
 
 const OLD = '/Users/someone/Library/Application Support/com.candidcue.app';
@@ -25,52 +25,68 @@ const FAILED = {
     'that wrote it once to let it finish',
 };
 
+const ABANDONED = { kind: 'abandoned', oldFolder: OLD };
+
+const CREATE_BUTTONS = ['Create your first script', 'Open the sample script', 'Import Markdown'];
+
 function notice(page: Page) {
   return page.getByTestId('legacy-library-notice');
 }
 
-test('Welcome says it above the buttons that would end the retry, and a reload says it again', async ({
+function calls(page: Page, command: string) {
+  return page.evaluate(
+    (name) => window.__E2E__.calls.filter((c) => c.command === name).map((c) => c.args ?? {}),
+    command,
+  );
+}
+
+test('Welcome waits for the notice, then shows it above the buttons that would end the retry', async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
-  await installTauriShim(page, { legacyLibraryNotice: FAILED });
+  await installTauriShim(page, {
+    legacyLibraryNotice: FAILED,
+    heldAtBoot: ['get_legacy_library_notice'],
+  });
   await page.goto('/control.html');
+
+  // Asked, and still unanswered: nothing that creates a script is on screen.
+  await expect.poll(() => calls(page, 'get_legacy_library_notice')).toHaveLength(1);
+  for (const name of CREATE_BUTTONS) {
+    await expect(page.getByRole('button', { name })).toHaveCount(0);
+  }
+  await page.evaluate(() => window.__E2E__.setHeld('get_legacy_library_notice', false));
 
   const card = notice(page);
   await expect(card).toBeVisible();
   await expect(card).toHaveAttribute('data-kind', 'failed');
   await expect(card.getByTestId('legacy-library-path')).toHaveText(OLD);
+  await expect(card.getByTestId('legacy-library-reason')).toHaveText(FAILED.reason);
   await expect(card.getByTestId('legacy-library-next-launch')).toContainText('sample script included');
-  // One card, and it is Welcome's own: the floating one stands down here.
   await expect(notice(page)).toHaveCount(1);
 
-  // Above every way of creating a script, not merely somewhere on the page.
-  const sample = page.getByRole('button', { name: 'Open the sample script' });
-  await expect(sample).toBeVisible();
-  const precedes = await card.evaluate((element) => {
-    const buttons = [...document.querySelectorAll('button')].filter((b) =>
-      ['Create your first script', 'Open the sample script', 'Import Markdown'].includes(
-        b.textContent?.trim() ?? '',
-      ),
+  // Above every way of creating a script: first in the document AND on screen.
+  const cardBox = await card.boundingBox();
+  for (const name of CREATE_BUTTONS) {
+    const button = page.getByRole('button', { name });
+    await expect(button).toBeVisible();
+    const follows = await card.evaluate(
+      (element, label) => {
+        const target = [...document.querySelectorAll('button')].find(
+          (b) => b.textContent?.trim() === label,
+        );
+        return target !== undefined && (element.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      },
+      name,
     );
-    return (
-      buttons.length === 3 &&
-      buttons.every((b) => element.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-    );
-  });
-  expect(precedes).toBe(true);
+    expect(follows, name).toBe(true);
+    const box = await button.boundingBox();
+    expect(box!.y, name).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height);
+  }
 
   // Showing the folder sends no path: Rust reveals the one it reported.
   await card.getByRole('button', { name: /Reveal in Finder|Show in/ }).click();
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.__E2E__.calls
-          .filter((c) => c.command === 'reveal_legacy_library')
-          .map((c) => c.args ?? {}),
-      ),
-    )
-    .toEqual([{}]);
+  await expect.poll(() => calls(page, 'reveal_legacy_library')).toEqual([{}]);
 
   await card.getByRole('button', { name: 'Dismiss' }).click();
   await expect(notice(page)).toHaveCount(0);
@@ -81,27 +97,31 @@ test('Welcome says it above the buttons that would end the retry, and a reload s
   errors.expectClean();
 });
 
-test('past Welcome, an abandoned copy floats over the library', async ({ page }) => {
+test('past Welcome, the Library says it at the head of its list', async ({ page }) => {
   const errors = watchPageErrors(page);
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [{ id: 'kept', title: 'Written here', source: '# Written here\n' }],
-    legacyLibraryNotice: { kind: 'abandoned', oldFolder: OLD },
+    legacyLibraryNotice: ABANDONED,
   });
   await page.goto('/control.html');
 
   const card = notice(page);
   await expect(card).toBeVisible();
   await expect(card).toHaveAttribute('data-kind', 'abandoned');
-  await expect(card).toContainText('will not copy the old one again');
+  await expect(card.getByTestId('legacy-library-kept')).toContainText('will not copy the old one over it');
   await expect(card.getByTestId('legacy-library-recover')).toContainText('File › Import Markdown…');
+  // In the page, not over it: the list's own rows stay clear of it.
+  expect(await card.evaluate((element) => getComputedStyle(element).position)).toBe('static');
+  const row = page.getByText('Written here').first();
+  await expect(row).toBeVisible();
+  const [cardBox, rowBox] = [await card.boundingBox(), await row.boundingBox()];
+  expect(rowBox!.y).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height);
 
   errors.expectClean();
 });
 
-test('the recovery screen says it too, and puts the import off until the library opens', async ({
-  page,
-}) => {
+test('the recovery screen does not wait for it, and says it once it comes', async ({ page }) => {
   await installTauriShim(page, {
     bootStatus: {
       databaseReady: false,
@@ -109,20 +129,43 @@ test('the recovery screen says it too, and puts the import off until the library
       message: 'The database is damaged.',
       dataDirectory: '/tmp/speaking-glass-e2e',
     },
-    legacyLibraryNotice: { kind: 'abandoned', oldFolder: OLD },
+    legacyLibraryNotice: ABANDONED,
+    heldAtBoot: ['get_legacy_library_notice'],
   });
   await page.goto('/control.html');
 
+  // The repairs are up while the notice is still unanswered.
+  await expect(page.locator('main.recovery')).toBeVisible();
+  await expect(notice(page)).toHaveCount(0);
+  await page.evaluate(() => window.__E2E__.setHeld('get_legacy_library_notice', false));
+
   const card = notice(page);
   await expect(card).toBeVisible();
+  expect(await card.evaluate((element) => element.closest('main.recovery') !== null)).toBe(true);
+  // Both ways of bringing scripts in need a library that opens.
   await expect(card.getByTestId('legacy-library-recover')).toContainText(
     'Once Speaking Glass can open its library',
   );
 });
 
-test('a clean install or a successful copy shows nothing', async ({ page }) => {
+test('a launch that opens a script is pointed at the Library', async ({ page }) => {
+  await installTauriShim(page, {
+    welcomed: true,
+    seedScripts: [{ id: 'kept', title: 'Written here', source: '# Written here\n', lastOpenedAt: new Date().toISOString() }],
+    legacyLibraryNotice: ABANDONED,
+    openTo: 'last_script',
+  });
+  await page.goto('/control.html');
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+  await expect(page.getByText('Your scripts from CandidCue are not in this library.')).toBeVisible();
+  await page.getByRole('button', { name: 'Open Library' }).click();
+  await expect(notice(page)).toBeVisible();
+});
+
+test('nothing to say shows nothing', async ({ page }) => {
   await installTauriShim(page, {});
   await page.goto('/control.html');
   await expect(page.getByRole('button', { name: 'Open the sample script' })).toBeVisible();
+  await expect.poll(() => calls(page, 'get_legacy_library_notice')).toHaveLength(1);
   await expect(notice(page)).toHaveCount(0);
 });

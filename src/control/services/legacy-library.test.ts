@@ -72,10 +72,12 @@ describe('parseLegacyLibraryNotice', () => {
   });
 
   it('drops a reason that is not a sentence', () => {
-    expect(parseLegacyLibraryNotice({ kind: 'failed', oldFolder: '/old', reason: 7 })).toEqual({
-      kind: 'failed',
-      oldFolder: '/old',
-    });
+    for (const reason of [7, '']) {
+      expect(parseLegacyLibraryNotice({ kind: 'failed', oldFolder: '/old', reason })).toEqual({
+        kind: 'failed',
+        oldFolder: '/old',
+      });
+    }
   });
 });
 
@@ -86,8 +88,14 @@ describe('getLegacyLibraryNotice', () => {
     expect(ipc.calls).toEqual([{ command: 'get_legacy_library_notice' }]);
   });
 
-  it('is null for a clean install or a successful copy', async () => {
+  it('is null when Rust has nothing to say', async () => {
     ipc.response = null;
+    await expect(getLegacyLibraryNotice()).resolves.toBeNull();
+    expect(ipc.calls).toEqual([{ command: 'get_legacy_library_notice' }]);
+  });
+
+  it('is null when what Rust said cannot be read', async () => {
+    ipc.response = { kind: 'failed', oldFolder: 12 };
     await expect(getLegacyLibraryNotice()).resolves.toBeNull();
   });
 
@@ -107,5 +115,6 @@ describe('revealLegacyLibrary', () => {
   it('lets a failure reach the card, which says so', async () => {
     ipc.fail = true;
     await expect(revealLegacyLibrary()).rejects.toThrow('no such command');
+    expect(ipc.calls).toEqual([{ command: 'reveal_legacy_library' }]);
   });
 });
