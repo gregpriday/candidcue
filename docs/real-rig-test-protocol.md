@@ -152,9 +152,11 @@ workflow's own files: a `workflow_dispatch` dry run of `release-windows.yml` or
 `release-linux.yml` on the commit about to be tagged builds, inspects and
 smoke-tests everything and publishes nothing (its `speaking-glass-release-<os>`
 artifact). A tag rebuilds, so the tagged files are new bytes from that commit:
-record which file was tested. The release workflows' own smoke test only sees
-the installed process stay up for 25 seconds under no microphone and no
-voice; this is the part it cannot reach.
+record which file was tested. The release workflows' own smoke tests only
+start each build headless (the Windows installer on Windows Server, the `.deb`
+installed through apt and the AppImage extracted, both under Xvfb) and see it
+stay up for 25 seconds, with no microphone and no voice; this is the part they
+cannot reach.
 
 Fill the Rig rows with the exact artifact, the OS and its web view (WebView2 on
 Windows, WebKitGTK on Linux), the display session and the input. **The
@@ -167,7 +169,7 @@ take on one records F4 as not tested.
 | F1 | Install through the advertised path | The `-setup.exe` downloaded in a browser and run through SmartScreen's **More info › Run anyway**, with no administrator prompt (it installs per user); the `.deb` through the desktop's software installer or `apt`; the AppImage marked executable and opened. Record every terminal command used: README gives none for Linux | |
 | F2 | Open a script | Create one and open one; it renders in the editor | |
 | F3 | Install the model | From the Welcome screen or Settings › Speech; the download verifies, and Present no longer brings up the readiness sheet for a missing model (A9) | |
-| F4 | Microphone access | Windows: there is no first-use prompt; with "Let apps access your microphone" and "Let desktop apps access your microphone" on in Windows Settings › Privacy & security › Microphone, the level meter responds to speech into the input under test (turn one off once and confirm the app names it). Linux: the app grants WebKitGTK's request itself; the meter responds from a PulseAudio or PipeWire source | |
+| F4 | Microphone access | Windows: there is no first-use prompt; with "Let apps access your microphone" and "Let desktop apps access your microphone" on in Windows Settings › Privacy & security › Microphone, the level meter responds to speech into the input under test. Turn one off once: the app says Windows is blocking the microphone and names both switches; turn it back on and the meter responds again. Linux: the app grants WebKitGTK's request itself; the meter responds from a PulseAudio or PipeWire source | |
 | F5 | Voice-followed take | Read at least a paragraph; the reading line follows the voice | |
 | F6 | End the take | Returns to the editor with the summary over it | |
 | F7 | Quit and reopen | Quit with File › Exit; relaunch from the Start menu (Windows), the desktop's launcher (`.deb`) or the same AppImage from the file manager; the library, the script and the model are still there | |

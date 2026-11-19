@@ -78,7 +78,7 @@ path in the app and exactly what each one sends.
   PulseAudio or PipeWire sound server for the microphone. Other distributions
   with glibc 2.35 and WebKitGTK 4.1 should work but are not tested, and
   neither are a real desktop, Wayland or two monitors: the packages have run
-  only in an X11 (Xvfb) test container.
+  only headless, under Xvfb.
 - A microphone
 - A second display for prompter mode (optional)
 - English, for voice following

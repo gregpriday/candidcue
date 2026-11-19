@@ -31,8 +31,8 @@ engine decides where in the script you are.
   with a real microphone. Windows 10 should work but has not been tested.
 - **Linux, 64-bit**, as an AppImage or a `.deb`, built on Ubuntu 22.04 and
   needing that release's libraries or newer (WebKitGTK 4.1). A preview, like
-  Windows: both packages have run only in an X11 (Xvfb) test container, and
-  neither has followed a voice; a real desktop, Wayland and two monitors are
+  Windows: both packages have run only headless, under Xvfb, and neither
+  has followed a voice; a real desktop, Wayland and two monitors are
   untested.
 - **A microphone**, and **a second display** for a prompter rig. A reading
   window, or a full-screen prompter on the same screen, works on one display.
