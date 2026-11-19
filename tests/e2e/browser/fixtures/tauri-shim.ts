@@ -153,6 +153,20 @@ export interface ShimConfig {
   bootStatus?: Record<string, unknown>;
   /** What `list_database_backups` answers — newest first, as Rust sorts them. */
   databaseBackups?: Array<Record<string, unknown>>;
+  /**
+   * What `get_legacy_library_notice` answers (#454): the CandidCue library this
+   * launch could not copy (`kind: 'failed'`) or gave up on (`'abandoned'`).
+   * Unset, there was nothing to say, as on a clean install.
+   */
+  legacyLibraryNotice?: Record<string, unknown>;
+  /**
+   * Commands whose replies are held from BEFORE the app boots, until the spec
+   * releases them with `__E2E__.setHeld(command, false)`. `setHeld` itself is
+   * only callable after navigation, by which time the boot has asked.
+   */
+  heldAtBoot?: string[];
+  /** `general.openTo` in the settings document: where a launch lands. */
+  openTo?: 'library' | 'last_script';
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -270,7 +284,7 @@ function shimBody(config: ShimConfig): void {
     value: {
       schemaVersion: 1,
       general: {
-        openTo: 'library',
+        openTo: config.openTo ?? 'library',
       },
       ...(config.following ? { following: config.following } : {}),
       stageBehavior: {
@@ -514,6 +528,7 @@ function shimBody(config: ShimConfig): void {
   if (config.listDisplaysDelayMs !== undefined) {
     control.delay['list_displays'] = config.listDisplaysDelayMs;
   }
+  for (const command of config.heldAtBoot ?? []) control.held[command] = true;
   (window as unknown as { __E2E__: typeof control }).__E2E__ = control;
 
   /**
@@ -762,6 +777,13 @@ function shimBody(config: ShimConfig): void {
       // Nothing was repaired at startup. `null` is the ordinary answer here,
       // and the shell treats it as "nothing to report".
       case 'get_startup_findings':
+        return null;
+
+      // The CandidCue library notice (#454). Read as often as it is asked,
+      // like Rust's; the reveal takes no path and opens nothing here.
+      case 'get_legacy_library_notice':
+        return config.legacyLibraryNotice ?? null;
+      case 'reveal_legacy_library':
         return null;
 
       case 'get_settings':
