@@ -260,12 +260,17 @@ order, and stops at the first failure:
    under `releases/<version>/` must be byte for byte the one staged.
 5. Uploads the installers, the updater payload and its `.sig`, and
    `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
-   bucket, cached as immutable.
-6. Downloads every one of them back from `https://updates.speakingglass.com` and
-   compares the bytes.
+   bucket, with `Cache-Control: public, max-age=31536000, immutable`.
+6. Downloads every one of them back from `https://updates.speakingglass.com`,
+   compares the bytes, and checks each is served with that `Cache-Control`
+   (read as directives, so their order and case do not matter).
 7. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
    which installed copies poll, and `releases/<channel>-<os>.json`, which a
-   download page reads. Both are served `no-cache`, and both are read back.
+   download page reads. Both are served `no-cache, no-store,
+   must-revalidate`, and both are read back as the updater asks for them,
+   with those three directives, no lifetime, and no `CF-Cache-Status` saying
+   Cloudflare is caching them (`HIT`, `MISS`, `EXPIRED`, `STALE`, `UPDATING`
+   or `REVALIDATED`; an edge honouring `no-store` says `DYNAMIC` or `BYPASS`).
 8. Creates the GitHub Release (empty, so no draft is ever left for another
    OS to lose its files in), or finds the one another OS created, then
    attaches its files and checks each one arrived.
@@ -279,6 +284,22 @@ build that was staged, so step 4 passes and the rest repairs whatever the
 first attempt left undone. Re-running the whole workflow rebuilds every
 file with new bytes under the same names, and step 4 refuses that once any
 of them is published: release a new version instead.
+
+A step 6 or step 7 failure that names `Cache-Control` or `CF-Cache-Status`
+means the edge is not serving the release with the lifetime it was uploaded
+with. Compare the object's metadata in R2 with what the public URL returns,
+then fix the cause: Cloudflare drops `immutable` when the zone's Origin
+Cache Control is off (on by default below Enterprise), and a Cache Rule can
+rewrite the header or cache the feed outright. Purge the URLs the failure
+named from Cloudflare's cache (the edge keeps what it already served), then
+re-run the `publish` job. The two steps leave different states behind:
+
+- **Step 6** fails before the feed is touched, so no installed copy has
+  been pointed at these files yet. (On a re-run, an earlier attempt may
+  already have published the feed; step 3 says so as "published".)
+- **Step 7** fails after the feed went up, so installed copies may already
+  be offered this version while this OS's files are not yet on the GitHub
+  Release. The re-run finishes that.
 
 `scripts/release-feed.mjs` is the whole layout, with the reasons.
 
