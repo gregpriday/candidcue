@@ -143,6 +143,8 @@ export function bootFailureTitle(status: BootStatusReport): string {
       return 'Speaking Glass couldn’t back up its database';
     case 'DATABASE_UNAVAILABLE':
       return 'Speaking Glass couldn’t check its database';
+    case 'RESTORE_FAILED':
+      return 'Speaking Glass couldn’t finish restoring';
     default:
       return 'Speaking Glass couldn’t open its database';
   }
@@ -186,7 +188,7 @@ export function describeBootFailure(status: BootStatusReport): string {
   }
 }
 
-export type RepairAdvice = 'restore' | 'rebuild' | 'reopen';
+export type RepairAdvice = 'restore' | 'rebuild' | 'reopen' | 'manual';
 
 /**
  * Which way back the screen recommends.
@@ -199,6 +201,12 @@ export type RepairAdvice = 'restore' | 'rebuild' | 'reopen';
  *   taken is a disk or permissions problem, and an unreadable answer may be a
  *   one-off; replacing a database that may well be fine, on a guess, is the
  *   wrong first move.
+ * - `manual` — a restore from an export did not finish. Nothing on this screen
+ *   is the way back, and nothing is recommended: Rust's message says whether
+ *   the previous data was put back or names the folder that holds it, and
+ *   every launch tries to finish or undo the restore again before anything
+ *   opens. Reopening is not a repair here, and rebuilding or restoring a
+ *   backup would work from a library that may be half the export's.
  *
  * `backups` is `null` while they are still being listed, or when they could
  * not be — a failed update cannot be advised on until the screen knows whether
@@ -214,6 +222,8 @@ export function recommendRepair(
       return backups.some((backup) => backup.verified) ? 'restore' : 'rebuild';
     case 'DATABASE_CORRUPT':
       return 'rebuild';
+    case 'RESTORE_FAILED':
+      return 'manual';
     default:
       return 'reopen';
   }

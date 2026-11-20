@@ -379,8 +379,11 @@ const ERROR_COPY: Record<string, string> = {
     'Speaking Glass needs to upgrade its database but could not first save a backup of it, so it made no changes. This is usually a full disk or a permissions problem in its data folder.',
   DATABASE_UNAVAILABLE:
     'Speaking Glass is in recovery mode because its database did not open, so this action is unavailable. Recover the database and reopen Speaking Glass.',
+  // Only for a bare code. Rust's own message says which of the two happened —
+  // put back, or not put back and where it is — and `describeError` shows it
+  // instead whenever there is one, so this must not claim either.
   RESTORE_FAILED:
-    'The restore did not finish, and Speaking Glass put your previous data back. A copy of it was also kept.',
+    'The restore did not finish. Nothing was deleted: your previous data is either back in place or in the “quarantine” folder inside Speaking Glass’s data folder.',
   RESTORE_ALREADY_SCHEDULED:
     'A restore is already scheduled; Settings › Data, privacy & updates shows it. Nothing new was scheduled.',
   RESTORE_SELECTION_STALE:
@@ -523,13 +526,34 @@ export function copyForErrorCode(code: string): string {
 }
 
 /**
+ * Codes whose backend message is the only accurate account, so it wins over
+ * the authored copy whenever there is one.
+ *
+ * `RESTORE_FAILED` is raised for outcomes that differ in what the user must
+ * do: the previous data was put back, or it was not and Rust names the folder
+ * holding it. Fixed copy for the code can only be true of both by saying
+ * neither, which is why the authored entry is a fallback here and not an
+ * override. Not passed through `looksLikeCode`: the message carries a path,
+ * and a folder named like `MY_LIBRARY` would discard the one sentence that
+ * says where the data is.
+ */
+const BACKEND_AUTHORITATIVE_CODES: ReadonlySet<string> = new Set(['RESTORE_FAILED']);
+
+function backendAuthoritative(code: string, err: unknown): string | null {
+  if (!BACKEND_AUTHORITATIVE_CODES.has(code) || !isAppErrorPayload(err)) return null;
+  const message = typeof err.userMessage === 'string' ? err.userMessage.trim() : '';
+  return message === '' ? null : message;
+}
+
+/**
  * Human copy for any caught IPC / transport / audio failure.
  *
  * Guarantees, in order of precedence:
  *  - a resolvable code always yields authored copy (or the honest unmapped
  *    sentence), never the code;
  *  - a backend `userMessage` is used only when no copy override exists — Rust
- *    writes those for a human, unlike a code;
+ *    writes those for a human, unlike a code — except for the few codes in
+ *    `BACKEND_AUTHORITATIVE_CODES`, where it is the only accurate account;
  *  - anything still carrying a `SCREAMING_SNAKE_CASE` token is discarded in
  *    favour of the fallback, so a code added tomorrow cannot leak through a
  *    path nobody remembered to update.
@@ -538,6 +562,7 @@ export function describeError(err: unknown): string {
   const code = errorCode(err);
   if (code !== null) {
     const shown =
+      backendAuthoritative(code, err) ??
       ERROR_COPY[code] ??
       (isAppErrorPayload(err) && typeof err.userMessage === 'string' && !looksLikeCode(err.userMessage)
         ? err.userMessage

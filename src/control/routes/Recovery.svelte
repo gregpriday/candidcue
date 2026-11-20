@@ -478,24 +478,45 @@
       <div class="callout safety">
         <span class="callout-mark" aria-hidden="true"><Icon name="check" size={18} /></span>
         <div class="callout-body">
-          <p class="safety-title">Your scripts are safe</p>
-          <p class="safety-text">
-            Each one is a Markdown file in Speaking Glass’s data folder, kept apart from the database,
-            and nothing on this screen changes them.
-          </p>
+          {#if status.code === 'RESTORE_FAILED'}
+            <!--
+              Not "safe" in place: after a restore that did not finish, the
+              scripts here may be part of the export, with the user's own in
+              quarantine. What is true either way is that nothing was deleted.
+            -->
+            <p class="safety-title">Nothing was deleted</p>
+            <p class="safety-text">
+              Your previous scripts are either back in Speaking Glass’s data folder or in the
+              “quarantine” folder inside it, and nothing on this screen changes them.
+            </p>
+          {:else}
+            <p class="safety-title">Your scripts are safe</p>
+            <p class="safety-text">
+              Each one is a Markdown file in Speaking Glass’s data folder, kept apart from the database,
+              and nothing on this screen changes them.
+            </p>
+          {/if}
           {#if status.dataDirectory}
             <!-- Selectable: the one thing somebody does with a path is copy it. -->
             <code class="path">{status.dataDirectory}</code>
           {/if}
           <div class="actions">
-            <Button
-              variant="default"
-              bind:element={rescueButton}
-              disabled={busy !== null}
-              onclick={() => void rescueScripts()}
-            >
-              {busy === 'rescue' ? 'Saving…' : 'Save a copy of my scripts…'}
-            </Button>
+            <!--
+              Not after a restore that did not finish: it copies the live
+              scripts tree, which may be the export's partial output while the
+              user's own scripts are in quarantine — a "saved a copy of your
+              scripts" that left theirs out.
+            -->
+            {#if status.code !== 'RESTORE_FAILED'}
+              <Button
+                variant="default"
+                bind:element={rescueButton}
+                disabled={busy !== null}
+                onclick={() => void rescueScripts()}
+              >
+                {busy === 'rescue' ? 'Saving…' : 'Save a copy of my scripts…'}
+              </Button>
+            {/if}
             <Button
               variant="ghost"
               bind:element={revealButton}
@@ -541,6 +562,14 @@
         {:else if advice === 'rebuild'}
           {@render rebuildOption(true)}
           {@render restoreOption()}
+        {:else if advice === 'manual'}
+          <!--
+            A restore from an export that did not finish. The cause above is
+            Rust's own account of it: put back, or not put back and where it
+            is. Nothing is recommended, and neither repair is offered: both
+            would build on a library that may be half the export's.
+          -->
+          {@render afterRestore()}
         {:else}
           {@render restoreOption()}
           {@render rebuildOption(false)}
@@ -633,6 +662,21 @@
         {os.quit} and reopen Speaking Glass — a problem like this can be a one-off. If this screen comes
         back, export a support bundle below and report the problem.
       {/if}
+    </p>
+    {@render quitAction()}
+  </div>
+{/snippet}
+
+{#snippet afterRestore()}
+  <div class="option">
+    <div class="option-head">
+      <h3 class="option-title">Reopen to carry on</h3>
+    </div>
+    <p class="option-text">
+      Each time Speaking Glass opens, it carries on from where this restore stopped, finishing it or
+      putting your previous data back, and it doesn’t open your library while any of that data is
+      still set aside. If this screen keeps coming back, export a support bundle below and report the
+      problem.
     </p>
     {@render quitAction()}
   </div>

@@ -302,3 +302,94 @@ describe('an answer the shell cannot read is not an answer that it started', () 
     });
   });
 });
+
+describe('a restore from an export that did not finish (#233)', () => {
+  const failed = (message?: string) => ({
+    databaseReady: false,
+    code: 'RESTORE_FAILED',
+    ...(message === undefined ? {} : { message }),
+    dataDirectory: '/data',
+  });
+  const NOT_PUT_BACK =
+    'The restore did not finish, and Speaking Glass could not fully put your previous data back ' +
+    'either. Speaking Glass set your previous data aside in ' +
+    '/data/quarantine/pre-restore-20261120T000000Z and deleted nothing, and it will not open your ' +
+    'library until all of it is back in place.';
+
+  it('recommends nothing — least of all reopening — even with a backup ready', async () => {
+    /*
+     * "Try reopening" was badged Recommended for this code, because
+     * `recommendRepair` had no arm for it. Neither repair is a way back either:
+     * a backup or a rebuild would build on a library that may be half the
+     * export's. A verified backup is offered here so the restore arm cannot be
+     * what the answer falls through to.
+     */
+    const { recommendRepair } = await import('../../../src/control/services/recovery');
+    const backups = [{ name: 'pre-migration.sqlite3', bytes: 1, verified: true }];
+    expect(recommendRepair(failed(), backups)).toBe('manual');
+    expect(recommendRepair(failed(), null)).toBe('manual');
+
+    const recoverySource = readFileSync(
+      new URL('../../../src/control/routes/Recovery.svelte', import.meta.url),
+      'utf8',
+    );
+    const arm = recoverySource.slice(
+      recoverySource.indexOf("{:else if advice === 'manual'}"),
+      recoverySource.indexOf('{:else}', recoverySource.indexOf("{:else if advice === 'manual'}")),
+    );
+    expect(arm).toContain('{@render afterRestore()}');
+    expect(arm).not.toMatch(/reopen\(\)|restoreOption|rebuildOption/);
+    // Reached only by its own value: the reopen arm is exactly 'reopen'.
+    expect(recoverySource).toContain("{#if advice === 'reopen'}");
+    const snippet = recoverySource.slice(
+      recoverySource.indexOf('{#snippet afterRestore()}'),
+      recoverySource.indexOf('{/snippet}', recoverySource.indexOf('{#snippet afterRestore()}')),
+    );
+    expect(snippet).not.toMatch(/Recommended|restoreOption|rebuildOption|rescueScripts/);
+    // Nor the script rescue, which copies a live tree that may be the export's.
+    expect(recoverySource).toMatch(
+      /\{#if status\.code !== 'RESTORE_FAILED'\}\s*<Button[\s\S]*?rescueScripts[\s\S]*?\{\/if\}/,
+    );
+
+    // And the screen does not promise the scripts are safe in place: they may
+    // be the export's, with the user's own in quarantine.
+    expect(recoverySource).toMatch(
+      /status\.code === 'RESTORE_FAILED'\}[\s\S]*?Nothing was deleted[\s\S]*?\{:else\}[\s\S]*?Your scripts are safe/,
+    );
+  });
+
+  it('heads the screen with the restore and explains it in Rust’s words', async () => {
+    const { bootFailureTitle, describeBootFailure } = await import(
+      '../../../src/control/services/recovery'
+    );
+    expect(bootFailureTitle(failed())).toMatch(/restor/i);
+    expect(describeBootFailure(failed(NOT_PUT_BACK))).toBe(NOT_PUT_BACK);
+  });
+
+  it('shows Rust’s account of the rollback rather than claiming one', async () => {
+    /*
+     * The authored copy used to say the previous data was put back and a copy
+     * kept — and it won over Rust's message, which says when the data was NOT
+     * put back and names the folder it is in. A path with a code-shaped folder
+     * in it must survive too: that sentence is the only one that says where
+     * the data is.
+     */
+    const { describeError } = await import('../../../src/control/services/errors');
+    const payload = (userMessage: string) => ({
+      code: 'RESTORE_FAILED',
+      category: 'storage',
+      userMessage,
+      recoverable: true,
+      correlationId: 'x',
+    });
+    expect(describeError(payload(NOT_PUT_BACK))).toBe(NOT_PUT_BACK);
+    const odd = 'Speaking Glass set your previous data aside in /Users/me/MY_LIBRARY/quarantine.';
+    expect(describeError(payload(odd))).toBe(odd);
+
+    // With only the code, or an empty message, the copy claims neither outcome.
+    const bare = describeError('RESTORE_FAILED');
+    expect(bare).not.toMatch(/put your previous data back|copy of it was also kept|restored/i);
+    expect(bare).toMatch(/quarantine/);
+    expect(describeError(payload('  '))).toBe(bare);
+  });
+});
