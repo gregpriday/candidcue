@@ -3709,8 +3709,8 @@
               replaces a size that may have been measured at the glass.
             -->
             <div class="control-block panel-size" data-search-row>
-              <span class="control-label">Panel size</span>
               {#if panelSizeLabel !== null && !diagonalOpen}
+                <span class="control-label">Panel size</span>
                 <p class="panel-size-line">
                   <span>{panelSizeLabel}.</span>
                   <button type="button" class="inline-link" onclick={() => openDiagonalCorrection()}>
