@@ -28,7 +28,10 @@
   import StatusPill from '../components/StatusPill.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { chooseStageDisplay } from '../lib/start-take';
-  import { stagePreviewSettingsFromSettings } from '../services/stage-envelope';
+  import {
+    rigPreviewSettingsFromSettings,
+    stagePreviewSettingsFromSettings,
+  } from '../services/stage-envelope';
   import { displayName, resolvePrompterDisplay } from '../lib/take-destination';
   import { displayNumbers, identificationMatches } from '../lib/display-numbers';
   import {
@@ -106,10 +109,12 @@
     type AudioDeviceInfo,
     type AudioLevelSnapshot,
     type FramingPreset,
+    type LensPlacement,
     type MicrophonePermission,
     type OpticalOverrides,
     type OpticalProfile,
     type ReadingCueStyle,
+    type SafeAreaInsets,
     type StageEscapePayload,
     type TextIntensity,
   } from '../../shared/contracts';
@@ -241,7 +246,7 @@
          "mirror" has to find this section, not Teleprompter (where it used to
          live and where it still sent people). */
       keywords:
-        'prompter display and rigs / display / monitor / screen / panel / automatic / primary / identify displays / show test on this display / teleprompter / reading window / reader / presentation / f11 / stage display / destination / always on top / horizontal mirror / vertical mirror / flip / this rig / calibrate / calibration / re-calibrate / recalibrate / measure another rig / forget / body text / line holds / visible / fit / viewing distance / size balance / more text on screen / larger, easier text / how you are framed / framing / close-up / head and shoulders / waist up / full body / text intensity / soft / standard / strong / reading cue / ticks / wash / advanced / reset everything to automatic / size and measure / text size / apparent cap height / arcmin / characters per line / column width / widest the column may go / typography / line height / weight / letter spacing / paragraph spacing / vertical geometry / reading corridor / fade above / fade below / script kept below the band / gap after a sentence / treatment / spoken text / upcoming text / smallest readable label / reading band below the lens / optics / safe area',
+        'prompter display and rigs / display / monitor / screen / panel / automatic / primary / identify displays / show test on this display / teleprompter / reading window / reader / presentation / f11 / stage display / destination / always on top / horizontal mirror / vertical mirror / flip / this rig / calibrate / calibration / re-calibrate / recalibrate / measure another rig / forget / body text / line holds / visible / fit / viewing distance / size balance / more text on screen / larger, easier text / how you are framed / framing / close-up / head and shoulders / waist up / full body / text intensity / soft / standard / strong / reading cue / ticks / wash / advanced / reset everything to automatic / size and measure / text size / apparent cap height / arcmin / characters per line / column width / widest the column may go / typography / line height / weight / letter spacing / paragraph spacing / vertical geometry / reading corridor / fade above / fade below / script kept below the band / gap after a sentence / treatment / spoken text / upcoming text / smallest readable label / reading band below the lens / optics / safe area / camera and safe area / where the camera is / camera / lens / behind the glass / above the screen / below the screen / no camera / lens across / lens down / camera across / column centre / inset / inset from the top / inset from the bottom / inset from the left / inset from the right / hood / bezel / show on teleprompter / preview',
     },
     {
       id: 'teleprompter',
@@ -789,10 +794,14 @@
    *
    * With one exception, and it is the glass: the preview fills the stage
    * display, so it is never drawn on a reading window's paper — see
-   * `stagePreviewSettingsFromSettings`.
+   * `stagePreviewSettingsFromSettings`. In Prompter display it is that
+   * section's rig, as a prompter, with its frame and camera marked — see
+   * `rigPreviewSettingsFromSettings`.
    */
   const previewStageSettings = $derived(
-    stagePreviewSettingsFromSettings($settings, effectiveDisplay),
+    section === 'stage'
+      ? rigPreviewSettingsFromSettings($settings, effectiveDisplay, rig)
+      : stagePreviewSettingsFromSettings($settings, effectiveDisplay),
   );
 
   /**
@@ -850,6 +859,7 @@
          */
         await open.close();
         stagePreview = null;
+        previewTarget = null;
       } catch (err) {
         stagePreviewError = `The preview window did not close. ${describeError(err)} Press Stop preview again to retry.`;
       } finally {
@@ -866,6 +876,7 @@
     }
 
     stagePreviewBusy = true;
+    previewTarget = fingerprint;
     // Claimed before the await: if this screen (or this section) goes away
     // while the window is still opening, the teardown below bumps the token and
     // the handle that eventually arrives is closed instead of stranded.
@@ -896,6 +907,7 @@
     } catch (err) {
       if (epoch === previewEpoch) {
         stagePreview = null;
+        previewTarget = null;
         stagePreviewError = `Speaking Glass could not show the preview on that display. ${describeError(err)}`;
       }
     } finally {
@@ -912,9 +924,13 @@
    */
   let previewEpoch = 0;
 
+  /** The panel the preview is on, or on its way to; null when there is none. */
+  let previewTarget: string | null = null;
+
   /** Release the preview and stop anything still opening from taking hold. */
   function abandonStagePreview(): void {
     previewEpoch += 1;
+    previewTarget = null;
     const open = stagePreview;
     stagePreview = null;
     /*
@@ -983,7 +999,25 @@
      * mid-open and the handle that eventually arrives is closed rather than
      * installed behind a panel whose Stop button is no longer on screen.
      */
-    if (section !== 'teleprompter') abandonStagePreview();
+    if (section !== 'teleprompter' && section !== 'stage') abandonStagePreview();
+  });
+
+  /**
+   * The preview is about ONE panel, and it closes when the panel changes.
+   *
+   * Prompter display is also where the panel is chosen, so with the preview
+   * allowed there a different display can be picked while it is up — and
+   * every control would then edit the new panel's rig while the old panel
+   * kept showing the sample. Compared against the panel the open was aimed
+   * at, claimed before the open's first await, so a choice made while the
+   * window is still opening closes it too (the epoch bump in
+   * `abandonStagePreview` covers that half).
+   */
+  $effect(() => {
+    const fingerprint = effectiveDisplay?.fingerprint ?? null;
+    untrack(() => {
+      if (previewTarget !== null && previewTarget !== fingerprint) abandonStagePreview();
+    });
   });
 
   $effect(() => {
@@ -1397,6 +1431,40 @@
 
   async function clearAllOverrides(): Promise<void> {
     await updateRig({ overrides: {} });
+  }
+
+  /**
+   * Where the camera can be, in the wizard's terms (`Calibrate.svelte`), so a
+   * rig set on either screen reads the same on the other.
+   */
+  const LENS_PLACEMENT_OPTIONS: Array<{ value: LensPlacement; label: string }> = [
+    { value: 'in-panel', label: 'Behind the glass' },
+    { value: 'above', label: 'Above the screen' },
+    { value: 'below', label: 'Below the screen' },
+    { value: 'none', label: 'No camera' },
+  ];
+
+  const SAFE_AREA_EDGES: Array<{ key: keyof SafeAreaInsets; label: string }> = [
+    { key: 'top', label: 'Inset from the top' },
+    { key: 'bottom', label: 'Inset from the bottom' },
+    { key: 'left', label: 'Inset from the left' },
+    { key: 'right', label: 'Inset from the right' },
+  ];
+
+  /**
+   * Move the lens on one axis, from a whole-percent slider.
+   *
+   * Spread from the rig, so the other axis keeps its stored value exactly —
+   * including the Down a camera moved above the screen still carries, which
+   * comes back untouched if it is moved behind the glass again.
+   */
+  async function setLens(axis: 'x' | 'y', percent: number): Promise<void> {
+    await updateRig({ lens: { ...rig.lens, [axis]: percent / 100 } });
+  }
+
+  /** Move one edge of the safe area, leaving the other three as stored. */
+  async function setInset(edge: keyof SafeAreaInsets, percent: number): Promise<void> {
+    await updateRig({ safeArea: { ...rig.safeArea, [edge]: percent / 100 } });
   }
 
   async function chooseRig(name: string): Promise<void> {
@@ -2582,6 +2650,60 @@
   }
 </script>
 
+<!--
+  "Show on teleprompter", in the two sections whose controls are judged on the
+  glass: Teleprompter's appearance, and Prompter display's rig — whose frame
+  and camera the preview marks (`rigMarks`, #489). One preview between them,
+  so moving from one section to the other keeps it up and changes only what it
+  draws.
+-->
+{#snippet previewToggle(rigMarks: boolean)}
+  <div class="preview-row" data-search-row>
+    <Button
+      variant={stagePreview ? 'default' : 'primary'}
+      disabled={stagePreviewBusy || displays.length === 0}
+      onclick={() => void toggleStagePreview()}
+    >
+      {stagePreview ? 'Stop preview' : 'Show on teleprompter'}
+    </Button>
+    <!--
+      "Everything below updates it as you drag" was the sentence this
+      screen's whole defect hid behind: with a rig applied it is false
+      for the four geometry sliders, and it was making the promise at
+      the exact moment the preview was running to be believed.
+    -->
+    <p class="hint-line preview-note">
+      <!-- Where the sample is and who sizes it — no promise about which
+           of the rows below it follows. "Everything" was false for the
+           geometry a rig owns, "the rest" for an intensity a rig
+           overrides and for the reading window's own appearance. -->
+      {#if stagePreview && rigMarks}
+        Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>, with
+        the frame dashed and the camera marked.
+      {:else if stagePreview && geometryOwner}
+        Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
+        Size, line height, column width and reading band come from
+        <strong>{geometryOwner.label}</strong>.
+      {:else if stagePreview}
+        Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
+      {:else if displays.length === 0}
+        No displays detected — connect the teleprompter and open Prompter display and rigs.
+      {:else if rigMarks}
+        Puts a sample script on <strong
+          >{effectiveDisplay?.name ?? 'the stage display'}</strong
+        > with this rig's frame dashed and its camera marked, so you can set them against the glass.
+      {:else}
+        Puts a sample script on <strong
+          >{effectiveDisplay?.name ?? 'the stage display'}</strong
+        > so you can judge these settings where they apply.
+      {/if}
+    </p>
+  </div>
+  {#if stagePreviewError}
+    <p class="inline-alert" role="alert">{stagePreviewError}</p>
+  {/if}
+{/snippet}
+
 <div class="page">
   <!--
     In a WINDOW there is nowhere to go back to, and nothing to finish
@@ -3232,7 +3354,13 @@
             <Button disabled={identifying} onclick={() => void identifyDisplays()}>Identify displays</Button>
             <!-- Named by the number Identify paints on the panel, which is short
                  at any monitor name and is the one the tiles carry. -->
-            <Button disabled={!effectiveDisplay || stageTesting} onclick={() => void runDisplayTest()}>
+            <!-- Not while the preview is up or opening: opening a stage window
+                 replaces the one already open, so the test would take the
+                 preview down behind its own Stop button. -->
+            <Button
+              disabled={!effectiveDisplay || stageTesting || stagePreview !== null || stagePreviewBusy}
+              onclick={() => void runDisplayTest()}
+            >
               {stageTesting
                 ? 'Opening…'
                 : effectiveDisplay && numbers.has(effectiveDisplay.fingerprint)
@@ -3682,6 +3810,76 @@
             </SettingRow>
 
             <!--
+              Where the camera is, and how much of the panel the glass shows
+              (#489). Until now only the Calibrate wizard could set either.
+
+              Set by eye, so the preview sits with them: with it up, the
+              frame is dashed on the glass and the camera marked over the
+              sample text, and both follow each slider as it moves.
+
+              Every change goes through `updateRig`, like the rows above: it
+              edits the rig in force and leaves every other stored value as it
+              was, and on a panel running automatically the first change
+              stores the proposal as a rig, which is what applies it.
+            -->
+            <div class="advanced-group" data-rig-camera>
+              <h4 class="advanced-head">Camera and safe area</h4>
+              {@render previewToggle(true)}
+
+              <Select
+                layout="row"
+                label="Where the camera is"
+                description="Behind the glass is a teleprompter hood. A webcam on top of a monitor is above the screen."
+                value={rig.lensPlacement}
+                options={LENS_PLACEMENT_OPTIONS}
+                onchange={(value) => void updateRig({ lensPlacement: value as LensPlacement })}
+              />
+
+              <!-- Across counts for every placement: the column is centred
+                   under it even when the camera is off the glass. Down is the
+                   reading band's height, and only a camera in the picture has
+                   one — the resolver ignores it for the other three. -->
+              <Slider
+                label={rig.lensPlacement === 'in-panel'
+                  ? 'Lens across'
+                  : rig.lensPlacement === 'none'
+                    ? 'Column centre'
+                    : 'Camera across'}
+                value={Math.round(rig.lens.x * 100)}
+                min={0}
+                max={100}
+                format={(v) => `${v}%`}
+                onchange={(value) => void setLens('x', value)}
+              />
+              {#if rig.lensPlacement === 'in-panel'}
+                <Slider
+                  label="Lens down"
+                  description="Also where the reading band sits — your eyeline for the whole take."
+                  value={Math.round(rig.lens.y * 100)}
+                  min={10}
+                  max={90}
+                  format={(v) => `${v}%`}
+                  onchange={(value) => void setLens('y', value)}
+                />
+              {/if}
+
+              <p class="hint-line">
+                Insets keep text out from under a hood or bezel. Move each edge in until the dashed
+                frame sits inside what you can see through the glass.
+              </p>
+              {#each SAFE_AREA_EDGES as edge (edge.key)}
+                <Slider
+                  label={edge.label}
+                  value={Math.round(rig.safeArea[edge.key] * 100)}
+                  min={0}
+                  max={45}
+                  format={(v) => `${v}%`}
+                  onchange={(value) => void setInset(edge.key, value)}
+                />
+              {/each}
+            </div>
+
+            <!--
               Every derived value, reachable.
 
               Behind a disclosure because almost nobody needs any of it, and
@@ -3888,43 +4086,7 @@
             one. The reading band especially: it wants to sit over the lens, and
             that is an alignment somebody performs by watching it move.
           -->
-          <div class="preview-row" data-search-row>
-            <Button
-              variant={stagePreview ? 'default' : 'primary'}
-              disabled={stagePreviewBusy || displays.length === 0}
-              onclick={() => void toggleStagePreview()}
-            >
-              {stagePreview ? 'Stop preview' : 'Show on teleprompter'}
-            </Button>
-            <!--
-              "Everything below updates it as you drag" was the sentence this
-              screen's whole defect hid behind: with a rig applied it is false
-              for the four geometry sliders, and it was making the promise at
-              the exact moment the preview was running to be believed.
-            -->
-            <p class="hint-line preview-note">
-              <!-- Where the sample is and who sizes it — no promise about which
-                   of the rows below it follows. "Everything" was false for the
-                   geometry a rig owns, "the rest" for an intensity a rig
-                   overrides and for the reading window's own appearance. -->
-              {#if stagePreview && geometryOwner}
-                Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
-                Size, line height, column width and reading band come from
-                <strong>{geometryOwner.label}</strong>.
-              {:else if stagePreview}
-                Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
-              {:else if displays.length === 0}
-                No displays detected — connect the teleprompter and open Prompter display and rigs.
-              {:else}
-                Puts a sample script on <strong
-                  >{effectiveDisplay?.name ?? 'the stage display'}</strong
-                > so you can judge these settings where they apply.
-              {/if}
-            </p>
-          </div>
-          {#if stagePreviewError}
-            <p class="inline-alert" role="alert">{stagePreviewError}</p>
-          {/if}
+          {@render previewToggle(false)}
           <!--
             The bundled face is offered, and first. `stageFontStack('high-legibility')`
             resolves Atkinson Hyperlegible Next and `font-hash.test.ts` pins the

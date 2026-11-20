@@ -92,6 +92,7 @@
   import AckChip from './renderer/AckChip.svelte';
   import HoldStatus from './renderer/HoldStatus.svelte';
   import CalibrationCard from './renderer/CalibrationCard.svelte';
+  import RigMarks from './renderer/RigMarks.svelte';
   import StageDock from './StageDock.svelte';
   import {
     resolveHoldStatus,
@@ -2840,6 +2841,15 @@
             </div>
           {/if}
         {/if}
+      {:else if settings?.rigMarks && !app.blanked}
+        <!--
+          The rig Settings › Prompter display is editing: its frame and lens,
+          over the sample text, in the same mirrored plane and the same raw
+          viewport fractions as the wizard's overlays above. Never both: a
+          calibration card is the wizard's whole screen, and a second frame
+          drawn over it would be one too many.
+        -->
+        <RigMarks marks={settings.rigMarks} />
       {/if}
     </div>
   </div>

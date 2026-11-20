@@ -586,3 +586,113 @@ describe('the calibration overlays', () => {
     expect(container.querySelector('.crosshair')).toBeNull();
   });
 });
+
+/*
+ * #489 — Settings › Prompter display's preview marks the rig's frame and
+ * camera over the sample text, and follows each change.
+ */
+describe("the rig preview's marks", () => {
+  const HOOD = {
+    safeArea: { top: 0.1, right: 0.04, bottom: 0.2, left: 0.06 },
+    lens: { x: 0.5, y: 0.25 },
+    lensPlacement: 'in-panel' as const,
+  };
+
+  function settingsWith(marks?: typeof HOOD | { [K in keyof typeof HOOD]: unknown }) {
+    const base = buildStageSettings({ stageMode: 'clean' });
+    return marks ? { ...base, rigMarks: marks } : base;
+  }
+
+  function percent(el: Element | null, prop: 'left' | 'top' | 'right' | 'bottom'): number {
+    return Number.parseFloat((el as HTMLElement | null)?.style.getPropertyValue(prop) ?? 'NaN');
+  }
+
+  it('draws the frame and the lens, mirrored with the sample', async () => {
+    const container = await mountStage();
+    directive({ kind: 'settings', settings: settingsWith(HOOD) as never });
+    await settle();
+
+    const frame = container.querySelector('.rig-frame');
+    expect(frame).not.toBeNull();
+    expect(planeOf(container, '.rig-marks')).toBe('talent');
+    expect(percent(frame, 'top')).toBeCloseTo(10);
+    expect(percent(frame, 'right')).toBeCloseTo(4);
+    expect(percent(frame, 'bottom')).toBeCloseTo(20);
+    expect(percent(frame, 'left')).toBeCloseTo(6);
+
+    // The lens is a fraction of the SAFE rectangle, folded back onto the panel.
+    const lens = container.querySelector('.rig-lens');
+    expect(lens).not.toBeNull();
+    expect(percent(lens, 'left')).toBeCloseTo((0.06 + 0.5 * 0.9) * 100);
+    expect(percent(lens, 'top')).toBeCloseTo((0.1 + 0.25 * 0.7) * 100);
+  });
+
+  it('follows each change live, and clears when the marks are dropped', async () => {
+    const container = await mountStage();
+    directive({ kind: 'settings', settings: settingsWith(HOOD) as never });
+    await settle();
+
+    directive({
+      kind: 'settings',
+      settings: settingsWith({
+        ...HOOD,
+        safeArea: { top: 0, right: 0, bottom: 0, left: 0.3 },
+        lens: { x: 0, y: 0.5 },
+      }) as never,
+    });
+    await settle();
+    expect(percent(container.querySelector('.rig-frame'), 'left')).toBeCloseTo(30);
+    expect(percent(container.querySelector('.rig-lens'), 'left')).toBeCloseTo(30);
+    expect(percent(container.querySelector('.rig-lens'), 'top')).toBeCloseTo(50);
+
+    // Teleprompter's preview sends settings without marks.
+    directive({ kind: 'settings', settings: settingsWith() as never });
+    await settle();
+    expect(container.querySelector('.rig-marks')).toBeNull();
+  });
+
+  it('marks the edge for a camera off the glass, and only the frame with none', async () => {
+    const container = await mountStage();
+    directive({ kind: 'settings', settings: settingsWith({ ...HOOD, lensPlacement: 'above' }) as never });
+    await settle();
+    expect(container.querySelector('.rig-lens')).toBeNull();
+    const edge = container.querySelector('.rig-lens-edge');
+    expect(edge?.classList.contains('above')).toBe(true);
+    expect(percent(edge, 'left')).toBeCloseTo((0.06 + 0.5 * 0.9) * 100);
+
+    directive({ kind: 'settings', settings: settingsWith({ ...HOOD, lensPlacement: 'below' }) as never });
+    await settle();
+    expect(container.querySelector('.rig-lens-edge')?.classList.contains('below')).toBe(true);
+
+    directive({ kind: 'settings', settings: settingsWith({ ...HOOD, lensPlacement: 'none' }) as never });
+    await settle();
+    expect(container.querySelector('.rig-frame')).not.toBeNull();
+    expect(container.querySelector('.rig-lens')).toBeNull();
+    expect(container.querySelector('.rig-lens-edge')).toBeNull();
+  });
+
+  it('clamps a frame that would invert to the bounds the wizard uses', async () => {
+    const container = await mountStage();
+    directive({
+      kind: 'settings',
+      settings: settingsWith({
+        ...HOOD,
+        safeArea: { top: 0.9, right: -1, bottom: Number.NaN, left: 0.45 },
+      }) as never,
+    });
+    await settle();
+    const frame = container.querySelector('.rig-frame');
+    expect(percent(frame, 'top')).toBeCloseTo(45);
+    expect(percent(frame, 'right')).toBeCloseTo(0);
+    expect(percent(frame, 'bottom')).toBeCloseTo(0);
+  });
+
+  it('gives way to a calibration card', async () => {
+    const container = await mountStage();
+    directive({ kind: 'settings', settings: settingsWith(HOOD) as never });
+    directive({ kind: 'calibration', active: true, mode: 'safe-area', safeArea: HOOD.safeArea });
+    await settle();
+    expect(container.querySelector('.calibration-card')).not.toBeNull();
+    expect(container.querySelector('.rig-marks')).toBeNull();
+  });
+});
