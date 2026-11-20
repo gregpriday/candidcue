@@ -382,11 +382,11 @@ const ERROR_COPY: Record<string, string> = {
   RESTORE_FAILED:
     'The restore did not finish, and Speaking Glass put your previous data back. A copy of it was also kept.',
   RESTORE_ALREADY_SCHEDULED:
-    'A restore is already scheduled. Cancel it in Settings › Data, privacy & updates to restore from a different export.',
+    'A restore is already scheduled; Settings › Data, privacy & updates shows it. Nothing new was scheduled.',
   RESTORE_SELECTION_STALE:
     'That export changed, or another was chosen, after you confirmed. Nothing was scheduled. Choose the export again.',
   RESTORE_IN_PROGRESS:
-    'A launch of Speaking Glass has already started this restore, so it can no longer be cancelled. The next launch finishes it or puts your previous data back.',
+    'A launch of Speaking Glass has already started this restore, so it can no longer be cancelled.',
 
   /* -- installing a language ---------------------------------------------- */
   //

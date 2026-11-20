@@ -869,6 +869,17 @@ async fn a_scheduled_restore_reads_back_with_the_export_it_names() {
     );
     assert_eq!(pending.attempts, 0);
     assert!(pending.cancellable);
+    // Both stamps come from the same clock in the same format, so the
+    // scheduling time sorts at or after the export's — and is a time at all.
+    let taken = manifest_of(Path::new(&export.path))["createdAt"]
+        .as_str()
+        .expect("createdAt")
+        .to_string();
+    assert!(
+        !pending.requested_at.is_empty() && pending.requested_at >= taken,
+        "scheduled no earlier than the export was taken: {} vs {taken}",
+        pending.requested_at
+    );
 
     // Still readable when the export folder has gone: the next launch will
     // still try it, so the row must still be there to cancel it.
@@ -956,13 +967,22 @@ async fn a_restore_a_launch_has_started_on_is_never_cancelled() {
             .expect("pending");
         assert!(!pending.cancellable, "{label}: shown as not cancellable");
 
-        let refused = backup::cancel_pending_restore(&h.paths);
-        assert!(refused.is_err(), "{label}: cancel must refuse");
+        let refused = backup::cancel_pending_restore(&h.paths).expect_err("cancel must refuse");
+        assert_eq!(refused.code(), "RESTORE_IN_PROGRESS", "{label}");
         assert_eq!(
             fs::read(&marker).expect("marker survives"),
             before,
             "{label}: the marker is left exactly as it was"
         );
+
+        // Nor may a new schedule replace it: an attempted marker is the
+        // journal of what a launch moved, and an unattempted one is a restore
+        // the user can see and cancel.
+        let again = backup::restore_all_data(&h.paths, Path::new(&export.path))
+            .await
+            .expect_err("scheduling over a marker must refuse");
+        assert_eq!(again.code(), "RESTORE_ALREADY_SCHEDULED", "{label}");
+        assert_eq!(fs::read(&marker).expect("marker"), before, "{label}: untouched by the refusal");
         h.pool.close().await;
     }
 }
@@ -979,7 +999,39 @@ async fn an_unreadable_marker_is_reported_not_hidden_or_removed() {
     fs::write(&marker, b"{ not json").expect("write");
     assert!(backup::read_pending_restore(&h.paths).is_err());
     assert!(backup::cancel_pending_restore(&h.paths).is_err());
-    assert!(marker.exists(), "neither read nor cancel removes it");
+    assert_eq!(
+        fs::read(&marker).expect("still there"),
+        b"{ not json",
+        "neither read nor cancel removes or rewrites it"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_export_date_never_costs_a_started_restore_its_journal() {
+    /*
+     * The export date is for display. The launch-time apply retires a marker
+     * it cannot parse, so a date of the wrong type must read as no date —
+     * never fail the parse and take the attempt count and quarantine record
+     * with it.
+     */
+    let h = harness().await;
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    forge_marker(
+        h.dir.path(),
+        serde_json::json!({ "attempts": 1, "exportCreatedAt": 20261101 }),
+    );
+    let pending = backup::read_pending_restore(&h.paths)
+        .expect("still parses")
+        .expect("pending");
+    assert_eq!(pending.export_created_at, None);
+    assert_eq!(pending.attempts, 1);
+    assert!(!pending.cancellable);
 }
 
 #[tokio::test]

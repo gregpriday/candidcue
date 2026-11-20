@@ -284,13 +284,16 @@ pub async fn schedule_restore(
     let chosen = selection.take(selection_id).ok_or_else(stale_restore_selection)?;
     let current = crate::backup::inspect_restore_export(&chosen.path)
         .await
-        .map_err(|_| stale_restore_selection())?;
+        .map_err(|err| {
+            // The cause is kept for the log; what the user can do about any of
+            // them is the same — choose the export again and see.
+            tracing::warn!(error = %err, "the confirmed export no longer passes its checks");
+            stale_restore_selection()
+        })?;
     if !chosen.same_export_as(&current) {
         return Err(stale_restore_selection());
     }
-    crate::backup::schedule_inspected_restore(&paths, &current)?;
-    crate::backup::read_pending_restore(&paths)?
-        .ok_or_else(|| AppError::Internal("a restore marker vanished as it was written".into()))
+    crate::backup::schedule_inspected_restore(&paths, &current)
 }
 
 /// The restore waiting for the next launch, if any.
@@ -616,4 +619,81 @@ pub async fn log_client_diagnostic(
     // point is to observe a broken path, not to add a way to break it.
     let _ = crate::diagnostics::logging::append_client_trace(&paths.logs_dir(), &entry);
     Ok(())
+}
+
+#[cfg(test)]
+mod restore_selection_tests {
+    use super::RestoreSelection;
+    use crate::backup::{ExportManifest, InspectedExport};
+
+    fn export(name: &str) -> InspectedExport {
+        InspectedExport {
+            path: std::path::PathBuf::from(format!("/exports/{name}")),
+            manifest: ExportManifest {
+                export_schema_version: 1,
+                app_version: "1.0.0".into(),
+                created_at: format!("taken-{name}"),
+                database_schema_version: 1,
+                platform: "test".into(),
+                sections: Vec::new(),
+                files: Vec::new(),
+                warnings: Vec::new(),
+                excluded: Vec::new(),
+                complete: true,
+            },
+            scripts_in_export: 1,
+        }
+    }
+
+    #[test]
+    fn a_choice_is_taken_once_and_only_by_its_own_id() {
+        let selection = RestoreSelection::default();
+        let a = selection.reserve();
+        assert!(selection.publish(a, export("a")));
+        assert!(selection.take(a + 1).is_none(), "a wrong id takes nothing");
+        assert_eq!(
+            selection.take(a).expect("its own id takes it").path,
+            std::path::PathBuf::from("/exports/a"),
+            "and a wrong id left it where it was"
+        );
+        assert!(selection.take(a).is_none(), "a replayed id finds nothing");
+    }
+
+    #[test]
+    fn a_newer_choice_supersedes_an_older_one_still_in_its_picker() {
+        /*
+         * A's picker is still open when B's starts. Whatever A's picker
+         * answers later, a yes to A must never schedule anything — and B's own
+         * choice must survive A's late arrival.
+         */
+        let selection = RestoreSelection::default();
+        let a = selection.reserve();
+        let b = selection.reserve();
+        assert!(selection.publish(b, export("b")));
+        assert!(!selection.publish(a, export("a")), "A arrived late and is refused");
+        assert!(selection.take(a).is_none());
+        assert_eq!(
+            selection.take(b).expect("B is still chosen").path,
+            std::path::PathBuf::from("/exports/b")
+        );
+    }
+
+    #[test]
+    fn starting_a_new_choice_withdraws_the_last_one_even_if_it_is_cancelled() {
+        let selection = RestoreSelection::default();
+        let a = selection.reserve();
+        assert!(selection.publish(a, export("a")));
+        // B's picker opens and is cancelled: nothing is published for it.
+        let _b = selection.reserve();
+        assert!(selection.take(a).is_none(), "A's confirmation can no longer schedule it");
+    }
+
+    #[test]
+    fn a_different_export_at_the_same_path_is_not_the_same_export() {
+        let first = export("a");
+        let mut second = export("a");
+        assert!(first.same_export_as(&second));
+        second.manifest.created_at = "taken-later".into();
+        assert!(!first.same_export_as(&second));
+    }
 }

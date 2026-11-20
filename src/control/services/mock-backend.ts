@@ -268,8 +268,10 @@ export const mockScripts = {
 
 /* --------------------------------------------------------------- settings */
 
-const mockRestore: { selectionId: number; pending: PendingRestore | null } = {
+const mockRestore: { selectionId: number; chosen: number | null; pending: PendingRestore | null } = {
   selectionId: 0,
+  /** The id the last choice is held under, taken once by a schedule. */
+  chosen: null,
   pending: null,
 };
 
@@ -296,6 +298,7 @@ export const mockSettings = {
    */
   chooseRestoreExport(): RestorePreview | null {
     mockRestore.selectionId += 1;
+    mockRestore.chosen = mockRestore.selectionId;
     return {
       selectionId: mockRestore.selectionId,
       path: '/Users/example/Desktop/SpeakingGlass-export-20261101-091500',
@@ -305,9 +308,12 @@ export const mockSettings = {
     };
   },
   scheduleRestore(selectionId: number): PendingRestore {
-    if (selectionId !== mockRestore.selectionId || mockRestore.pending) {
+    const chosen = mockRestore.chosen;
+    mockRestore.chosen = null;
+    if (chosen === null || selectionId !== chosen) {
       throw new Error('That export is no longer the one chosen. Choose it again.');
     }
+    if (mockRestore.pending) throw new Error('A restore is already scheduled.');
     mockRestore.pending = {
       exportPath: '/Users/example/Desktop/SpeakingGlass-export-20261101-091500',
       exportCreatedAt: '2026-11-01T09:15:00Z',

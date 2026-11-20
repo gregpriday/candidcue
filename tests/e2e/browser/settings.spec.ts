@@ -1025,7 +1025,7 @@ test('Restore from export asks first, shows the scheduled restore, and cancels i
   await expect(dialog).toContainText('7 scripts');
   await expect(dialog).toContainText(/replaces your current scripts, settings \(calibrated rigs included\) and take history/);
   await expect(dialog).toContainText('quarantine folder');
-  await expect(dialog).toContainText('anything you change before you quit');
+  await expect(dialog).toContainText('anything you change in them before you quit goes there too');
   await dialog.getByRole('button', { name: 'Don’t restore' }).click();
   await expect(dialog).toHaveCount(0);
   expect(await calls('schedule_restore')).toBe(0);
@@ -1042,6 +1042,13 @@ test('Restore from export asks first, shows the scheduled restore, and cancels i
   await expect(row).toContainText(`taken on ${taken}`);
   expect(await calls('schedule_restore')).toBe(1);
   await expect(restore).toBeDisabled();
+
+  // A search that finds the action keeps the scheduled restore with it.
+  const search = page.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('restore from export');
+  await expect(row).toBeVisible();
+  await expect(row.getByRole('button', { name: 'Cancel restore' })).toBeVisible();
+  await search.fill('');
 
   // Settings closed and reopened: the row comes back from a fresh read.
   await openPreferences(page);

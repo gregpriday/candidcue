@@ -42,6 +42,7 @@ describe('restore IPC payloads match the Rust signatures', () => {
     nextResult = fixture.expectedRestorePreview;
     const preview = await settings.chooseRestoreExport();
     expect(preview).toEqual(fixture.expectedRestorePreview);
+    expect(calls, 'one picker per choice').toHaveLength(2);
   });
 
   it('schedule_restore sends the choice id and nothing else', async () => {
@@ -49,6 +50,9 @@ describe('restore IPC payloads match the Rust signatures', () => {
     const pending = await settings.scheduleRestore(fixture.expectedRestorePreview.selectionId);
     expect(calls[0]).toEqual({ command: 'schedule_restore', payload: fixture.schedule_restore });
     expect(pending).toEqual(fixture.expectedPendingRestore);
+    // The id passed, not one remembered: a second choice's id goes back as is.
+    await settings.scheduleRestore(11);
+    expect(calls[1]!.payload).toEqual({ selectionId: 11 });
   });
 
   it('get_pending_restore and cancel_pending_restore take no arguments', async () => {
@@ -56,7 +60,14 @@ describe('restore IPC payloads match the Rust signatures', () => {
     expect(await settings.getPendingRestore()).toEqual(fixture.expectedLegacyPendingRestore);
     nextResult = true;
     expect(await settings.cancelPendingRestore()).toBe(true);
-    expect(calls.map((c) => c.command)).toEqual(['get_pending_restore', 'cancel_pending_restore']);
+    // "Nothing to cancel" is Rust's answer too, and must reach the caller.
+    nextResult = false;
+    expect(await settings.cancelPendingRestore()).toBe(false);
+    expect(calls.map((c) => c.command)).toEqual([
+      'get_pending_restore',
+      'cancel_pending_restore',
+      'cancel_pending_restore',
+    ]);
     for (const call of calls) expect(call.payload ?? {}).toEqual({});
   });
 });
@@ -73,9 +84,9 @@ describe('what Settings says about a restore', () => {
     expect(body).toContain(formatExportTime(preview.createdAt));
     expect(body).toContain('7 scripts');
     expect(body).toMatch(/next time Speaking Glass opens/);
-    expect(body).toMatch(/scripts, settings \(calibrated rigs included\) and take history/);
+    expect(body).toMatch(/replaces your current scripts, settings \(calibrated rigs included\) and take history with the export’s/);
     expect(body).toMatch(/quarantine folder/);
-    expect(body, 'changes made before quitting go too').toMatch(/anything you change before you quit/);
+    expect(body, 'changes made before quitting go too').toMatch(/anything you change in them before you quit goes there too/);
     expect(restoreConfirmation({ ...preview, scriptsInExport: 1 }).body).toContain('holds 1 script.');
   });
 
@@ -84,6 +95,7 @@ describe('what Settings says about a restore', () => {
     const lines = pendingRestoreLines(pending);
     expect(lines.body).toContain(pending.exportPath);
     expect(lines.body).toContain(`taken on ${formatExportTime(pending.exportCreatedAt!)}`);
+    expect(lines.body).toMatch(/moved to the quarantine folder and replaced with the export’s/);
     expect(lines.note).toBeNull();
   });
 
@@ -95,7 +107,19 @@ describe('what Settings says about a restore', () => {
     expect(lines.note).toMatch(/can no longer be cancelled/);
   });
 
+  it('decides Cancel by whether a launch has started, not by the date', () => {
+    // An undated marker nothing has touched is still cancellable…
+    const undated = pendingRestoreLines({ ...fixture.expectedLegacyPendingRestore, attempts: 0, cancellable: true });
+    expect(undated.note).toBeNull();
+    // …and a dated one a launch has started on is not.
+    const started = pendingRestoreLines({ ...fixture.expectedPendingRestore, attempts: 1, cancellable: false });
+    expect(started.note).toMatch(/can no longer be cancelled/);
+    expect(started.body).toContain('taken on');
+  });
+
   it('shows an unparseable stamp as itself, not as "Invalid Date"', () => {
     expect(formatExportTime('not-a-date')).toBe('not-a-date');
+    expect(formatExportTime('2026-13-45')).toBe('2026-13-45');
+    expect(formatExportTime('2026-11-01T09:15:00Z')).not.toBe('2026-11-01T09:15:00Z');
   });
 });

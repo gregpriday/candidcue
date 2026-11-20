@@ -818,17 +818,19 @@ function shimBody(config: ShimConfig): void {
         if (!config.restoreExport) return null;
         const selectionId = Number(sessionStorage.getItem('__E2E_RESTORE_SELECTION__') ?? '0') + 1;
         sessionStorage.setItem('__E2E_RESTORE_SELECTION__', String(selectionId));
+        sessionStorage.setItem('__E2E_RESTORE_CHOSEN__', String(selectionId));
         return { selectionId, ...config.restoreExport };
       }
       case 'schedule_restore': {
-        const chosen = Number(sessionStorage.getItem('__E2E_RESTORE_SELECTION__') ?? '0');
-        if (!config.restoreExport || args?.['selectionId'] !== chosen) {
+        // Taken once, as Rust's `RestoreSelection::take` does.
+        const chosen = sessionStorage.getItem('__E2E_RESTORE_CHOSEN__');
+        sessionStorage.removeItem('__E2E_RESTORE_CHOSEN__');
+        if (!config.restoreExport || chosen === null || args?.['selectionId'] !== Number(chosen)) {
           throw { code: 'RESTORE_SELECTION_STALE', userMessage: 'That export is no longer the one chosen.' };
         }
         if (sessionStorage.getItem('__E2E_RESTORE_PENDING__') !== null) {
           throw { code: 'RESTORE_ALREADY_SCHEDULED', userMessage: 'A restore is already scheduled.' };
         }
-        sessionStorage.removeItem('__E2E_RESTORE_SELECTION__');
         const pending = {
           exportPath: config.restoreExport.path,
           exportCreatedAt: config.restoreExport.createdAt,

@@ -684,8 +684,25 @@ struct PendingRestore {
     /// without reading the folder again: the folder is the user's, and it may
     /// have been moved or unplugged since. Absent on a marker written before
     /// it existed, which the launch-time apply never reads anyway.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Read leniently: a value that is not a string reads as no date. The
+    /// launch-time apply retires a marker it cannot parse, and this field is
+    /// for display only — it must never be the reason a journal of moves
+    /// already made is thrown away.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_optional_string"
+    )]
     export_created_at: Option<String>,
+}
+
+fn lenient_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_str().map(str::to_string))
 }
 
 /// Write the marker, replacing it whole.
@@ -843,35 +860,45 @@ fn marker_lock() -> std::sync::MutexGuard<'static, ()> {
 /// replace a restore they can see with one they never confirmed. An attempted
 /// one is the journal of what a launch moved into quarantine, and overwriting
 /// it would strand the user's original data there.
-pub fn schedule_inspected_restore(paths: &DataPaths, inspected: &InspectedExport) -> Result<(), AppError> {
+pub fn schedule_inspected_restore(
+    paths: &DataPaths,
+    inspected: &InspectedExport,
+) -> Result<PendingRestoreStatus, AppError> {
     let _guard = marker_lock();
     let marker = paths.root().join(PENDING_RESTORE);
-    if marker.exists() {
-        return Err(AppError::structured(
-            "RESTORE_ALREADY_SCHEDULED",
-            crate::errors::ErrorCategory::Validation,
-            "A restore is already scheduled. Cancel it first to restore from a different export.",
-            true,
-        ));
+    // The entry itself, not what it points at: `exists()` follows a link and
+    // reads a dangling one — or one it cannot stat — as nothing there.
+    match std::fs::symlink_metadata(&marker) {
+        Ok(_) => {
+            return Err(AppError::structured(
+                "RESTORE_ALREADY_SCHEDULED",
+                crate::errors::ErrorCategory::Validation,
+                "A restore is already scheduled; Settings › Data, privacy & updates shows it.",
+                true,
+            ));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
     }
 
     // Durably, like every other write to this marker: a scheduled restore that
     // a crash forgets is a restore the user asked for and did not get, with
     // nothing on screen to say so.
-    write_json_durably(
-        &marker,
-        &PendingRestore {
-            export_path: inspected.path.to_string_lossy().to_string(),
-            requested_at: crate::util::now_iso(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-            attempts: 0,
-            quarantine_generation: None,
-            evacuated: Vec::new(),
-            absent: Vec::new(),
-            completed: false,
-            export_created_at: Some(inspected.manifest.created_at.clone()),
-        },
-    )
+    let pending = PendingRestore {
+        export_path: inspected.path.to_string_lossy().to_string(),
+        requested_at: crate::util::now_iso(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        attempts: 0,
+        quarantine_generation: None,
+        evacuated: Vec::new(),
+        absent: Vec::new(),
+        completed: false,
+        export_created_at: Some(inspected.manifest.created_at.clone()),
+    };
+    write_json_durably(&marker, &pending)?;
+    // From the value written, not a fresh read: once the lock is released a
+    // cancel or another schedule could stand between the two.
+    Ok(pending.status())
 }
 
 /// A scheduled restore, as Settings shows it (#488).
@@ -910,6 +937,16 @@ impl PendingRestore {
             && self.evacuated.is_empty()
             && self.absent.is_empty()
     }
+
+    fn status(&self) -> PendingRestoreStatus {
+        PendingRestoreStatus {
+            export_path: self.export_path.clone(),
+            export_created_at: self.export_created_at.clone(),
+            requested_at: self.requested_at.clone(),
+            attempts: self.attempts,
+            cancellable: self.untouched(),
+        }
+    }
 }
 
 fn read_marker(marker: &Path) -> Result<Option<PendingRestore>, AppError> {
@@ -928,16 +965,7 @@ fn read_marker(marker: &Path) -> Result<Option<PendingRestore>, AppError> {
 
 /// The restore waiting for the next launch, if there is one.
 pub fn read_pending_restore(paths: &DataPaths) -> Result<Option<PendingRestoreStatus>, AppError> {
-    let Some(pending) = read_marker(&paths.root().join(PENDING_RESTORE))? else {
-        return Ok(None);
-    };
-    Ok(Some(PendingRestoreStatus {
-        cancellable: pending.untouched(),
-        export_path: pending.export_path,
-        export_created_at: pending.export_created_at,
-        requested_at: pending.requested_at,
-        attempts: pending.attempts,
-    }))
+    Ok(read_marker(&paths.root().join(PENDING_RESTORE))?.map(|pending| pending.status()))
 }
 
 /// Call off a scheduled restore that no launch has started on.
@@ -962,7 +990,7 @@ pub fn cancel_pending_restore(paths: &DataPaths) -> Result<bool, AppError> {
             "RESTORE_IN_PROGRESS",
             crate::errors::ErrorCategory::Storage,
             "A launch of Speaking Glass has already started this restore, so it can no longer be \
-             cancelled. The next launch finishes it or puts your previous data back.",
+             cancelled.",
             true,
         ));
     }

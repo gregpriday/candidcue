@@ -579,6 +579,7 @@ describe('#488 the Data section says what export and restore actually do', () =>
   it('does not claim the logs are in an export', () => {
     // The manifest excludes logs and speech models (backup::export_all_data).
     expect(prose).not.toMatch(/export holds all of it/i);
+    expect(prose).not.toMatch(/logs (?:are|is) (?:also )?(?:included|exported|in the export)/i);
     expect(prose).toMatch(/export holds everything except the logs and the downloaded speech languages/i);
   });
 
@@ -586,6 +587,6 @@ describe('#488 the Data section says what export and restore actually do', () =>
     const statement = /Restoring from an export replaces your scripts, settings and take history[^.]*\./i.exec(prose);
     expect(statement, 'one plain statement of what restore does').not.toBeNull();
     expect(statement![0]).toMatch(/next time Speaking Glass opens/);
-    expect(statement![0]).toMatch(/quarantine folder/);
+    expect(statement![0], 'and the previous data goes there').toMatch(/moves what was there to the quarantine folder/);
   });
 });

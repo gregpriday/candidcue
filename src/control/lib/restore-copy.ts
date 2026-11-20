@@ -40,8 +40,8 @@ export function restoreConfirmation(preview: RestorePreview): ConfirmRequest {
       `and holds ${scriptCount(preview.scriptsInExport)}. ` +
       'The next time Speaking Glass opens, it replaces your current scripts, settings ' +
       '(calibrated rigs included) and take history with the export’s. ' +
-      'Your current data is moved to the quarantine folder in the data folder, together with ' +
-      'anything you change before you quit.',
+      'Those are moved to the quarantine folder in the data folder as they are then, so ' +
+      'anything you change in them before you quit goes there too.',
     confirmLabel: 'Schedule restore',
     cancelLabel: 'Don’t restore',
     danger: true,
@@ -57,11 +57,12 @@ export function pendingRestoreLines(pending: PendingRestore): { head: string; bo
   return {
     head: 'Restore scheduled for the next launch',
     body:
-      `${taken}, in ${pending.exportPath}. When Speaking Glass next opens, your current data ` +
-      'is moved to the quarantine folder and replaced with the export’s.',
+      `${taken}, in ${pending.exportPath}. When Speaking Glass next opens, your current ` +
+      'scripts, settings and take history are moved to the quarantine folder and replaced with ' +
+      'the export’s.',
     note: pending.cancellable
       ? null
       : 'A launch of Speaking Glass has already started this restore, so it can no longer be ' +
-        'cancelled. The next launch finishes it or puts your previous data back.',
+        'cancelled.',
   };
 }

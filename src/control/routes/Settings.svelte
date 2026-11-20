@@ -2557,8 +2557,10 @@
    *
    * `undefined` until the first read lands, so the Restore button is not
    * offered over a restore nobody has been told about yet. `restoreSeq` drops
-   * a read that a schedule or a cancel overtook: an older answer must not
-   * bring back a row that was just cancelled.
+   * a read that a schedule or a cancel overtook — bumped when the change is
+   * sent AND when its answer lands, so a read that started while Rust was
+   * still writing (and may have seen the marker before it changed) cannot
+   * bring back a cancelled row or hide a scheduled one.
    */
   let pendingRestore = $state<PendingRestore | null | undefined>(undefined);
   let pendingRestoreError = $state<string | null>(null);
@@ -2598,7 +2600,9 @@
       const accepted = await requestConfirm(restoreConfirmation(preview));
       if (!accepted) return;
       restoreSeq += 1;
-      pendingRestore = await settingsService.scheduleRestore(preview.selectionId);
+      const scheduled = await settingsService.scheduleRestore(preview.selectionId);
+      restoreSeq += 1;
+      pendingRestore = scheduled;
       pendingRestoreError = null;
       showToast(
         `Restore scheduled. ${os.quit} and reopen Speaking Glass to apply it — nothing has changed yet.`,
@@ -2618,10 +2622,16 @@
     restoreBusy = true;
     try {
       restoreSeq += 1;
-      await settingsService.cancelPendingRestore();
+      const cancelled = await settingsService.cancelPendingRestore();
+      restoreSeq += 1;
       pendingRestore = null;
       pendingRestoreError = null;
-      showToast('Restore cancelled. Nothing will change at the next launch.', 'success');
+      showToast(
+        cancelled
+          ? 'Restore cancelled. Nothing will change at the next launch.'
+          : 'No restore was scheduled any more, so there was nothing to cancel.',
+        'success',
+      );
     } catch (err) {
       showToast(describeError(err), 'danger');
       void loadPendingRestore();
@@ -4260,35 +4270,45 @@
             Restore is the same weight as Export: it is half of the same job, not
             a lesser action. Clear logs is under Diagnostics, where logs are.
           -->
-          <div class="row-actions" data-search-row>
-            <Button onclick={() => void runExportAllData()}>Export all data</Button>
-            <!-- Not offered over a scheduled restore: Rust refuses a second
-                 one, and the row below says how to call the first off. -->
-            <Button
-              disabled={restoreBusy || pendingRestore !== null}
-              onclick={() => void runRestoreAllData()}
-            >
-              Restore from export…
-            </Button>
-          </div>
-          {#if pendingRestore}
-            {@const lines = pendingRestoreLines(pendingRestore)}
-            <div class="privacy pending-restore" data-search-row data-testid="pending-restore">
-              <h3 class="privacy-head">{lines.head}</h3>
-              <p class="privacy-body">{lines.body}</p>
-              {#if lines.note}
-                <p class="privacy-body">{lines.note}</p>
-              {:else}
-                <div class="row-actions">
-                  <Button disabled={restoreBusy} onclick={() => void runCancelRestore()}>
-                    Cancel restore
-                  </Button>
-                </div>
-              {/if}
+          <!-- One search row for the actions and the scheduled restore, so a
+               search that finds Restore from export… keeps its status and
+               Cancel with it. -->
+          <div class="restore-block" data-search-row>
+            <div class="row-actions">
+              <Button onclick={() => void runExportAllData()}>Export all data</Button>
+              <!-- Not offered over a scheduled restore: Rust refuses a second
+                   one, and the row below says how to call the first off. -->
+              <Button
+                disabled={restoreBusy || pendingRestore !== null}
+                onclick={() => void runRestoreAllData()}
+              >
+                Restore from export…
+              </Button>
             </div>
-          {:else if pendingRestoreError}
-            <p class="privacy-body" role="alert">{pendingRestoreError}</p>
-          {/if}
+            {#if pendingRestore}
+              {@const lines = pendingRestoreLines(pendingRestore)}
+              <div class="privacy pending-restore" data-testid="pending-restore">
+                <h3 class="privacy-head">{lines.head}</h3>
+                <p class="privacy-body">{lines.body}</p>
+                {#if lines.note}
+                  <p class="privacy-body">{lines.note}</p>
+                {:else}
+                  <div class="row-actions">
+                    <Button disabled={restoreBusy} onclick={() => void runCancelRestore()}>
+                      Cancel restore
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+            {:else if pendingRestoreError}
+              <div class="privacy">
+                <p class="privacy-body" role="alert">{pendingRestoreError}</p>
+                <div class="row-actions">
+                  <Button onclick={() => void loadPendingRestore()}>Try again</Button>
+                </div>
+              </div>
+            {/if}
+          </div>
 
           <!-- One block per topic, so a search for "updates" keeps Updates
                and not every privacy paragraph with it. -->
@@ -4878,6 +4898,13 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+  }
+  /* The restore actions and, while one is scheduled, its status: one
+     search row, spaced like the rows around it. */
+  .restore-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
   }
   .privacy-head {
     margin: var(--space-3) 0 0;
