@@ -1208,7 +1208,7 @@
    *
    * This was briefly a fixed 232px, wide enough to hold the readout carrying
    * its longest fault label (`No audio`, `Voice off`, `Not hearing you`,
-   * and the stage's own `Control lost`) so that a fault could not widen the
+   * and the stage's own `Control lost`, since retired) so that a fault could not widen the
    * pill and shove the button row sideways.
    *
    * It is not worth it. An 88px word cannot share a 106px pill with a 60px

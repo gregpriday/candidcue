@@ -4,8 +4,8 @@
  *   handshake → ready → live, with frozen and blank layered on top.
  *
  * The reducer is pure so the lifecycle (stale-generation rejection, tracking
- * revision monotonicity, heartbeat recovery) is unit-testable. Timers and
- * event wiring live in StageApp.
+ * revision monotonicity) is unit-testable. Timers and event wiring live in
+ * StageApp.
  */
 import type {
   StageSessionEnvelope,
@@ -13,12 +13,9 @@ import type {
   AlignmentSnapshot,
   StageCalibrationMode,
   StageDirective,
-  StageHeartbeatPayload,
 } from '../../shared/contracts';
 
 export type StagePhase = 'handshake' | 'ready' | 'live' | 'frozen' | 'blank';
-
-export type FrozenReason = 'directive' | 'control_lost';
 
 export interface StageAckState {
   label: string;
@@ -52,7 +49,6 @@ export interface StageAppState {
   alignment: AlignmentSnapshot | null;
   lastTrackingRevision: number | null;
   frozen: boolean;
-  frozenReason: FrozenReason | null;
   blanked: boolean;
   /**
    * Voice following is switched off; the presenter is driving the script.
@@ -66,16 +62,13 @@ export interface StageAppState {
   ack: StageAckState | null;
   calibration: StageCalibrationState;
   diagnostics: boolean;
-  lastHeartbeat: { revision: number; receivedAtMs: number } | null;
 }
 
 export type StageAction =
   | { type: 'snapshot'; envelope: StageSessionEnvelope }
   | { type: 'layout_ready' }
   | { type: 'alignment'; snapshot: AlignmentSnapshot }
-  | { type: 'directive'; stageGeneration: number; directive: StageDirective }
-  | { type: 'heartbeat'; payload: StageHeartbeatPayload; receivedAtMs: number }
-  | { type: 'control_lost' };
+  | { type: 'directive'; stageGeneration: number; directive: StageDirective };
 
 /**
  * Calibration starts inert, centred, and with sample values that are safe to
@@ -110,13 +103,11 @@ export function initialStageState(): StageAppState {
     alignment: null,
     lastTrackingRevision: null,
     frozen: false,
-    frozenReason: null,
     blanked: false,
     followPaused: false,
     ack: null,
     calibration: initialCalibrationState(),
     diagnostics: false,
-    lastHeartbeat: null,
   };
 }
 
@@ -147,7 +138,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         alignment: newGeneration ? null : state.alignment,
         lastTrackingRevision: newGeneration ? null : state.lastTrackingRevision,
         frozen: newGeneration ? false : state.frozen,
-        frozenReason: newGeneration ? null : state.frozenReason,
         /*
          * A new stage generation clears this reducer's own `followPaused`; the
          * embedded stage reads the host's pause state instead.
@@ -198,11 +188,7 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
             blanked: d.blanked,
           };
         case 'freeze':
-          return {
-            ...state,
-            frozen: d.frozen,
-            frozenReason: d.frozen ? 'directive' : null,
-          };
+          return { ...state, frozen: d.frozen };
         case 'ack':
           return {
             ...state,
@@ -246,50 +232,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         default:
           return state;
       }
-    }
-
-    case 'heartbeat': {
-      if (state.envelope && action.payload.stageGeneration !== state.envelope.stageGeneration) {
-        return state;
-      }
-      const next: StageAppState = {
-        ...state,
-        lastHeartbeat: { revision: action.payload.revision, receivedAtMs: action.receivedAtMs },
-      };
-      // Control came back: recover from a watchdog freeze automatically.
-      if (state.frozen && state.frozenReason === 'control_lost') {
-        next.frozen = false;
-        next.frozenReason = null;
-      }
-      return next;
-    }
-
-    case 'control_lost': {
-      /*
-       * KNOWN GAP, and the reason it is left alone.
-       *
-       * A stage that is ALREADY frozen keeps the reason it has, so a directive
-       * freeze in force when control dies hides the control loss — the stage
-       * stays still and says nothing, which is the very symptom the disclosure
-       * exists to remove.
-       *
-       * Representing both at once needs two independent flags rather than one
-       * `frozenReason`, because they recover differently: a heartbeat must lift
-       * a control loss and must NOT lift a freeze somebody asked for. That is a
-       * state-model change, and today it would buy nothing — the only producer
-       * of a `freeze` directive in the tree is the preview driver
-       * (`src/stage/preview.ts`), a dev tool with no control window to lose.
-       * Control never sends one.
-       *
-       * That last sentence is the load-bearing one, so it is CHECKED rather
-       * than remembered: `tests/unit/stage/freeze-reason-invariant.test.ts`
-       * scans the control window for a `kind: 'freeze'` and fails if one
-       * appears, and demonstrates the swallowing below so the failure has a
-       * consequence attached. If control ever needs one, split the flags here
-       * rather than widening `frozenReason`.
-       */
-      if (state.phase === 'handshake' || state.frozen) return state;
-      return { ...state, frozen: true, frozenReason: 'control_lost' };
     }
 
     default:

@@ -96,7 +96,6 @@
     SmoothFollowProfile,
     StageAutoScrollEndReason,
     StageAutoScrollPayload,
-    StageMotionAck,
     StageRenderDocument,
     StageSettings,
     StageViewportHintPayload,
@@ -183,7 +182,6 @@
     onautoscrollend = undefined,
     onlayoutready = undefined,
     onlayoutmeasured = undefined,
-    onmotionack = undefined,
     onlayoutgeneration = undefined,
     onlayouterror = undefined,
     ondegraded = undefined,
@@ -304,7 +302,6 @@
      * is what makes it useful while somebody is dragging a calibration control.
      */
     onlayoutmeasured?: (measurement: StageLayoutMeasurement) => void;
-    onmotionack?: (ack: StageMotionAck) => void;
     onlayoutgeneration?: (generation: number) => void;
     /**
      * §62: the measurement is unusable after a bounded retry; the stage holds.
@@ -3296,7 +3293,6 @@
       ondegraded?.(degraded);
     }
 
-    if (result.ack) onmotionack?.(result.ack);
     reportViewport(now);
     rafId = requestAnimationFrame(frame);
   }
