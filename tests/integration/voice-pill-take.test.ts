@@ -682,12 +682,13 @@ describe('take boundaries', () => {
      */
     let generation = 0;
     const closing: { release: (() => void) | null } = { release: null };
-    setInvokeForTesting(async (command) => {
+    setInvokeForTesting(async (command, args) => {
       if (command === 'start_transcription') {
         generation += 1;
         return generation as never;
       }
-      if (command === 'stop_transcription' && closing.release === null) {
+      // Only take A's close is slow; B closes at once when the test ends.
+      if (command === 'stop_transcription' && (args as { generation?: number })?.generation === 1) {
         await new Promise<void>((resolve) => {
           closing.release = resolve;
         });
@@ -695,30 +696,44 @@ describe('take boundaries', () => {
       return undefined as never;
     });
 
-    start();
-    await untilCaptureOpen();
-    await emitStt({ kind: 'partial', generation: 1, itemId: 'a-1', text: 'the first take' });
-    stopSession();
-    await until(() => closing.release !== null, 'take A to ask Rust to close its recogniser');
+    try {
+      start();
+      await untilCaptureOpen();
+      await emitStt({ kind: 'partial', generation: 1, itemId: 'a-1', text: 'the first take' });
+      await until(() => get(session).heardAnything, 'take A to hear its own words');
+      stopSession();
+      await until(() => closing.release !== null, 'take A to ask Rust to close its recogniser');
 
-    start();
-    await until(() => generation === 2, 'take B to open its own recogniser');
-    await emitStt({ kind: 'partial', generation: 2, itemId: 'b-1', text: 'two words' });
-    await until(() => get(session).heardAnything, 'take B to hear its own words');
+      start();
+      await until(() => generation === 2, 'take B to open its own recogniser');
+      await emitStt({ kind: 'partial', generation: 2, itemId: 'b-1', text: 'two words' });
+      await until(() => get(session).heardAnything, 'take B to hear its own words');
+      // Both takes are listening: A's final reaches A's pipeline, not only B's
+      // generation filter — which is what makes this a test of the store.
+      expect((listeners.get('stt://event') ?? []).length, 'A is still closing').toBe(2);
+      const before = get(session);
 
-    await emitStt({
-      kind: 'final',
-      generation: 1,
-      itemId: 'a-1',
-      text: 'the first take ends here',
-      audioEndMs: 1_800,
-    });
-    closing.release?.();
-    await run(500);
+      await emitStt({
+        kind: 'final',
+        generation: 1,
+        itemId: 'a-1',
+        text: 'the first take ends here',
+        audioEndMs: 1_800,
+      });
 
-    expect(get(session).transcriptTail, 'take A’s line is not take B’s').toEqual([]);
-    const summary = stopSession();
-    expect(summary.wordsHeard, 'take A’s words are not on take B’s summary').toBe(0);
-    expect(summary.wordsInFlight, 'and B’s open utterance is still open').toBe(2);
+      expect(get(session).transcriptTail, 'take A’s line is not take B’s').toEqual(
+        before.transcriptTail,
+      );
+      expect(get(session).connection).toBe(before.connection);
+      const summary = stopSession();
+      expect(summary.wordsHeard, 'take A’s words are not on take B’s summary').toBe(0);
+      expect(summary.wordsInFlight, 'and B’s open utterance is still open').toBe(2);
+    } finally {
+      closing.release?.();
+      await until(
+        () => (listeners.get('stt://event') ?? []).length === 0,
+        'both takes to stop listening',
+      );
+    }
   });
 });

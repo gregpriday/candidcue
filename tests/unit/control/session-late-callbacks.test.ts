@@ -13,7 +13,8 @@
  * counters, its toasts and its following — is exactly as it was.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CompiledScript, DisplayDescriptor } from '../../../src/shared/contracts';
+import type { CompiledScript } from '../../../src/shared/contracts';
+import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
 
 /** Display probes still in flight, oldest first; a test answers them. */
 const probes = vi.hoisted(() => [] as Array<(display: { fingerprint: string; name: string }) => void>);
@@ -50,6 +51,15 @@ const pipeline = vi.hoisted(() => {
     resumeError: unknown;
     /** Run synchronously inside `stop()`, as a closing session's last frame. */
     onStop: ((deps: Deps) => void) | null;
+    /**
+     * Whether a switch swaps a running capture. False is a pipeline whose start
+     * failed, which the store answers by reopening it with `resume()`.
+     */
+    switchOpens: boolean;
+    /** What a switch rejects with, when anything. */
+    switchError: unknown;
+    /** Every `resume()`, by the index of the pipeline it was called on. */
+    resumedBy: number[];
   } = {
     all: [],
     startError: null,
@@ -57,6 +67,9 @@ const pipeline = vi.hoisted(() => {
     resumeDelayMs: 0,
     resumeError: null,
     onStop: null,
+    switchOpens: true,
+    switchError: null,
+    resumedBy: [],
   };
   class FakePipeline {
     private readonly deps: Deps;
@@ -83,12 +96,19 @@ const pipeline = vi.hoisted(() => {
       throw error;
     }
     async switchMicrophone(): Promise<boolean> {
+      // Each call's outcome is fixed when it is made, not when it answers.
+      const error = captured.switchError;
+      const opens = captured.switchOpens;
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return true;
+      if (error !== null) throw error;
+      return opens;
     }
     async resume(): Promise<void> {
-      await new Promise((resolve) => setTimeout(resolve, captured.resumeDelayMs));
-      if (captured.resumeError !== null) throw captured.resumeError;
+      captured.resumedBy.push(captured.all.indexOf(this.deps));
+      const delay = captured.resumeDelayMs;
+      const error = captured.resumeError;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (error !== null) throw error;
     }
     estimatedCostUsd(): number {
       return 0;
@@ -110,6 +130,21 @@ vi.mock('../../../src/control/services/voice-session', () => ({
 vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };
+});
+/** Every tracking driver's options, so a test can call an old take's feed. */
+const drivers = vi.hoisted(
+  () =>
+    [] as Array<{ onSnapshot(snapshot: unknown): void; onTranscript(line: string): void }>,
+);
+vi.mock('../../../src/control/services/session', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/session')>();
+  return {
+    ...actual,
+    createTrackingDriver: (options: Parameters<typeof actual.createTrackingDriver>[0]) => {
+      drivers.push(options as unknown as (typeof drivers)[number]);
+      return actual.createTrackingDriver(options);
+    },
+  };
 });
 vi.mock('../../../src/control/services/alignment', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/alignment')>();
@@ -153,6 +188,7 @@ function start(
   options: { sessionId?: string; stageDisplay?: DisplayDescriptor } = {},
 ): Deps {
   takes += 1;
+  const pipelinesBefore = pipeline.captured.all.length;
   startLiveSession({
     ...options,
     scriptId: 'script-1',
@@ -167,7 +203,9 @@ function start(
     sessionGeneration: takes,
   });
   const deps = pipeline.captured.all.at(-1);
-  if (!deps) throw new Error('the voice pipeline was never constructed');
+  if (!deps || pipeline.captured.all.length !== pipelinesBefore + 1) {
+    throw new Error('the take did not construct exactly one voice pipeline');
+  }
   return deps;
 }
 
@@ -197,18 +235,41 @@ function takeState(): Record<string, unknown> {
   };
 }
 
-/** Everything the old take's pipeline might still say, all at once. */
+/**
+ * Everything the old take's pipeline might still say, one event each. Word
+ * counts differ from the new take's own (one final word, two in flight), so a
+ * stale event that reached the counters cannot hide behind a coincidence.
+ */
+const LATE_EVENTS: Array<[string, (old: Deps) => void]> = [
+  ['a final', (old) => cb<[string, boolean]>(old, 'onTranscriptText')('one two three four', true)],
+  ['a partial', (old) => cb<[string, boolean]>(old, 'onTranscriptText')('five six seven', false)],
+  ['a transcript line', (old) => cb<[string]>(old, 'onTranscriptLine')('a line from the last take')],
+  ['a transcript reset', (old) => cb<[]>(old, 'onResetTranscriptState')()],
+  ['a following hold', (old) => cb<[boolean, string]>(old, 'onFollowingHold')(true, 'stale')],
+  ['a device loss', (old) => cb<[string]>(old, 'onInputDeviceLost')('MIC_DEVICE_LOST')],
+  ['a session failure', (old) => cb<[string, boolean]>(old, 'onSessionFailure')('STT_SESSION_FAILED', true)],
+  ['dropped audio', (old) => cb<[number]>(old, 'onAudioDropped')(3)],
+  ['a pause warning', (old) => cb<[number]>(old, 'onPauseWarning')(0)],
+  ['a connection state', (old) => cb<[string]>(old, 'onConnectionState')('offline')],
+  ['an input fallback', (old) => cb<['missing']>(old, 'onInputFellBackToDefault')('missing')],
+  ['a pinned microphone found', (old) => cb<[string, string]>(old, 'onPinnedMicrophoneFound')('mic-x', 'Mic X')],
+];
+
 function speakLate(old: Deps): void {
-  cb<[string, boolean]>(old, 'onTranscriptText')('one two three four', true);
-  cb<[string, boolean]>(old, 'onTranscriptText')('five six', false);
-  cb<[string]>(old, 'onTranscriptLine')('a line from the last take');
-  cb<[boolean, string]>(old, 'onFollowingHold')(true, 'stale');
-  cb<[string]>(old, 'onInputDeviceLost')('MIC_DEVICE_LOST');
-  cb<[string, boolean]>(old, 'onSessionFailure')('STT_SESSION_FAILED', true);
-  cb<[number]>(old, 'onAudioDropped')(3);
-  cb<[]>(old, 'onPauseWarning')();
-  cb<[string]>(old, 'onConnectionState')('offline');
-  cb<['busy']>(old, 'onInputFellBackToDefault')('busy');
+  for (const [, deliver] of LATE_EVENTS) deliver(old);
+}
+
+/**
+ * Take B, mid-take: one final word heard, two in flight, a line on the tail,
+ * connected, and on a fallback input with its notice up — so a stale event
+ * that cleared any of it shows as clearly as one that added to it.
+ */
+function seedLiveTake(b: Deps): void {
+  cb<[string]>(b, 'onConnectionState')('connected');
+  cb<[string, boolean]>(b, 'onTranscriptText')('hello', true);
+  cb<[string]>(b, 'onTranscriptLine')('hello');
+  cb<[string, boolean]>(b, 'onTranscriptText')('two words', false);
+  cb<['busy']>(b, 'onInputFellBackToDefault')('busy');
 }
 
 beforeEach(() => {
@@ -220,6 +281,10 @@ beforeEach(() => {
   pipeline.captured.resumeError = null;
   pipeline.captured.onStop = null;
   probes.length = 0;
+  drivers.length = 0;
+  pipeline.captured.switchOpens = true;
+  pipeline.captured.switchError = null;
+  pipeline.captured.resumedBy = [];
   setInvokeForTesting(async () => undefined as never);
   clearToasts();
 });
@@ -255,25 +320,58 @@ describe('late callbacks from an ended take (#244)', () => {
     const a = start();
     stopSession();
     const b = start();
-    // The new take is mid-utterance when the old one's final lands, so a late
-    // final that zeroed the open utterance would show as well as one that
-    // added to the total.
-    cb<[string, boolean]>(b, 'onTranscriptText')('two words', false);
+    seedLiveTake(b);
     const before = takeState();
-    const followingBefore = get(smoothFollow).followingPaused;
-    clearToasts();
+    const toastsBefore = get(toasts);
+    expect(toastsBefore, 'the new take has its own fallback notice').toHaveLength(1);
 
     speakLate(a);
 
     expect(takeState()).toEqual(before);
-    expect(get(smoothFollow).followingPaused, 'a stale hold may not pause this take').toBe(
-      followingBefore,
-    );
-    expect(get(toasts), 'nothing is said about a take that is over').toEqual([]);
+    expect(get(smoothFollow).followingPaused, 'a stale hold may not pause this take').toBe(false);
+    expect(get(toasts), 'nothing is said about a take that is over').toEqual(toastsBefore);
 
     const summary = stopSession();
-    expect(summary.wordsHeard).toBe(0);
+    expect(summary.wordsHeard).toBe(1);
     expect(summary.wordsInFlight).toBe(2);
+  });
+
+  it.each(LATE_EVENTS)('%s from the replaced take changes nothing on the new one', (_, deliver) => {
+    const a = start();
+    stopSession();
+    const b = start();
+    seedLiveTake(b);
+    const before = takeState();
+    const toastsBefore = get(toasts);
+
+    deliver(a);
+
+    expect(takeState()).toEqual(before);
+    expect(get(smoothFollow).followingPaused).toBe(false);
+    expect(get(toasts)).toEqual(toastsBefore);
+    const summary = stopSession();
+    expect(summary.wordsHeard).toBe(1);
+    expect(summary.wordsInFlight).toBe(2);
+  });
+
+  it('the old take’s tracking driver cannot feed the new take', () => {
+    start();
+    const driverA = drivers.at(-1)!;
+    stopSession();
+    start();
+    const driverB = drivers.at(-1)!;
+    expect(driverB).not.toBe(driverA);
+    const before = get(session);
+
+    driverA.onTranscript('a line from the last take');
+    driverA.onSnapshot({ ...(before.snapshot ?? {}), confirmedToken: 120, observedToken: 120 });
+    expect(get(session).transcriptTail).toEqual(before.transcriptTail);
+    expect(get(session).snapshot).toBe(before.snapshot);
+    expect(get(session).heardAnything).toBe(before.heardAnything);
+
+    // The new take's own feed still lands.
+    driverB.onTranscript('this take');
+    expect(get(session).transcriptTail).toEqual(['this take']);
   });
 
   it('a following hold delivered after a quick stop and restart does not pause the new take', () => {
@@ -335,12 +433,13 @@ describe('late callbacks from an ended take (#244)', () => {
      */
     pipeline.captured.onStop = (deps) => {
       cb<[string, boolean]>(deps, 'onSessionFailure')('STT_SESSION_FAILED', true);
-      cb<[string, boolean]>(deps, 'onTranscriptText')('last words', true);
+      cb<[string]>(deps, 'onTranscriptLine')('last words');
       cb<[number]>(deps, 'onAudioDropped')(2);
     };
-    start();
-    const summary = stopSession();
-    expect(summary.wordsHeard).toBe(0);
+    const a = start();
+    cb<[string]>(a, 'onTranscriptLine')('said during the take');
+    stopSession();
+    expect(get(session).transcriptTail).toEqual(['said during the take']);
     expect(get(session).connection).not.toBe('offline');
     expect(get(toasts)).toEqual([]);
   });
@@ -373,6 +472,21 @@ describe('late callbacks from an ended take (#244)', () => {
     expect(get(toasts)).toEqual([]);
   });
 
+  it('a resume that succeeds after its take was replaced does not unpause the new take', async () => {
+    start();
+    hardPause();
+    pipeline.captured.resumeDelayMs = 150;
+    const resuming = resumeSession();
+    stopSession();
+    start();
+    hardPause();
+    const before = takeState();
+    expect(before.paused).toBe('hard');
+    await vi.advanceTimersByTimeAsync(200);
+    await resuming;
+    expect(takeState()).toEqual(before);
+  });
+
   it('a display probe that answers after its take was replaced under the same id says nothing', async () => {
     const display = { fingerprint: 'panel-a', name: 'Panel A' } as unknown as DisplayDescriptor;
     start({ sessionId: 'same-id', stageDisplay: display });
@@ -388,6 +502,48 @@ describe('late callbacks from an ended take (#244)', () => {
     probes.shift()!({ fingerprint: 'panel-b', name: 'Panel B' });
     await vi.advanceTimersByTimeAsync(0);
     expect(get(session).displayChangedTo).toBe('Panel B');
+  });
+
+  it('a retry that fails after its take was replaced reports nothing', async () => {
+    start();
+    pipeline.captured.resumeDelayMs = 150;
+    pipeline.captured.resumeError = { code: 'MIC_DEVICE_LOST', userMessage: 'gone' };
+    const retrying = retryMicrophone();
+    stopSession();
+    pipeline.captured.resumeError = null;
+    start();
+    const before = takeState();
+    clearToasts();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await retrying).toBe(false);
+    expect(takeState()).toEqual(before);
+    expect(get(toasts)).toEqual([]);
+  });
+
+  it('a switch that fails after its take was replaced reports nothing', async () => {
+    start();
+    pipeline.captured.switchError = { code: 'MIC_DEVICE_BUSY', userMessage: 'busy' };
+    const switching = switchMicrophone('mic-2', 'Mic 2');
+    stopSession();
+    pipeline.captured.switchError = null;
+    start();
+    const before = takeState();
+    clearToasts();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await switching).toBe(false);
+    expect(takeState()).toEqual(before);
+    expect(get(toasts)).toEqual([]);
+  });
+
+  it('a switch with nothing to swap does not reopen a take that has ended', async () => {
+    start();
+    pipeline.captured.switchOpens = false;
+    const switching = switchMicrophone('mic-2', 'Mic 2');
+    stopSession();
+    start();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await switching).toBe(false);
+    expect(pipeline.captured.resumedBy, 'the ended take’s pipeline was reopened').not.toContain(0);
   });
 
   it('a retry and a microphone switch that answer after the take ended report nothing', async () => {

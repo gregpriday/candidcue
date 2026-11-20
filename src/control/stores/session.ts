@@ -1260,6 +1260,34 @@ export function startLiveSession(input: StartSessionInput): string {
         if (voicePill !== null) {
           voicePill = reduceVoicePillText(voicePill, text);
         }
+        // Counted before anything is published: a subscriber to `state` runs
+        // synchronously inside the update below, and if it ended this take the
+        // words would land on the next one (#244).
+        /*
+         * The open utterance counts too — as an ESTIMATE, separately.
+         *
+         * `wordsHeard` totals finals only, and the summary is snapshotted
+         * before `endTurn` gets the last one back: Rust's stop returns
+         * immediately and finalises in the background for up to 2.5 s. So a
+         * presenter who reads for fourteen seconds without a long enough pause
+         * to close an utterance is told "Words heard: 11" for a passage the
+         * recogniser heard in full, and reasonably concludes the microphone is
+         * failing. The display, which follows PARTIAL evidence, moves the whole
+         * time — and the two facts flatly contradict each other on one card.
+         *
+         * Kept as its own number rather than folded into `wordsHeard`: a
+         * partial is a restatement and may be revised or withdrawn, so adding
+         * it to a total of committed words would make that total wrong in the
+         * other direction. This is "and this much more was in flight".
+         */
+        if (!final) {
+          wordsInFlight = countSpokenWords(text);
+        }
+        if (final) {
+          wordsInFlight = 0;
+          // "Did it hear me": was anything transcribed at all.
+          wordsHeard += countSpokenWords(text);
+        }
         /*
          * "Something has been heard this take", latched here and nowhere else.
          *
@@ -1298,31 +1326,6 @@ export function startLiveSession(input: StartSessionInput): string {
            * costs a take.
            */
           state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
-        }
-        /*
-         * The open utterance counts too — as an ESTIMATE, separately.
-         *
-         * `wordsHeard` totals finals only, and the summary is snapshotted
-         * before `endTurn` gets the last one back: Rust's stop returns
-         * immediately and finalises in the background for up to 2.5 s. So a
-         * presenter who reads for fourteen seconds without a long enough pause
-         * to close an utterance is told "Words heard: 11" for a passage the
-         * recogniser heard in full, and reasonably concludes the microphone is
-         * failing. The display, which follows PARTIAL evidence, moves the whole
-         * time — and the two facts flatly contradict each other on one card.
-         *
-         * Kept as its own number rather than folded into `wordsHeard`: a
-         * partial is a restatement and may be revised or withdrawn, so adding
-         * it to a total of committed words would make that total wrong in the
-         * other direction. This is "and this much more was in flight".
-         */
-        if (!final) {
-          wordsInFlight = countSpokenWords(text);
-        }
-        if (final) {
-          wordsInFlight = 0;
-          // "Did it hear me": was anything transcribed at all.
-          wordsHeard += countSpokenWords(text);
         }
       },
       /*
@@ -1423,8 +1426,6 @@ export function startLiveSession(input: StartSessionInput): string {
       },
       // A dead input is not a recogniser problem; the user must act.
       onInputDeviceLost: (code) => {
-        // Device loss outranks every acoustic reading on the mic tile.
-        state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
         /*
          * The pill takes only the HARD half of this signal.
          *
@@ -1436,6 +1437,10 @@ export function startLiveSession(input: StartSessionInput): string {
          * longer fuse.
          */
         if (code !== 'MIC_NO_SIGNAL') voicePillDeviceLost = true;
+        // Device loss outranks every acoustic reading on the mic tile. Published
+        // after the pill's own flag, so a subscriber that ends the take here
+        // cannot leave that flag set on the next one.
+        state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
         // The remedy named here is one the Live screen can actually perform —
         // `switchMicrophone` below drives the pipeline's input switch, and the
         // take controls grow an input picker while the input is lost or a
