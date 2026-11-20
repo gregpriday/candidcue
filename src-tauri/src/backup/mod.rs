@@ -678,6 +678,14 @@ struct PendingRestore {
     /// and does nothing else.
     #[serde(default)]
     completed: bool,
+    /// When the export being restored was taken, from its manifest.
+    ///
+    /// Recorded at scheduling so Settings can say which export is waiting
+    /// without reading the folder again: the folder is the user's, and it may
+    /// have been moved or unplugged since. Absent on a marker written before
+    /// it existed, which the launch-time apply never reads anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    export_created_at: Option<String>,
 }
 
 /// Write the marker, replacing it whole.
@@ -745,6 +753,50 @@ fn write_json_durably<T: Serialize>(marker: &Path, value: &T) -> Result<(), AppE
 /// validated export. [`apply_pending_restore`] does the swap on the next
 /// launch, before any pool is opened, where a rename means what it says.
 pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<RestoreResult, AppError> {
+    let inspected = inspect_restore_export(export_root).await?;
+    schedule_inspected_restore(paths, &inspected)?;
+    Ok(inspected.result())
+}
+
+/// An export that passed every check a restore makes, with nothing scheduled.
+///
+/// Settings shows this in its confirmation (#488) before anything is written:
+/// choosing a folder used to arm the restore in the same step.
+#[derive(Debug, Clone)]
+pub struct InspectedExport {
+    /// Canonical, so the next launch can find it whatever the working
+    /// directory is by then.
+    pub path: PathBuf,
+    pub manifest: ExportManifest,
+    /// Counted from the exported database's rows, each known to have its text.
+    pub scripts_in_export: u32,
+}
+
+impl InspectedExport {
+    pub fn result(&self) -> RestoreResult {
+        RestoreResult {
+            path: self.path.to_string_lossy().to_string(),
+            app_version: self.manifest.app_version.clone(),
+            created_at: self.manifest.created_at.clone(),
+            scripts_in_export: self.scripts_in_export,
+            restart_required: true,
+        }
+    }
+
+    /// Whether `other` is the same export, byte for byte as far as its
+    /// manifest vouches.
+    ///
+    /// The manifest carries a checksum per file and the time the export was
+    /// taken, so a different export dropped at the same path — which the
+    /// re-validation alone would accept — reads as different here.
+    pub fn same_export_as(&self, other: &InspectedExport) -> bool {
+        self.path == other.path
+            && serde_json::to_value(&self.manifest).ok() == serde_json::to_value(&other.manifest).ok()
+    }
+}
+
+/// Everything [`restore_all_data`] checks, and nothing it writes.
+pub async fn inspect_restore_export(export_root: &Path) -> Result<InspectedExport, AppError> {
     let manifest = read_and_validate_manifest(export_root)?;
 
     if !manifest.complete {
@@ -758,19 +810,58 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
     // text: a folder count would include a folder no script owns.
     let scripts_in_export = verify_export_contents(export_root, &manifest).await?;
 
-    // Absolute, so the next launch can find it whatever the working directory
-    // is by then.
-    let export_path = export_root
+    let path = export_root
         .canonicalize()
         .map_err(|e| AppError::invalid_input(format!("That export folder is unreadable: {e}")))?;
+
+    Ok(InspectedExport {
+        path,
+        manifest,
+        scripts_in_export,
+    })
+}
+
+/// Serialises every change to the restore marker made while the app runs.
+///
+/// Scheduling checks that no marker exists and then writes one; cancelling
+/// reads one, checks it and removes it. Each is a check followed by an act,
+/// and two of them interleaved — or two schedules sharing the marker's one
+/// `.json.writing` temporary — could both win. The launch-time apply needs no
+/// share in it: it runs before this process has a webview to ask from.
+static MARKER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn marker_lock() -> std::sync::MutexGuard<'static, ()> {
+    // Nothing the lock guards is in memory, so a poisoned lock is still a
+    // usable one.
+    MARKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Write the marker for an export [`inspect_restore_export`] passed.
+///
+/// Refuses while any marker exists. An unattempted one is the user's earlier
+/// choice, which Settings shows with its own Cancel; overwriting it would
+/// replace a restore they can see with one they never confirmed. An attempted
+/// one is the journal of what a launch moved into quarantine, and overwriting
+/// it would strand the user's original data there.
+pub fn schedule_inspected_restore(paths: &DataPaths, inspected: &InspectedExport) -> Result<(), AppError> {
+    let _guard = marker_lock();
+    let marker = paths.root().join(PENDING_RESTORE);
+    if marker.exists() {
+        return Err(AppError::structured(
+            "RESTORE_ALREADY_SCHEDULED",
+            crate::errors::ErrorCategory::Validation,
+            "A restore is already scheduled. Cancel it first to restore from a different export.",
+            true,
+        ));
+    }
 
     // Durably, like every other write to this marker: a scheduled restore that
     // a crash forgets is a restore the user asked for and did not get, with
     // nothing on screen to say so.
     write_json_durably(
-        &paths.root().join(PENDING_RESTORE),
+        &marker,
         &PendingRestore {
-            export_path: export_path.to_string_lossy().to_string(),
+            export_path: inspected.path.to_string_lossy().to_string(),
             requested_at: crate::util::now_iso(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             attempts: 0,
@@ -778,16 +869,112 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
             evacuated: Vec::new(),
             absent: Vec::new(),
             completed: false,
+            export_created_at: Some(inspected.manifest.created_at.clone()),
         },
-    )?;
+    )
+}
 
-    Ok(RestoreResult {
-        path: export_path.to_string_lossy().to_string(),
-        app_version: manifest.app_version,
-        created_at: manifest.created_at,
-        scripts_in_export,
-        restart_required: true,
+/// A scheduled restore, as Settings shows it (#488).
+///
+/// Read from the marker alone. The export folder is not opened: the row has to
+/// say a restore is waiting even when the folder has been moved, because the
+/// next launch will still try it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingRestoreStatus {
+    /// The export folder the next launch restores from.
+    pub export_path: String,
+    /// When that export was taken. `None` on a marker from before it was kept.
+    pub export_created_at: Option<String>,
+    /// When the restore was scheduled.
+    pub requested_at: String,
+    /// How many launches have already started on it.
+    pub attempts: u32,
+    /// Whether [`cancel_pending_restore`] would remove it.
+    pub cancellable: bool,
+}
+
+impl PendingRestore {
+    /// Nothing has been moved on this restore's behalf, so removing the
+    /// marker loses nothing.
+    ///
+    /// `attempts` alone would do — every field below is written only after
+    /// the counter is — but a marker that names a quarantine generation, an
+    /// evacuated component or a finished restore is a journal of moves already
+    /// made, and removing it would strand them. Checked on every field, so no
+    /// combination a crash leaves behind reads as cancellable.
+    fn untouched(&self) -> bool {
+        self.attempts == 0
+            && !self.completed
+            && self.quarantine_generation.is_none()
+            && self.evacuated.is_empty()
+            && self.absent.is_empty()
+    }
+}
+
+fn read_marker(marker: &Path) -> Result<Option<PendingRestore>, AppError> {
+    let raw = match std::fs::read(marker) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    serde_json::from_slice(&raw).map(Some).map_err(|e| {
+        AppError::invalid_input(format!(
+            "The record of the scheduled restore ({}) is unreadable: {e}",
+            marker.display()
+        ))
     })
+}
+
+/// The restore waiting for the next launch, if there is one.
+pub fn read_pending_restore(paths: &DataPaths) -> Result<Option<PendingRestoreStatus>, AppError> {
+    let Some(pending) = read_marker(&paths.root().join(PENDING_RESTORE))? else {
+        return Ok(None);
+    };
+    Ok(Some(PendingRestoreStatus {
+        cancellable: pending.untouched(),
+        export_path: pending.export_path,
+        export_created_at: pending.export_created_at,
+        requested_at: pending.requested_at,
+        attempts: pending.attempts,
+    }))
+}
+
+/// Call off a scheduled restore that no launch has started on.
+///
+/// Returns `false` when nothing was scheduled. A marker a launch has already
+/// attempted is refused and left exactly where it is: it is the journal of
+/// what that launch moved into quarantine, and the launch-time apply is what
+/// finishes or rolls it back (#233). Deleting it here would leave the user's
+/// original data in quarantine with nothing pointing at it.
+///
+/// No launch can be applying the marker while this runs — the apply happens in
+/// `database::init`, before this process had a webview to ask from — so the
+/// check and the removal cannot be overtaken by it.
+pub fn cancel_pending_restore(paths: &DataPaths) -> Result<bool, AppError> {
+    let _guard = marker_lock();
+    let marker = paths.root().join(PENDING_RESTORE);
+    let Some(pending) = read_marker(&marker)? else {
+        return Ok(false);
+    };
+    if !pending.untouched() {
+        return Err(AppError::structured(
+            "RESTORE_IN_PROGRESS",
+            crate::errors::ErrorCategory::Storage,
+            "A launch of Speaking Glass has already started this restore, so it can no longer be \
+             cancelled. The next launch finishes it or puts your previous data back.",
+            true,
+        ));
+    }
+    match std::fs::remove_file(&marker) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    }
+    // Durably gone, like it was durably written: a cancel a power cut undoes
+    // is a restore the user called off arriving anyway at the next launch.
+    sync_dir(parent_of(&marker))?;
+    Ok(true)
 }
 
 /// Apply a scheduled restore, before anything opens the database.

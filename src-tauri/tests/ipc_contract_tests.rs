@@ -515,7 +515,9 @@ fn stage_session_mismatch_is_in_the_typescript_error_contract() {
 // §44.11 / §47.10 diagnostics and support bundle
 // ---------------------------------------------------------------------------
 
-use speaking_glass_lib::commands::settings_cmds::{SupportBundleResult, SystemDiagnostics};
+use speaking_glass_lib::commands::settings_cmds::{
+    RestorePreview, SupportBundleResult, SystemDiagnostics,
+};
 
 fn settings_fixture() -> serde_json::Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -584,8 +586,9 @@ fn destination_taking_export_commands_run_their_own_picker() {
         // error — is unchanged.
         ("export_all_data", "Option<crate::backup::DataExportResult>"),
         // Same contract on the way back in. A restore that the user cancels
-        // out of must not surface as a failure.
-        ("restore_all_data", "Option<crate::backup::RestoreResult>"),
+        // out of must not surface as a failure. Choosing schedules nothing
+        // since #488; it returns what the confirmation shows.
+        ("choose_restore_export", "Option<RestorePreview>"),
     ] {
         // No `(` in the needle: these commands are now generic over the Tauri
         // runtime (`pub async fn export_all_data<R: Runtime>(…)`) so that they
@@ -631,6 +634,110 @@ fn destination_taking_export_commands_run_their_own_picker() {
             "{command} must take no arguments from the webview"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Restore from export (#488)
+// ---------------------------------------------------------------------------
+
+fn restore_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("restore-command-payloads.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The two DTOs the Data section reads, field for field — the legacy marker's
+/// missing export date included, which must arrive as `null` and never as a
+/// missing key the row would read as `undefined`.
+#[test]
+fn restore_dtos_match_the_shared_fixture() {
+    let f = restore_fixture();
+    let preview = RestorePreview {
+        selection_id: 4,
+        path: "/Users/example/Desktop/SpeakingGlass-export-20261101-091500".into(),
+        created_at: "2026-11-01T09:15:00Z".into(),
+        app_version: "1.0.0".into(),
+        scripts_in_export: 7,
+    };
+    assert_eq!(serde_json::to_value(&preview).expect("serializes"), f["expectedRestorePreview"]);
+
+    let pending = speaking_glass_lib::backup::PendingRestoreStatus {
+        export_path: "/Users/example/Desktop/SpeakingGlass-export-20261101-091500".into(),
+        export_created_at: Some("2026-11-01T09:15:00Z".into()),
+        requested_at: "2026-11-20T08:00:00Z".into(),
+        attempts: 0,
+        cancellable: true,
+    };
+    assert_eq!(serde_json::to_value(&pending).expect("serializes"), f["expectedPendingRestore"]);
+
+    let legacy = speaking_glass_lib::backup::PendingRestoreStatus {
+        export_path: "/Users/example/Desktop/SpeakingGlass-export-20261001-120000".into(),
+        export_created_at: None,
+        requested_at: "2026-10-02T08:00:00Z".into(),
+        attempts: 1,
+        cancellable: false,
+    };
+    assert_eq!(
+        serde_json::to_value(&legacy).expect("serializes"),
+        f["expectedLegacyPendingRestore"]
+    );
+}
+
+/// Scheduling takes the id of a choice Rust made, and nothing a webview could
+/// turn into a folder for the next launch to restore.
+#[test]
+fn scheduling_a_restore_takes_a_choice_id_never_a_path() {
+    let f = restore_fixture();
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("commands")
+            .join("settings_cmds.rs"),
+    )
+    .expect("settings_cmds.rs");
+    let signature = |command: &str| -> String {
+        source
+            .split(&format!("pub async fn {command}"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{command} must exist"))
+            .split('{')
+            .next()
+            .expect("signature")
+            .to_string()
+    };
+
+    let schedule = signature("schedule_restore");
+    assert!(schedule.contains("selection_id: u64"), "schedule_restore takes the choice id");
+    for smuggled in ["path", "export", "destination", "String"] {
+        assert!(
+            !schedule.contains(smuggled),
+            "schedule_restore must not take anything a path could ride in on (`{smuggled}`)"
+        );
+    }
+    assert_eq!(
+        f["schedule_restore"].as_object().expect("payload").keys().collect::<Vec<_>>(),
+        vec!["selectionId"]
+    );
+
+    for command in ["choose_restore_export", "get_pending_restore", "cancel_pending_restore"] {
+        assert!(
+            f[command].as_object().expect("payload").is_empty(),
+            "{command} must take no arguments from the webview"
+        );
+        let signature = signature(command);
+        assert!(
+            !signature.contains(": String") && !signature.contains(": u64"),
+            "{command} takes an argument the fixture does not send"
+        );
+    }
+    assert!(signature("get_pending_restore").contains("Option<crate::backup::PendingRestoreStatus>"));
+    assert!(signature("cancel_pending_restore").contains("Result<bool, AppError>"));
 }
 
 // ---------------------------------------------------------------------------

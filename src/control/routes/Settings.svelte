@@ -94,6 +94,7 @@
     withOpticalProfile,
     withoutOpticalProfile,
     withPanelMirror,
+    type PendingRestore,
     type ReaderTheme,
     type SessionMode,
   } from '../services/settings-types';
@@ -150,6 +151,7 @@
     AUTO_SCROLL_MIN_WPM,
   } from '../../stage/renderer/autoscroll';
   import { requestConfirm } from '../stores/confirm';
+  import { pendingRestoreLines, restoreConfirmation } from '../lib/restore-copy';
   import { navigate, route, type SettingsSection } from '../stores/router';
   import { loadSettings, patchSettings, settings } from '../stores/settings';
   import { showToast } from '../stores/toasts';
@@ -669,6 +671,15 @@
   /** Same screen, same rule — the update policy sentence needs the version. */
   $effect(() => {
     if (section === 'privacy') void loadUpdatePolicy();
+  });
+
+  /**
+   * A scheduled restore, read from Rust whenever the Data section shows — so
+   * it is there after Settings is closed and reopened, not only in the window
+   * that scheduled it (#488).
+   */
+  $effect(() => {
+    if (section === 'privacy') void loadPendingRestore();
   });
 
   /* ------------------------------------------------------------- displays */
@@ -2541,30 +2552,81 @@
     }
   }
 
+  /*
+   * Restore from export (#488).
+   *
+   * `undefined` until the first read lands, so the Restore button is not
+   * offered over a restore nobody has been told about yet. `restoreSeq` drops
+   * a read that a schedule or a cancel overtook: an older answer must not
+   * bring back a row that was just cancelled.
+   */
+  let pendingRestore = $state<PendingRestore | null | undefined>(undefined);
+  let pendingRestoreError = $state<string | null>(null);
+  let restoreBusy = $state(false);
+  let restoreSeq = 0;
+
+  async function loadPendingRestore(): Promise<void> {
+    const seq = ++restoreSeq;
+    try {
+      const pending = await settingsService.getPendingRestore();
+      if (seq !== restoreSeq) return;
+      pendingRestore = pending;
+      pendingRestoreError = null;
+    } catch (err) {
+      if (seq !== restoreSeq) return;
+      pendingRestore = undefined;
+      pendingRestoreError = `Speaking Glass could not read whether a restore is scheduled. ${describeError(err)}`;
+    }
+  }
+
   /**
-   * Restore from an export folder.
+   * Choose an export, say what restoring it does, and schedule it only on a
+   * yes.
    *
-   * Rust validates the manifest and every checksum and then SCHEDULES the
-   * restore; the swap happens at the next launch, before any database pool
-   * exists. Swapping the file underneath the running pool is not something a
-   * filesystem lets you do meaningfully.
-   *
-   * So the toast says "quit and reopen", and says that nothing has changed
-   * yet — otherwise a successful schedule reads as a completed restore, and
-   * the user closes the app believing the work is already done.
+   * Choosing used to schedule in the same step, with a toast as the only
+   * trace. Rust now checks the export and schedules nothing until
+   * `scheduleRestore` is sent this choice's id; declining sends nothing, so it
+   * leaves no marker. The swap itself happens at the next launch, before any
+   * database pool exists.
    */
   async function runRestoreAllData(): Promise<void> {
+    if (restoreBusy) return;
+    restoreBusy = true;
     try {
-      const result = await settingsService.restoreAllData();
-      if (result.cancelled) return;
+      const preview = await settingsService.chooseRestoreExport();
+      if (!preview) return;
+      const accepted = await requestConfirm(restoreConfirmation(preview));
+      if (!accepted) return;
+      restoreSeq += 1;
+      pendingRestore = await settingsService.scheduleRestore(preview.selectionId);
+      pendingRestoreError = null;
       showToast(
-        `Ready to restore ${result.scriptsInExport} scripts from the export taken on ` +
-          `${result.createdAt?.slice(0, 10) ?? 'an earlier date'}. ` +
-          `${os.quit} and reopen Speaking Glass to apply it — nothing has changed yet.`,
+        `Restore scheduled. ${os.quit} and reopen Speaking Glass to apply it — nothing has changed yet.`,
         'success',
       );
     } catch (err) {
       showToast(describeError(err), 'danger');
+      // Whatever Rust now holds is what the row should say.
+      void loadPendingRestore();
+    } finally {
+      restoreBusy = false;
+    }
+  }
+
+  async function runCancelRestore(): Promise<void> {
+    if (restoreBusy) return;
+    restoreBusy = true;
+    try {
+      restoreSeq += 1;
+      await settingsService.cancelPendingRestore();
+      pendingRestore = null;
+      pendingRestoreError = null;
+      showToast('Restore cancelled. Nothing will change at the next launch.', 'success');
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+      void loadPendingRestore();
+    } finally {
+      restoreBusy = false;
     }
   }
 
@@ -4179,9 +4241,15 @@
           <div class="privacy" data-search-row>
             <h3 class="privacy-head">Your data</h3>
             <p class="privacy-body">
-              Scripts and their saved versions, imported images, settings, a history of your takes
-              (when each ran and where it stopped) and diagnostic logs are kept on this computer.
-              An export holds all of it, with a checksum per file, and can be restored.
+              Scripts and their saved versions, imported images, settings (calibrated rigs
+              included), a history of your takes (when each ran and where it stopped) and diagnostic
+              logs are kept on this computer. An export holds everything except the logs and the
+              downloaded speech languages, with a checksum per file.
+            </p>
+            <p class="privacy-body">
+              Restoring from an export replaces your scripts, settings and take history with the
+              export’s the next time Speaking Glass opens, and moves what was there to the
+              quarantine folder in the data folder.
             </p>
           </div>
           <!--
@@ -4194,8 +4262,33 @@
           -->
           <div class="row-actions" data-search-row>
             <Button onclick={() => void runExportAllData()}>Export all data</Button>
-            <Button onclick={() => void runRestoreAllData()}>Restore from export…</Button>
+            <!-- Not offered over a scheduled restore: Rust refuses a second
+                 one, and the row below says how to call the first off. -->
+            <Button
+              disabled={restoreBusy || pendingRestore !== null}
+              onclick={() => void runRestoreAllData()}
+            >
+              Restore from export…
+            </Button>
           </div>
+          {#if pendingRestore}
+            {@const lines = pendingRestoreLines(pendingRestore)}
+            <div class="privacy pending-restore" data-search-row data-testid="pending-restore">
+              <h3 class="privacy-head">{lines.head}</h3>
+              <p class="privacy-body">{lines.body}</p>
+              {#if lines.note}
+                <p class="privacy-body">{lines.note}</p>
+              {:else}
+                <div class="row-actions">
+                  <Button disabled={restoreBusy} onclick={() => void runCancelRestore()}>
+                    Cancel restore
+                  </Button>
+                </div>
+              {/if}
+            </div>
+          {:else if pendingRestoreError}
+            <p class="privacy-body" role="alert">{pendingRestoreError}</p>
+          {/if}
 
           <!-- One block per topic, so a search for "updates" keeps Updates
                and not every privacy paragraph with it. -->

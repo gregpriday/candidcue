@@ -173,6 +173,13 @@ export interface ShimConfig {
   heldAtBoot?: string[];
   /** `general.openTo` in the settings document: where a launch lands. */
   openTo?: 'library' | 'last_script';
+  /**
+   * The export `choose_restore_export` hands back, as if the operator picked
+   * it (#488). Unset, the picker is cancelled. A schedule keeps its marker in
+   * sessionStorage, standing in for `restore-pending.json`: it outlives a
+   * reload of the Settings page the way the file outlives the window.
+   */
+  restoreExport?: { path: string; createdAt: string; appVersion: string; scriptsInExport: number };
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -801,6 +808,46 @@ function shimBody(config: ShimConfig): void {
         return config.legacyLibraryNotice ?? null;
       case 'reveal_legacy_library':
         return null;
+
+      /*
+       * Restore from export (#488), shaped like `settings_cmds.rs`. Choosing
+       * schedules nothing; only `schedule_restore` with the id of the latest
+       * choice writes the marker, and it refuses while one exists.
+       */
+      case 'choose_restore_export': {
+        if (!config.restoreExport) return null;
+        const selectionId = Number(sessionStorage.getItem('__E2E_RESTORE_SELECTION__') ?? '0') + 1;
+        sessionStorage.setItem('__E2E_RESTORE_SELECTION__', String(selectionId));
+        return { selectionId, ...config.restoreExport };
+      }
+      case 'schedule_restore': {
+        const chosen = Number(sessionStorage.getItem('__E2E_RESTORE_SELECTION__') ?? '0');
+        if (!config.restoreExport || args?.['selectionId'] !== chosen) {
+          throw { code: 'RESTORE_SELECTION_STALE', userMessage: 'That export is no longer the one chosen.' };
+        }
+        if (sessionStorage.getItem('__E2E_RESTORE_PENDING__') !== null) {
+          throw { code: 'RESTORE_ALREADY_SCHEDULED', userMessage: 'A restore is already scheduled.' };
+        }
+        sessionStorage.removeItem('__E2E_RESTORE_SELECTION__');
+        const pending = {
+          exportPath: config.restoreExport.path,
+          exportCreatedAt: config.restoreExport.createdAt,
+          requestedAt: '2026-11-20T08:00:00Z',
+          attempts: 0,
+          cancellable: true,
+        };
+        sessionStorage.setItem('__E2E_RESTORE_PENDING__', JSON.stringify(pending));
+        return pending;
+      }
+      case 'get_pending_restore': {
+        const raw = sessionStorage.getItem('__E2E_RESTORE_PENDING__');
+        return raw === null ? null : JSON.parse(raw);
+      }
+      case 'cancel_pending_restore': {
+        const had = sessionStorage.getItem('__E2E_RESTORE_PENDING__') !== null;
+        sessionStorage.removeItem('__E2E_RESTORE_PENDING__');
+        return had;
+      }
 
       case 'get_settings':
         return settingsDoc;

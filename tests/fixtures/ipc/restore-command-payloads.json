@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Canonical shapes for restoring from an export (#488). Read by BOTH sides:",
+    "  - tests/unit/control/restore-ipc-contract.test.ts asserts the real",
+    "    wrappers in src/control/services/settings.ts emit and read exactly",
+    "    these shapes;",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts the Rust command",
+    "    signatures and DTOs produce them.",
+    "choose_restore_export runs the folder picker in Rust and schedules nothing;",
+    "schedule_restore takes the id of that choice and never a path, because the",
+    "webview has no picker to obtain one from and must not be able to name a",
+    "folder for the next launch to restore."
+  ],
+  "choose_restore_export": {},
+  "schedule_restore": { "selectionId": 4 },
+  "get_pending_restore": {},
+  "cancel_pending_restore": {},
+  "expectedRestorePreview": {
+    "selectionId": 4,
+    "path": "/Users/example/Desktop/SpeakingGlass-export-20261101-091500",
+    "createdAt": "2026-11-01T09:15:00Z",
+    "appVersion": "1.0.0",
+    "scriptsInExport": 7
+  },
+  "expectedPendingRestore": {
+    "exportPath": "/Users/example/Desktop/SpeakingGlass-export-20261101-091500",
+    "exportCreatedAt": "2026-11-01T09:15:00Z",
+    "requestedAt": "2026-11-20T08:00:00Z",
+    "attempts": 0,
+    "cancellable": true
+  },
+  "expectedLegacyPendingRestore": {
+    "exportPath": "/Users/example/Desktop/SpeakingGlass-export-20261001-120000",
+    "exportCreatedAt": null,
+    "requestedAt": "2026-10-02T08:00:00Z",
+    "attempts": 1,
+    "cancellable": false
+  }
+}

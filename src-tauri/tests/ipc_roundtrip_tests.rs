@@ -178,6 +178,11 @@ const REPLAYED: &[&str] = &[
     "get_settings",
     "update_settings",
     "clear_cache",
+    // Restore from export (#488). `choose_restore_export` is not here: it
+    // opens a native picker, which a MockRuntime has nowhere to draw.
+    "schedule_restore",
+    "get_pending_restore",
+    "cancel_pending_restore",
     // Unlocked by making the commands generic over the Tauri runtime. Every one
     // of these was previously `AppHandle` (i.e. `AppHandle<Wry>`), which cannot
     // be bound on the MockRuntime, so no headless test could reach them at all.
@@ -251,6 +256,9 @@ fn harness() -> Harness {
             commands::get_settings,
             commands::update_settings,
             commands::clear_cache,
+            commands::schedule_restore,
+            commands::get_pending_restore,
+            commands::cancel_pending_restore,
             commands::app_version,
             commands::get_script,
             // The stage surface (§46.6) — the hop that broke the product.
@@ -274,6 +282,7 @@ fn harness() -> Harness {
     app.manage(ScriptLocks::default());
     app.manage(AppCoordinator::default());
     app.manage(speaking_glass_lib::updater::UpdaterState::default());
+    app.manage(commands::RestoreSelection::default());
 
     let webview = WebviewWindowBuilder::new(&app, "control", tauri::WebviewUrl::App("control.html".into()))
         .build()
@@ -1852,6 +1861,49 @@ fn clearing_logs_through_the_command_keeps_the_open_log_writable() {
         "after the clear\n",
         "the appender must still be writing somewhere the user can read"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Restore from export (#488)
+// ---------------------------------------------------------------------------
+
+/// The three restore commands that need no picker, through the real IPC path.
+///
+/// The generic replay above only proves a payload binds; a domain error passes
+/// it. This proves the getter and cancel really answer, and that scheduling a
+/// choice Rust never made is refused by name rather than writing a marker.
+#[test]
+fn restore_commands_answer_and_an_unchosen_schedule_is_refused() {
+    let h = harness();
+    let marker = h.paths.root().join("restore-pending.json");
+
+    assert_eq!(h.expect_ok("get_pending_restore", Value::Null), Value::Null);
+    assert_eq!(h.expect_ok("cancel_pending_restore", Value::Null), json!(false));
+
+    let refused = h
+        .invoke("schedule_restore", json!({ "selectionId": 1 }))
+        .expect_err("nothing was chosen, so nothing can be scheduled");
+    assert_eq!(refused["code"], json!("RESTORE_SELECTION_STALE"), "{refused}");
+    assert!(!marker.exists(), "a refused schedule writes no marker");
+
+    // A marker from an earlier choice reads back and cancels.
+    std::fs::write(
+        &marker,
+        serde_json::to_vec(&json!({
+            "exportPath": "/tmp/SpeakingGlass-export",
+            "requestedAt": "2026-11-20T08:00:00Z",
+            "appVersion": "1.0.0",
+            "attempts": 0,
+            "exportCreatedAt": "2026-11-01T09:15:00Z",
+        }))
+        .expect("encode"),
+    )
+    .expect("marker");
+    let pending = h.expect_ok("get_pending_restore", Value::Null);
+    assert_eq!(pending["exportCreatedAt"], json!("2026-11-01T09:15:00Z"));
+    assert_eq!(pending["cancellable"], json!(true));
+    assert_eq!(h.expect_ok("cancel_pending_restore", Value::Null), json!(true));
+    assert!(!marker.exists());
 }
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,8 @@ import {
   hashSource,
   plainExcerpt,
 } from '../lib/format';
-import type { AppSettings, ClearResult } from './settings-types';
+import type { AppSettings, ClearResult, PendingRestore, RestorePreview } from './settings-types';
+import { DEV_APP_VERSION } from '../../shared/version';
 import { defaultAppSettings } from './settings-types';
 import { adoptLegacyValue } from '../lib/legacy-storage';
 import type {
@@ -267,6 +268,11 @@ export const mockScripts = {
 
 /* --------------------------------------------------------------- settings */
 
+const mockRestore: { selectionId: number; pending: PendingRestore | null } = {
+  selectionId: 0,
+  pending: null,
+};
+
 export const mockSettings = {
   get(): AppSettings {
     return structuredClone(state.settings);
@@ -282,6 +288,42 @@ export const mockSettings = {
   },
   clearCache(kind: 'logs'): ClearResult {
     return { kind, clearedFiles: 0, clearedBytes: 0 };
+  },
+  /**
+   * Restore from export (#488), in memory. Browser dev has no picker and no
+   * next launch, so choosing offers one sample export and scheduling only
+   * remembers it — enough to see the confirmation, the pending row and Cancel.
+   */
+  chooseRestoreExport(): RestorePreview | null {
+    mockRestore.selectionId += 1;
+    return {
+      selectionId: mockRestore.selectionId,
+      path: '/Users/example/Desktop/SpeakingGlass-export-20261101-091500',
+      createdAt: '2026-11-01T09:15:00Z',
+      appVersion: DEV_APP_VERSION,
+      scriptsInExport: 3,
+    };
+  },
+  scheduleRestore(selectionId: number): PendingRestore {
+    if (selectionId !== mockRestore.selectionId || mockRestore.pending) {
+      throw new Error('That export is no longer the one chosen. Choose it again.');
+    }
+    mockRestore.pending = {
+      exportPath: '/Users/example/Desktop/SpeakingGlass-export-20261101-091500',
+      exportCreatedAt: '2026-11-01T09:15:00Z',
+      requestedAt: new Date().toISOString(),
+      attempts: 0,
+      cancellable: true,
+    };
+    return { ...mockRestore.pending };
+  },
+  getPendingRestore(): PendingRestore | null {
+    return mockRestore.pending ? { ...mockRestore.pending } : null;
+  },
+  cancelPendingRestore(): boolean {
+    const had = mockRestore.pending !== null;
+    mockRestore.pending = null;
+    return had;
   },
 };
 

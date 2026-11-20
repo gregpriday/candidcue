@@ -568,3 +568,24 @@ describe('the update policy is stated truthfully', () => {
     }
   });
 });
+
+describe('#488 the Data section says what export and restore actually do', () => {
+  /** The visible prose of the section, markup and comments stripped. */
+  const prose = privacySection
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  it('does not claim the logs are in an export', () => {
+    // The manifest excludes logs and speech models (backup::export_all_data).
+    expect(prose).not.toMatch(/export holds all of it/i);
+    expect(prose).toMatch(/export holds everything except the logs and the downloaded speech languages/i);
+  });
+
+  it('says once what restore replaces, when, and where the previous data goes', () => {
+    const statement = /Restoring from an export replaces your scripts, settings and take history[^.]*\./i.exec(prose);
+    expect(statement, 'one plain statement of what restore does').not.toBeNull();
+    expect(statement![0]).toMatch(/next time Speaking Glass opens/);
+    expect(statement![0]).toMatch(/quarantine folder/);
+  });
+});

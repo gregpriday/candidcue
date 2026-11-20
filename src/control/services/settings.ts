@@ -42,7 +42,8 @@ import {
   type ReaderFrame,
   type SessionMode,
   type DataExportResult,
-  type RestoreResult,
+  type PendingRestore,
+  type RestorePreview,
 } from './settings-types';
 import { DEV_APP_VERSION } from '../../shared/version';
 import { adoptLegacyValue } from '../lib/legacy-storage';
@@ -160,15 +161,6 @@ interface RustExportResult {
   totalBytes: number;
   warnings: string[];
   excluded: string[];
-}
-
-/** Mirror of `backup::RestoreResult`. */
-interface RustRestoreResult {
-  path: string;
-  appVersion: string;
-  createdAt: string;
-  scriptsInExport: number;
-  restartRequired: boolean;
 }
 
 /**
@@ -1201,28 +1193,46 @@ export function describeExport(result: DataExportResult): string | null {
 }
 
 /**
- * SCHEDULE a restore from an export folder.
+ * Choose an export folder and check it. Schedules NOTHING (#488).
  *
- * Rust validates the manifest and every checksum, then writes a marker; the
- * swap happens at the next launch, before any database pool exists. Replacing
- * the file underneath the open pool — which the first version of this did —
- * leaves existing connections writing to the renamed inode on Unix and fails
- * outright on Windows, in both cases after the scripts tree has already moved.
- *
- * So the caller must tell the user to restart. A schedule that succeeded looks
- * exactly like nothing happening otherwise.
+ * Rust runs the picker and every check the restore makes — manifest, every
+ * checksum, no path escaping the folder, no symlinks — and returns what the
+ * confirmation shows. `null` is a cancelled picker. The restore is armed only
+ * by `scheduleRestore`, with this preview's id.
  */
-export async function restoreAllData(): Promise<RestoreResult> {
-  if (!isTauriRuntime()) return { cancelled: true };
-  const result = await ipcInvoke<RustRestoreResult | null>('restore_all_data');
-  if (result === null) return { cancelled: true };
-  return {
-    cancelled: false,
-    scriptsInExport: result.scriptsInExport,
-    createdAt: result.createdAt,
-    appVersion: result.appVersion,
-    restartRequired: result.restartRequired,
-  };
+export async function chooseRestoreExport(): Promise<RestorePreview | null> {
+  if (!isTauriRuntime()) return mockSettings.chooseRestoreExport();
+  return await ipcInvoke<RestorePreview | null>('choose_restore_export');
+}
+
+/**
+ * SCHEDULE the confirmed restore, for the next launch.
+ *
+ * The swap happens at the next launch, before any database pool exists.
+ * Replacing the file underneath the open pool — which the first version of this
+ * did — leaves existing connections writing to the renamed inode on Unix and
+ * fails outright on Windows, in both cases after the scripts tree has already
+ * moved. So the caller must say to restart, and keeps showing the result: a
+ * schedule that succeeded looks exactly like nothing happening otherwise.
+ */
+export async function scheduleRestore(selectionId: number): Promise<PendingRestore> {
+  if (!isTauriRuntime()) return mockSettings.scheduleRestore(selectionId);
+  return await ipcInvoke<PendingRestore>('schedule_restore', { selectionId });
+}
+
+/** The restore waiting for the next launch, or `null`. */
+export async function getPendingRestore(): Promise<PendingRestore | null> {
+  if (!isTauriRuntime()) return mockSettings.getPendingRestore();
+  return await ipcInvoke<PendingRestore | null>('get_pending_restore');
+}
+
+/**
+ * Call off the scheduled restore. `false` when there was nothing to cancel.
+ * Rust refuses one a launch has already started on.
+ */
+export async function cancelPendingRestore(): Promise<boolean> {
+  if (!isTauriRuntime()) return mockSettings.cancelPendingRestore();
+  return await ipcInvoke<boolean>('cancel_pending_restore');
 }
 
 export async function clearCache(kind: 'logs'): Promise<ClearResult> {

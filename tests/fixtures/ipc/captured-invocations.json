@@ -9,6 +9,10 @@
       "command": "app_version",
       "args": null
     },
+    "cancel_pending_restore": {
+      "command": "cancel_pending_restore",
+      "args": null
+    },
     "clear_cache_logs": {
       "command": "clear_cache",
       "args": {
@@ -70,6 +74,10 @@
           "includeAssets": false
         }
       }
+    },
+    "get_pending_restore": {
+      "command": "get_pending_restore",
+      "args": null
     },
     "get_script": {
       "command": "get_script",
@@ -203,6 +211,12 @@
         "metadataPatch": {
           "title": "Keynote II"
         }
+      }
+    },
+    "schedule_restore": {
+      "command": "schedule_restore",
+      "args": {
+        "selectionId": 1
       }
     },
     "select_speech_language": {

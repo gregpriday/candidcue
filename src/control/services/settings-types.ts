@@ -1175,28 +1175,45 @@ export interface DataExportResult {
 }
 
 /**
- * The result of SCHEDULING a restore. Nothing has been restored yet.
+ * An export chosen for restore. NOTHING is scheduled yet (#488).
+ *
+ * Mirror of Rust's `commands::RestorePreview`. Choosing used to schedule the
+ * restore in the same step; now Settings shows this in a confirmation, and only
+ * `scheduleRestore(selectionId)` writes the marker. The id is all that goes
+ * back: the folder came from a picker Rust ran, and the webview never names
+ * one.
+ */
+export interface RestorePreview {
+  selectionId: number;
+  path: string;
+  /** When the export was taken. */
+  createdAt: string;
+  /** The Speaking Glass version that wrote it. */
+  appVersion: string;
+  /** How many scripts the export contains — what WOULD be restored. */
+  scriptsInExport: number;
+}
+
+/**
+ * A restore waiting for the next launch. Mirror of `backup::PendingRestoreStatus`.
  *
  * Restoring is two-phase on purpose. The database pool is open on the file a
  * restore replaces, and swapping it underneath does not do what it looks like:
  * on Unix the existing connections keep writing to the renamed inode, and
- * SQLite recreates its journal beside the file that replaced it. So Rust
- * validates the export here — manifest, every checksum, no path escaping the
- * folder, no symlinks — and applies it at the next launch, before any pool
- * exists.
- *
- * `restartRequired` is therefore always true, and the UI has to say so:
- * without it, a successful schedule looks exactly like nothing happening.
+ * SQLite recreates its journal beside the file that replaced it. So the swap
+ * happens at the next launch, before any pool exists — and until then this is
+ * the only sign that it will.
  */
-export interface RestoreResult {
-  cancelled: boolean;
-  /** How many scripts the export contains — what WILL be restored. */
-  scriptsInExport?: number;
-  /** When the export being restored was taken. */
-  createdAt?: string;
-  /** The Speaking Glass version that wrote it. */
-  appVersion?: string;
-  restartRequired?: boolean;
+export interface PendingRestore {
+  exportPath: string;
+  /** When the export was taken; `null` on a marker written before #488. */
+  exportCreatedAt: string | null;
+  /** When the restore was scheduled. */
+  requestedAt: string;
+  /** How many launches have already started on it. */
+  attempts: number;
+  /** False once a launch has started on it: it can no longer be called off. */
+  cancellable: boolean;
 }
 
 /*
