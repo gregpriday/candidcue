@@ -61,7 +61,7 @@ import {
   type TeleprompterSettings,
 } from '../lib/stage-appearance';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
-import { VoiceSessionPipeline } from '../services/voice-session';
+import { VoiceSessionPipeline, type VoicePipelineDeps } from '../services/voice-session';
 import { isTauriRuntime } from '../services/ipc';
 import { describeError, errorCode } from '../services/errors';
 import { trace } from '../services/audio-trace';
@@ -918,6 +918,70 @@ function countSpokenWords(text: string): number {
 let displayWatchTimer: ReturnType<typeof setInterval> | null = null;
 const DISPLAY_WATCH_INTERVAL_MS = 2000;
 
+/* ---------------------------------------------------------------------------
+ * The take token (#244)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Which take is live, as a token nothing else can mint.
+ *
+ * A take's pipeline outlives it. `stopInternals` starts `pipeline.stop()`
+ * without awaiting it, and the pipeline deliberately keeps applying frames
+ * from the recogniser session it is closing so the last utterance can
+ * finalise — so its callbacks keep arriving for seconds after the stop, long
+ * enough to overlap a quick restart. Everything they write to (the counters,
+ * `state`, the toasts, following) belongs to the NEXT take by then.
+ *
+ * So every pipeline callback goes through `forThisTake`, and every async
+ * continuation a take starts — its `start()` rejection, a hard pause, a
+ * resume, a retry, a microphone switch — checks `isLiveTake` before writing
+ * anything. A token is issued once per `startLiveSession` and revoked as the
+ * first thing `stopInternals` does, before any teardown, so nothing that runs
+ * during the stop counts as the live take either. A retake (`restartParagraph`)
+ * is a new pass within the same take: the pipeline stays open across it, and
+ * so does the token.
+ *
+ * Ordering WITHIN a take — a newer pause against a late resume — is a
+ * different question, and `pauseCount` still answers it.
+ */
+let liveTakeToken: number | null = null;
+let lastTakeToken = 0;
+
+function issueTakeToken(): number {
+  lastTakeToken += 1;
+  liveTakeToken = lastTakeToken;
+  return liveTakeToken;
+}
+
+function revokeTakeToken(): void {
+  liveTakeToken = null;
+}
+
+/** Is the take that holds `token` still the one running? */
+function isLiveTake(token: number | null): boolean {
+  return token !== null && token === liveTakeToken;
+}
+
+/**
+ * A pipeline's options, with every `on…` callback a no-op once the take
+ * holding `token` has stopped or been replaced. The one place a pipeline
+ * callback is checked against its take, so a callback added later cannot be
+ * added unguarded. Everything else — the start sequence, the ids — passes
+ * through untouched.
+ */
+function forThisTake(token: number, deps: VoicePipelineDeps): VoicePipelineDeps {
+  const guarded: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(deps)) {
+    guarded[name] =
+      name.startsWith('on') && typeof value === 'function'
+        ? (...args: unknown[]): void => {
+            if (isLiveTake(token)) (value as (...a: unknown[]) => unknown)(...args);
+          }
+        : value;
+  }
+  return guarded as unknown as VoicePipelineDeps;
+}
+
 
 export interface StartSessionInput {
   scriptId: string;
@@ -1006,6 +1070,9 @@ function isSpeechModelUnavailable(code: string | null): boolean {
 
 export function startLiveSession(input: StartSessionInput): string {
   stopInternals();
+  // After the stop, which revoked the last take's token: from here on only
+  // this take's pipeline and continuations can write.
+  const take = issueTakeToken();
   const sessionId = input.sessionId ?? newSessionId();
   compiledScript = input.compiled ?? null;
   inputFallbackCount = 0;
@@ -1093,9 +1160,13 @@ export function startLiveSession(input: StartSessionInput): string {
     totalTokens: input.totalTokens,
     compiled: useRealDriver ? (input.compiled ?? null) : null,
     sessionGeneration,
-    onSnapshot: handleSnapshot,
+    // The driver drops its own feed once disposed; the token says the same
+    // thing in the one vocabulary every per-take callback shares (#244).
+    onSnapshot(snapshot) {
+      if (isLiveTake(take)) handleSnapshot(snapshot);
+    },
     onTranscript(line) {
-      pushTranscriptLine(line);
+      if (isLiveTake(take)) pushTranscriptLine(line);
     },
   });
 
@@ -1133,10 +1204,14 @@ export function startLiveSession(input: StartSessionInput): string {
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
     // Before the pipeline, so the first level frame it produces has somewhere
     // to land and the pill is on the stage while the device is being acquired.
-    // The epoch is captured here and checked in every callback below: a
-    // superseded pipeline is torn down asynchronously and can still deliver.
-    const pillEpoch = startVoicePill();
-    pipeline = new VoiceSessionPipeline({
+    startVoicePill();
+    /*
+     * Every callback below speaks for THIS take only. A superseded pipeline is
+     * torn down asynchronously and can still deliver — see `liveTakeToken` —
+     * so `forThisTake` turns each one into a no-op once the take has stopped
+     * or been replaced, and none of them checks for itself.
+     */
+    pipeline = new VoiceSessionPipeline(forThisTake(take, {
       sessionId,
       sessionGeneration,
       compiled: input.compiled,
@@ -1164,7 +1239,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * own stream — see `services/audio/ownership.ts` for what that costs.
        */
       onLevel: (snapshot) => {
-        if (voicePill === null || pillEpoch !== voicePillEpoch) return;
+        if (voicePill === null) return;
         voicePill = reduceVoicePillLevel(voicePill, snapshot, snapshot.generatedAtMs);
       },
       /*
@@ -1176,55 +1251,18 @@ export function startLiveSession(input: StartSessionInput): string {
        * microphone.
        */
       onCaptureAttempt: () => {
-        if (voicePill === null || pillEpoch !== voicePillEpoch) return;
+        if (voicePill === null) return;
         voicePill = { ...voicePill, startedAtMs: monotonicNowMs(), lastFrameAtMs: null };
       },
       onTranscriptText: (text, final) => {
         // Words coming back is the only evidence that the whole chain works,
-        // and it is what turns the pill's dot into a tick. Epoch-checked: a
-        // late partial from a superseded pipeline must not certify this take.
-        if (voicePill !== null && pillEpoch === voicePillEpoch) {
+        // and it is what turns the pill's dot into a tick.
+        if (voicePill !== null) {
           voicePill = reduceVoicePillText(voicePill, text);
         }
-        /*
-         * "Something has been heard this take", latched here and nowhere else.
-         *
-         * PARTIALS COUNT. Rust aligns on partials and publishes snapshots from
-         * them, so the script is often already following while the first long
-         * utterance is still open — and a latch that waited for a final put
-         * "nothing heard yet, check the microphone" over a take the presenter
-         * could watch working. It is the same contradiction `wordsInFlight`
-         * exists to fix on the summary, in a different place.
-         *
-         * Epoch-checked for the same reason the pill above is: a shutdown
-         * deliberately lets the last utterance finalise, and `transportGeneration`
-         * is cleared during close, so a late line from the previous take can
-         * still arrive. Certifying THIS take with the last one's audio would be
-         * the worst possible direction for this flag to be wrong in.
-         */
-        if (pillEpoch === voicePillEpoch && text.trim() !== '') {
-          /*
-           * A LATE PARTIAL FROM THE PREVIOUS PASS MAY CERTIFY THIS ONE, AND
-           * THAT IS THE RIGHT DIRECTION TO BE WRONG IN.
-           *
-           * `restartParagraph` clears the latch and the pipeline stays open, so
-           * a partial still in flight from before the restart can arrive after
-           * it. There is an epoch guard here for the PIPELINE, but there is
-           * genuinely no signal on this callback that distinguishes "audio from
-           * a moment ago" from "audio from now" — and an epoch compared inside
-           * the synchronous update it was captured beside cannot differ, which
-           * is what the first attempt at this did.
-           *
-           * So it is left alone deliberately. What this flag answers is "can
-           * Speaking Glass hear you", and a partial that arrived one second ago is
-           * evidence that it can. The failure that matters is the other one: a
-           * take reporting "nothing heard yet — check the microphone" over a
-           * working microphone would send somebody to unplug hardware mid-take.
-           * Being briefly too optimistic costs nothing; being wrongly pessimistic
-           * costs a take.
-           */
-          state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
-        }
+        // Counted before anything is published: a subscriber to `state` runs
+        // synchronously inside the update below, and if it ended this take the
+        // words would land on the next one (#244).
         /*
          * The open utterance counts too — as an ESTIMATE, separately.
          *
@@ -1250,6 +1288,45 @@ export function startLiveSession(input: StartSessionInput): string {
           // "Did it hear me": was anything transcribed at all.
           wordsHeard += countSpokenWords(text);
         }
+        /*
+         * "Something has been heard this take", latched here and nowhere else.
+         *
+         * PARTIALS COUNT. Rust aligns on partials and publishes snapshots from
+         * them, so the script is often already following while the first long
+         * utterance is still open — and a latch that waited for a final put
+         * "nothing heard yet, check the microphone" over a take the presenter
+         * could watch working. It is the same contradiction `wordsInFlight`
+         * exists to fix on the summary, in a different place.
+         *
+         * A late line from the previous TAKE cannot reach it: a shutdown
+         * deliberately lets the last utterance finalise, but `forThisTake`
+         * turns this callback away once its take has ended. Certifying THIS
+         * take with the last one's audio would be the worst possible direction
+         * for this flag to be wrong in.
+         */
+        if (text.trim() !== '') {
+          /*
+           * A LATE PARTIAL FROM THE PREVIOUS PASS MAY CERTIFY THIS ONE, AND
+           * THAT IS THE RIGHT DIRECTION TO BE WRONG IN.
+           *
+           * `restartParagraph` clears the latch and the pipeline stays open, so
+           * a partial still in flight from before the restart can arrive after
+           * it. The take token guards the PIPELINE, but there is genuinely no
+           * signal on this callback that distinguishes "audio from a moment
+           * ago" from "audio from now" — and an epoch compared inside the
+           * synchronous update it was captured beside cannot differ, which is
+           * what the first attempt at this did.
+           *
+           * So it is left alone deliberately. What this flag answers is "can
+           * Speaking Glass hear you", and a partial that arrived one second ago is
+           * evidence that it can. The failure that matters is the other one: a
+           * take reporting "nothing heard yet — check the microphone" over a
+           * working microphone would send somebody to unplug hardware mid-take.
+           * Being briefly too optimistic costs nothing; being wrongly pessimistic
+           * costs a take.
+           */
+          state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
+        }
       },
       /*
        * Audio that never reached the recogniser. Surfaced rather than counted
@@ -1270,17 +1347,17 @@ export function startLiveSession(input: StartSessionInput): string {
       onTranscriptLine: (line) => pushTranscriptLine(line),
       onConnectionState: (connection) => {
         /*
-         * A superseded pipeline may not speak for the current take.
+         * A superseded pipeline may not speak for the current take, and
+         * `forThisTake` is what stops it here.
          *
          * `stopInternals` does not await `pipeline.stop()`, and stopping is
          * what drives a pipeline to `offline` — so take A's teardown lands
-         * after take B has connected and hands B a connection state belonging
-         * to a session that no longer exists. On the Live screen that is a
-         * status pill lying; on the stage it is a permanent "Voice off"
-         * cross over a take that is working perfectly, because the pill reads
-         * this same field.
+         * after take B has connected and would hand B a connection state
+         * belonging to a session that no longer exists. On the Live screen
+         * that is a status pill lying; on the stage it is a permanent "Voice
+         * off" cross over a take that is working perfectly, because the pill
+         * reads this same field.
          */
-        if (pillEpoch !== voicePillEpoch) return;
         state.update((s) => {
           /*
            * A reconnect is a connection RE-established, not the first one.
@@ -1349,8 +1426,6 @@ export function startLiveSession(input: StartSessionInput): string {
       },
       // A dead input is not a recogniser problem; the user must act.
       onInputDeviceLost: (code) => {
-        // Device loss outranks every acoustic reading on the mic tile.
-        state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
         /*
          * The pill takes only the HARD half of this signal.
          *
@@ -1361,9 +1436,11 @@ export function startLiveSession(input: StartSessionInput): string {
          * audio" cannot — it is the microphone check's false accusation with a
          * longer fuse.
          */
-        if (code !== 'MIC_NO_SIGNAL' && pillEpoch === voicePillEpoch) {
-          voicePillDeviceLost = true;
-        }
+        if (code !== 'MIC_NO_SIGNAL') voicePillDeviceLost = true;
+        // Device loss outranks every acoustic reading on the mic tile. Published
+        // after the pill's own flag, so a subscriber that ends the take here
+        // cannot leave that flag set on the next one.
+        state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
         // The remedy named here is one the Live screen can actually perform —
         // `switchMicrophone` below drives the pipeline's input switch, and the
         // take controls grow an input picker while the input is lost or a
@@ -1390,13 +1467,12 @@ export function startLiveSession(input: StartSessionInput): string {
        */
       onInputFellBackToDefault: (reason) => {
         /*
-         * The epoch guard its neighbours already have. A pipeline that has been
-         * superseded can still report a fallback it was in the middle of when
-         * the take ended — and this callback both toasts (unexpiring) and writes
-         * state, so an unguarded one hangs the previous take's notice over the
-         * summary, or over the next take's opening.
+         * A pipeline that has been superseded can still report a fallback it
+         * was in the middle of when the take ended — and this callback both
+         * toasts (unexpiring) and writes state, so without `forThisTake` it
+         * would hang the previous take's notice over the summary, or over the
+         * next take's opening.
          */
-        if (pillEpoch !== voicePillEpoch) return;
         // Counted so an in-flight `switchMicrophone` can tell whether the
         // device IT asked for was the one that fell back — see below.
         inputFallbackCount += 1;
@@ -1435,7 +1511,6 @@ export function startLiveSession(input: StartSessionInput): string {
        * there meanwhile is newer than anything this take found out.
        */
       onPinnedMicrophoneFound: (deviceId, label) => {
-        if (pillEpoch !== voicePillEpoch) return;
         // Open on the chosen input now. A resume is what finds it after a
         // start that could not, and the notice from then is no longer true.
         state.update((s) => ({ ...s, usingFallbackInput: false }));
@@ -1457,7 +1532,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * keep without being asked twice, so the pills clear themselves.
        */
       onInputRestored: () => {
-        if (pillEpoch === voicePillEpoch) voicePillDeviceLost = false;
+        voicePillDeviceLost = false;
         const before = get(state);
         if (!before.inputDeviceLost) return;
         state.update((s) => ({
@@ -1500,7 +1575,7 @@ export function startLiveSession(input: StartSessionInput): string {
           'info',
         );
       },
-    });
+    }));
     void pipeline.start().catch((err) => {
       /*
        * A take that has been superseded may not report on the one that
@@ -1510,7 +1585,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * take marked offline, a danger toast, and a cross on its voice pill,
        * all for a failure that happened to a take the operator already ended.
        */
-      if (pillEpoch !== voicePillEpoch) {
+      if (!isLiveTake(take)) {
         trace('start-superseded', 'a replaced take failed to start; not reported');
         return;
       }
@@ -1605,7 +1680,6 @@ export function startLiveSession(input: StartSessionInput): string {
    * starting point would be a guess dressed as a fact.
    */
   if (stageDisplay !== null) {
-    const watchedSession = sessionId;
     displayWatchTimer = setInterval(() => {
       /*
        * The baseline is read EACH TICK, not captured.
@@ -1621,15 +1695,15 @@ export function startLiveSession(input: StartSessionInput): string {
       if (baseline === null) return;
       void stageService.currentWindowDisplay()
         .then((now) => {
-          if (now === null) return;
+          /*
+           * Identity, not just liveness. `clearInterval` cannot cancel a
+           * probe that is already in flight, and the next take can begin
+           * before it resolves — so without this an old take's answer could
+           * write a display-change notice onto a new one. The take token, not
+           * the session id: a caller may open the next take under the same id.
+           */
+          if (now === null || !isLiveTake(take)) return;
           state.update((st) => {
-            /*
-             * Identity, not just liveness. `clearInterval` cannot cancel a
-             * probe that is already in flight, and the next take can begin
-             * before it resolves — so without this an old take's answer could
-             * write a display-change notice onto a new one.
-             */
-            if (!st.active || st.sessionId !== watchedSession) return st;
             const changed =
               now.fingerprint === baseline ? null : (now.name ?? '').trim() || 'another display';
             return st.displayChangedTo === changed ? st : { ...st, displayChangedTo: changed };
@@ -1946,30 +2020,24 @@ let voicePillTimer: ReturnType<typeof setInterval> | null = null;
  * behaviour the microphone check was deleted for.
  */
 let voicePillDeviceLost = false;
-/**
- * Which take the pill belongs to.
- *
- * Pipeline teardown is asynchronous — `stopInternals` does not await
- * `pipeline.stop()` — so a superseded pipeline can still deliver a level frame
- * or a late partial after the next take has started. Without this, take A's
- * microphone would animate take B's waveform, and a stale partial could put a
- * tick on a session that has transcribed nothing.
+/*
+ * Which take the pill belongs to is the take token's question, not the pill's.
+ * Pipeline teardown is asynchronous, so a superseded pipeline can still deliver
+ * a level frame or a late partial after the next take has started; every
+ * callback that writes the pill goes through `forThisTake`, so take A's
+ * microphone cannot animate take B's waveform, nor a stale partial put a tick
+ * on a session that has transcribed nothing.
  */
-let voicePillEpoch = 0;
-
 
 /** Begin a take's pill. Torn down by `stopInternals` on every path out. */
-function startVoicePill(): number {
-  voicePillEpoch += 1;
+function startVoicePill(): void {
   voicePillDeviceLost = false;
-  if (!isTauriRuntime()) return voicePillEpoch;
+  if (!isTauriRuntime()) return;
   voicePill = initialVoicePillState(monotonicNowMs());
   voicePillTimer ??= setInterval(publishVoicePill, VOICE_PILL_INTERVAL_MS);
-  return voicePillEpoch;
 }
 
 function stopVoicePill(): void {
-  voicePillEpoch += 1;
   if (voicePillTimer) clearInterval(voicePillTimer);
   voicePillTimer = null;
   voicePill = null;
@@ -2547,7 +2615,11 @@ export function hardPause(): void {
   pauseCount += 1;
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
+  const take = liveTakeToken;
   void pipeline?.hardPause().catch((err) => {
+    // A pause that fails after its take ended is about a microphone nobody
+    // is using any more.
+    if (!isLiveTake(take)) return;
     showToast(`Could not pause cleanly. ${describeError(err)}`, 'danger');
   });
 }
@@ -2595,14 +2667,14 @@ export function resumeSession(): Promise<void> {
    * and applying it would pause the NEXT take, mark its microphone lost and
    * raise a toast about a failure it never had.
    */
-  const resuming = pipeline;
+  const take = liveTakeToken;
   const releasing = pauseCount;
   // Returned so a caller that needs the outcome can wait for it (#303's Try
   // again); it never rejects, because every failure is reported here.
   return pipeline
     .resume()
     .then(() => {
-      if (resuming !== pipeline) return;
+      if (!isLiveTake(take)) return;
       // Capture was reopened, so a failed start's "no audio" is history.
       if (reopens) voicePillDeviceLost = false;
       state.update((s) => ({
@@ -2615,7 +2687,7 @@ export function resumeSession(): Promise<void> {
       dismissToastByKey(TOAST_MIC_REFUSED);
     })
     .catch((err) => {
-      if (resuming !== pipeline) return;
+      if (!isLiveTake(take)) return;
       // Paused again while the resume was reopening the microphone (#289).
       // The pause has already said what the take is doing; "could not
       // resume" over it would be a failure nobody had.
@@ -2746,9 +2818,8 @@ export async function retryMicrophone(): Promise<boolean> {
   const s0 = get(state);
   if (!s0.active || !pipeline) return false;
   const retrying = pipeline;
-  const forSession = s0.sessionId;
-  const current = (): boolean =>
-    retrying === pipeline && get(state).sessionId === forSession;
+  const take = liveTakeToken;
+  const current = (): boolean => isLiveTake(take);
   if (s0.paused !== 'none') {
     // Awaited, so the button that asked reports for as long as this takes.
     await resumeSession();
@@ -2808,11 +2879,11 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
    * "voice following has resumed" onto a session that has since stopped, or
    * worse, clearing the NEW take's `inputDeviceLost` because the OLD take's
    * switch finally landed, would be a health claim about a microphone nobody is
-   * using. Both the pipeline identity and the session id are checked: a fresh
-   * take builds a new pipeline, and a stopped one has none.
+   * using. The take token answers both: a stop revokes it, and a fresh take
+   * holds a different one.
    */
   const forPipeline = pipeline;
-  const forSession = get(state).sessionId;
+  const take = liveTakeToken;
   // Where the fallback counter stood before this attempt. If it moves, THIS
   // switch is what fell back.
   const fallbacksBefore = inputFallbackCount;
@@ -2828,7 +2899,7 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   let resumed = false;
   try {
     if (!(await pipeline.switchMicrophone(deviceId))) {
-      if (pipeline !== forPipeline || get(state).paused !== 'none') return false;
+      if (!isLiveTake(take) || get(state).paused !== 'none') return false;
       reopening = true;
       await forPipeline.resume();
       resumed = true;
@@ -2836,7 +2907,7 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   } catch (err) {
     // `SESSION_STOPPED` is the take being paused or ended mid-switch, and the
     // pipeline released the device it was opening; nothing failed (#289).
-    if (pipeline === forPipeline && errorCode(err) !== 'SESSION_STOPPED') {
+    if (isLiveTake(take) && errorCode(err) !== 'SESSION_STOPPED') {
       // A whole start that failed again is reported as one — a refusal on
       // the input it was meant to fix must not leave the picker as the remedy.
       if (reopening) recordReopenFailure(err);
@@ -2844,7 +2915,7 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
     }
     return false;
   }
-  if (pipeline !== forPipeline || get(state).sessionId !== forSession) return false;
+  if (!isLiveTake(take)) return false;
   /*
    * A RESOLVED SWITCH IS NOT NECESSARILY THE DEVICE THAT WAS ASKED FOR.
    *
@@ -4311,6 +4382,10 @@ function locateEnding(s: SessionState, token: number | null): string {
 }
 
 function stopInternals(): void {
+  // First, before any teardown: nothing that runs from here on — a frame the
+  // closing pipeline delivers inside `stop()`, a continuation settling — may
+  // count as the live take (#244).
+  revokeTakeToken();
   /*
    * The take's warnings end with the take. Every one of them describes a
    * microphone or a transport that is no longer in use, and `danger` toasts do
