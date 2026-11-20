@@ -31,7 +31,7 @@ Everything below is the **current** behaviour of a stock build, not a plan.
 | Speech recognition | **On device** | A take, or the microphone test | Nothing leaves the machine | — | Start and stop |
 | Alignment / following | **On device** | A take | Nothing leaves the machine | — | — |
 | Support-bundle upload | **Never automatic** | The user exports a folder and chooses what to do with it | Whatever the bundle contains, to whoever the user sends it to | The user's own support channel | Explicit, and the bundle can be inspected before it is sent |
-| Links out of the app | **Handed to the browser** | The user picks a Help-menu destination, the update notice's Download button, or the model's licence link in the speech picker | Speaking Glass makes no request; the operating system opens the URL in the default browser, which then behaves like a browser — with its own cookies, its own DNS and its own idea of privacy | `github.com/gregpriday/candidcue` and `speakingglass.com` for the Help destinations (`src-tauri/src/web.rs`), or the licence URL the model catalogue declares | Clicking it |
+| Links out of the app | **Handed to the browser** | The user picks a Help-menu destination, the update notice's Download button, or the model's licence link in the speech picker | Speaking Glass makes no request; the operating system opens the URL in the default browser, which then behaves like a browser — with its own cookies, its own DNS and its own idea of privacy | `github.com/gregpriday/candidcue` and `speakingglass.com` (the download page and the user guide at `/docs`) for the Help destinations (`src-tauri/src/web.rs`), or the licence URL the model catalogue declares | Clicking it |
 
 ### Redirects, and why "the host" is not a promise
 

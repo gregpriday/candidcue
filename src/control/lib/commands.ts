@@ -199,7 +199,13 @@ export interface CommandActions {
  * of a menu item that opens nothing at runtime. Keep in step with `DESTINATIONS`
  * in `src-tauri/src/web.rs`.
  */
-export type WebDestination = 'website' | 'guide' | 'support' | 'release-notes' | 'download';
+export type WebDestination =
+  | 'user-guide'
+  | 'website'
+  | 'guide'
+  | 'support'
+  | 'release-notes'
+  | 'download';
 
 export interface CommandDefinition {
   id: CommandId;
@@ -802,6 +808,12 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
    * running — it is always-on-top — but the person driving it would be looking
    * at a web page.
    */
+  'help.user-guide': {
+    id: 'help.user-guide',
+    label: 'Speaking Glass User Guide',
+    available: (c) => !presenting(c),
+    run: (a) => a.openWebDestination('user-guide'),
+  },
   'help.website': {
     id: 'help.website',
     label: 'Speaking Glass on GitHub',

@@ -766,6 +766,10 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         "Help",
         true,
         &[
+            // First, where a Help menu's own guide goes on every platform. It
+            // opens the browser, like the web group below, but it is the
+            // answer to "how do I…", which is what someone opening Help wants.
+            &item("help.user-guide", "Speaking Glass User Guide", None)?,
             &item("help.keyboard-shortcuts", "Keyboard Shortcuts", Some(keys::SHORTCUTS))?,
             &item("help.syntax-reference", "Script Syntax Reference", None)?,
             &item("help.setup-assistant", "Setup Assistant", None)?,
