@@ -1,0 +1,50 @@
+name: Advisories
+
+# The release gate's advisory scan, run every day against develop, so a new
+# advisory is news the day it is published rather than on release day.
+#
+# The same scan and the same policy as the gates job of every release workflow
+# (`.github/actions/advisory-scan`, `scripts/report-advisories.mjs`): a
+# cargo-audit vulnerability or unsound warning, or any production pnpm
+# advisory, that docs/advisory-exceptions.json does not cover or whose review
+# is overdue, or a scan that failed, turns this run red, and GitHub emails
+# about a red scheduled run. Unmaintained and yanked warnings are listed and
+# never turn it red. A red run here is a tag that would be refused today: fix
+# the finding or record an exception (docs/release-runbook.md).
+#
+# Scheduled runs use the default branch, which is develop. A manual dispatch
+# can scan any branch.
+
+on:
+  schedule:
+    # 06:17 UTC, off the hour that every other scheduled workflow picks.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+# Its own group, apart from CI and the releases: a scan never cancels or waits
+# behind either, and two scans of the same ref never run at once.
+concurrency:
+  group: advisories-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Dependency advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: No unreviewed vulnerability advisory
+        uses: ./.github/actions/advisory-scan
+        with:
+          enforce: 'true'

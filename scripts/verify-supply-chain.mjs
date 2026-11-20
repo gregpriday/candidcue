@@ -17,11 +17,13 @@
  *
  * `cargo audit` and `pnpm audit` are deliberately NOT wrapped here. They query
  * a network advisory database, so their answer changes without the repository
- * changing — which makes them the wrong shape for a gate that has to be
- * reproducible from a tag. The release workflow runs them as their own step,
- * where a new advisory is news rather than a broken build, through
- * `scripts/report-advisories.mjs`, which sorts what they find against the
- * exceptions accepted in `docs/advisory-exceptions.json`.
+ * changing, and nothing in this file may depend on that. They run in
+ * `scripts/report-advisories.mjs` instead, which sorts what they find against
+ * the exceptions accepted in `docs/advisory-exceptions.json`, from the `gates`
+ * job of every release workflow and a daily scan of `develop`. There an
+ * unreviewed vulnerability DOES refuse a tag that is not a dry run: a moving
+ * database argues against re-running an old tag, not against refusing a new
+ * one, and a refused tag costs a fix or an exception and a new patch tag.
  */
 
 import { execFileSync, execSync } from 'node:child_process';

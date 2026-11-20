@@ -88,15 +88,16 @@ const ACCEPTED_RISK_MAX_DAYS = 30;
 const FOLLOW_UP = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/;
 
 /**
- * Warnings that report how a crate is maintained, not a flaw in it. They are
- * listed like everything else, and never refuse a tag: nine in ten have no fix
+ * cargo-audit warnings that report how a crate is maintained, not a flaw in
+ * it. They are listed like everything else, and never refuse a tag: nine in ten have no fix
  * on this side. Every other kind refuses, an unknown one included, so a new
  * kind of warning arrives as a refusal rather than as a pass.
  */
 const REPORT_ONLY_KINDS = new Set(['unmaintained', 'yanked']);
 
-/** Attempts per live scan before it counts as failed. */
+/** Attempts per live scan before it counts as failed, and how long each may take. */
 const SCAN_ATTEMPTS = 3;
+const SCAN_TIMEOUT_MS = 10 * 60 * 1000;
 
 /* ---------------------------------------------------------------- arguments */
 
@@ -265,13 +266,19 @@ function collect(scan) {
   }
 
   const [command, ...args] = scan.command;
-  const settings = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+  // A scanner that hangs is a scan that failed, not one to wait on forever.
+  const settings = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: SCAN_TIMEOUT_MS };
   const result =
     process.platform === 'win32'
       ? spawnSync(throughCmd(command, args), { ...settings, shell: true })
       : spawnSync(command, args, settings);
   const stdout = result.stdout ?? '';
   const stderr = result.error ? `could not run ${command}: ${result.error.message}` : (result.stderr ?? '');
+  // Killed partway (the timeout, or a signal) is a failure even if what it
+  // printed before dying happens to parse.
+  if (result.error !== undefined || result.signal !== null) {
+    return { stdout: '', stderr: result.error ? stderr : `${command} was killed by ${result.signal}` };
+  }
   // Never an empty file: the publish job attaches every file in provenance/ to
   // the GitHub release, and GitHub refuses a zero-byte asset, so a scanner that
   // printed nothing would turn a reported failure into a failed publish.
@@ -425,9 +432,10 @@ function parsePnpmAudit(report, lockfile) {
     throw new Error('not a pnpm audit JSON report');
   }
   // A report that looked at nothing has nothing to say. pnpm counts what it
-  // audited under `metadata.dependencies` (production, or everything with
-  // --dev); a scanner that quietly resolved no tree must not read as clean.
-  const audited = report.metadata?.dependencies;
+  // audited under `metadata.totalDependencies` (production with --prod,
+  // optional-only packages included, or everything without it); a scanner
+  // that quietly resolved no tree must not read as clean.
+  const audited = report.metadata?.totalDependencies;
   if (!Number.isInteger(audited) || audited <= 0) {
     throw new Error('pnpm audit counted no dependencies, so it audited nothing');
   }
@@ -511,7 +519,7 @@ for (const exception of register.exceptions) {
  * rather than a maintenance notice, and every scan that failed. pnpm findings
  * carry a severity where cargo's carry a kind, so every one of them refuses.
  */
-const refuses = (finding) => !REPORT_ONLY_KINDS.has(finding.kind);
+const refuses = (finding) => !(finding.lockfile.endsWith('Cargo.lock') && REPORT_ONLY_KINDS.has(finding.kind));
 const refusals = [
   ...sections.new.filter(({ finding }) => refuses(finding)).map(({ finding }) => `new: ${line(finding)}`),
   ...sections.overdue

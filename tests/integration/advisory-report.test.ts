@@ -490,13 +490,32 @@ describe('what refuses a release tag', () => {
   });
 
   it('treats a pnpm report that counts no dependencies as a failed scan, not a clean one', () => {
-    for (const prod of [pnpmReport([], 0), { ...pnpmReport(), metadata: {} }]) {
+    for (const prod of [pnpmReport([], 0), { ...pnpmReport(), metadata: { dependencies: 134 } }]) {
       const result = report(saved({ prod }), registerOf([]));
 
       expect(result.status, result.output).toBe(1);
       expect(section(result.output, 'SCAN FAILED').join('\n')).toContain('counted no dependencies');
       expect(refused(result.output)).toContain('scan failed: pnpm-lock.yaml (production)');
     }
+  });
+
+  it('counts optional-only production packages as audited', () => {
+    const prod = pnpmReport();
+    prod.metadata = { ...prod.metadata, dependencies: 0, optionalDependencies: 3, totalDependencies: 3 };
+    const result = report(saved({ prod }), registerOf([]));
+
+    expect(result.status, result.output).toBe(0);
+    expect(section(result.output, 'SCAN FAILED')).toEqual([]);
+  });
+
+  it('never lets a pnpm advisory through on a kind that only cargo treats as report-only', () => {
+    const result = report(
+      saved({ prod: pnpmReport([['marked', ['15.0.0'], 'GHSA-yank-0000-0000', 'yanked']]) }),
+      registerOf([]),
+    );
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('marked 15.0.0 GHSA-yank-0000-0000');
   });
 
   it('passes a scan with nothing unreviewed in it', () => {
@@ -570,6 +589,38 @@ console.log(${JSON.stringify(JSON.stringify(cargoReport()))});
     expect(output).toContain('crates/Cargo.lock: 0 reported');
     expect(readFileSync(calls, 'utf8')).toBe('xxx');
     expect(section(output, 'SCAN FAILED').join('\n')).toContain('(after 3 attempts)');
+  });
+});
+
+describe('a scanner killed partway', () => {
+  it.skipIf(process.platform === 'win32')('is a failed scan, even when what it printed parses', () => {
+    const bin = scratch();
+    fakeTool(
+      bin,
+      'cargo',
+      `import fs from 'node:fs';
+fs.writeSync(1, ${JSON.stringify(JSON.stringify(cargoReport()))});
+process.kill(process.pid, 'SIGKILL');
+`,
+    );
+    fakeTool(bin, 'pnpm', `console.log(${JSON.stringify(JSON.stringify(pnpmReport()))});\n`);
+
+    const result = spawnSync(process.execPath, [SCRIPT, '--register', registerOf([]), '--today', TODAY], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_ACTIONS: '',
+        SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(1);
+    const failed = section(output, 'SCAN FAILED').join('\n');
+    expect(failed).toContain('src-tauri/Cargo.lock: cargo was killed by SIGKILL');
+    expect(failed).toContain('crates/Cargo.lock');
   });
 });
 
@@ -661,32 +712,168 @@ describe('docs/advisory-exceptions.json', () => {
   });
 });
 
-/* ---------------------------------------------------- the release workflow */
+/* ------------------------------------------------- the release workflows */
 
-describe('the release advisory step', () => {
-  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/release-macos.yml'), 'utf8');
-  const uncommented = workflow
+const uncommented = (relPath: string) =>
+  readFileSync(join(REPO_ROOT, relPath), 'utf8')
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('#'))
     .join('\n');
 
-  it('runs the report, records it, and still cannot block a release', () => {
-    /*
-     * The report exits 1 when something is new. That is meant to mark the
-     * step, not to stop a tag building for a reason nobody in the repository
-     * introduced (`scripts/verify-supply-chain.mjs` has the argument), so the
-     * step that runs it has to stay `continue-on-error`.
-     */
-    const at = uncommented.indexOf('report-advisories.mjs');
-    expect(at, 'the release must run scripts/report-advisories.mjs').toBeGreaterThan(-1);
-    const stepStart = uncommented.lastIndexOf('- name:', at);
-    const stepEnd = uncommented.indexOf('- name:', at);
-    const step = uncommented.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
+/** A job's body: from its key to the next key at the same indentation. */
+function jobOf(source: string, name: string): string {
+  const start = source.indexOf(`\n  ${name}:\n`);
+  expect(start, `no ${name} job`).toBeGreaterThan(-1);
+  const rest = source.slice(start + 1);
+  const next = rest.search(/\n {2}[a-z][\w-]*:\n/);
+  return next === -1 ? rest : rest.slice(0, next);
+}
 
-    expect(step).toMatch(/^\s*continue-on-error: true\s*$/m);
-    expect(step).toContain('provenance/advisories.txt');
-    // `gh release create` attaches `provenance/*` one file at a time; a
-    // subdirectory there would fail the publish.
-    expect(step).toMatch(/--save provenance(\s|$)/);
+/** One step, from its `- ` to the next step at the same indentation. */
+function stepOf(job: string, marker: string): string {
+  const at = job.indexOf(marker);
+  expect(at, `no step with ${marker}`).toBeGreaterThan(-1);
+  const start = job.lastIndexOf('\n      - ', at);
+  const next = job.indexOf('\n      - ', at);
+  return job.slice(start + 1, next === -1 ? undefined : next);
+}
+
+const SCAN_ACTION = './.github/actions/advisory-scan';
+const RELEASE_WORKFLOWS = ['release-macos.yml', 'release-windows.yml', 'release-linux.yml'];
+// The publish job's own predicate: a tag, and not a dry run. A push has no
+// inputs, so `inputs.dry_run != true` holds there too.
+const ENFORCED_ON_TAGS = "enforce: ${{ startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true }}";
+
+describe('the release advisory gate', () => {
+  it.each(RELEASE_WORKFLOWS)('%s scans in its gates job, enforced on a tag that is not a dry run', (file) => {
+    const workflow = uncommented(`.github/workflows/${file}`);
+    const gates = jobOf(workflow, 'gates');
+    const step = stepOf(gates, SCAN_ACTION);
+
+    expect(step).toContain(ENFORCED_ON_TAGS);
+    // Nothing turns the verdict back into a report: not the step, not a
+    // condition on it, not an input of the workflow.
+    expect(step).not.toMatch(/continue-on-error/);
+    expect(step).not.toMatch(/^\s*if:/m);
+    expect(workflow.match(/^ {6}[a-z_]+:\n {8}description:/gm), 'the only workflow input is dry_run').toHaveLength(1);
+    expect(workflow).toMatch(/^ {6}dry_run:\n/m);
+
+    // The publish job runs on exactly the condition the gate enforces on.
+    expect(jobOf(workflow, 'publish')).toMatch(/if: startsWith\(github\.ref, 'refs\/tags\/v'\) && inputs\.dry_run != true/);
+
+    // No job anywhere else scans, so no other step can contradict the gate.
+    expect(workflow.split(SCAN_ACTION)).toHaveLength(2);
+    expect(workflow).not.toContain('report-advisories.mjs');
+  });
+
+  it('keeps the macOS report and raw output in the release provenance, from the scan that gated it', () => {
+    const workflow = uncommented('.github/workflows/release-macos.yml');
+    const gates = jobOf(workflow, 'gates');
+    expect(stepOf(gates, SCAN_ACTION)).toMatch(/^\s*save: provenance$/m);
+    const upload = stepOf(gates, 'actions/upload-artifact@');
+    expect(upload).toMatch(/^\s*id: advisories$/m);
+    expect(upload).toMatch(/^\s*path: provenance\/$/m);
+    expect(gates).toContain('advisories: ${{ steps.advisories.outputs.artifact-id }}');
+
+    // The build takes it by ID from this run, which a re-run of only the
+    // build (a new attempt) can still read, and checks it arrived before the
+    // provenance is uploaded.
+    const build = jobOf(workflow, 'build');
+    expect(build).toMatch(/^\s*actions: read$/m);
+    const download = stepOf(build, 'actions/download-artifact@');
+    expect(download).toContain('artifact-ids: ${{ needs.gates.outputs.advisories }}');
+    expect(download).toMatch(/^\s*path: provenance$/m);
+    expect(download).toMatch(/^\s*merge-multiple: true$/m);
+    expect(download).toContain('run-id: ${{ github.run_id }}');
+    expect(download).toContain('github-token: ${{ github.token }}');
+    const check = build.indexOf('test -s provenance/advisories.txt');
+    expect(check).toBeGreaterThan(build.indexOf('actions/download-artifact@'));
+    expect(check).toBeLessThan(build.indexOf('name: speaking-glass-release-macos'));
+  });
+
+  it('runs the same scan on develop every day, red on what would refuse a tag', () => {
+    const workflow = uncommented('.github/workflows/advisories.yml');
+    expect(workflow).toMatch(/^ {2}schedule:\n {4}- cron: '[^']+'$/m);
+    expect(workflow).toMatch(/^ {2}workflow_dispatch:$/m);
+    expect(workflow).not.toMatch(/^ {2}(push|pull_request):/m);
+    // Its own concurrency group, apart from CI and the releases.
+    expect(workflow).toContain('group: advisories-${{ github.ref }}');
+    const scan = stepOf(jobOf(workflow, 'scan'), SCAN_ACTION);
+    expect(scan).toMatch(/^\s*enforce: 'true'$/m);
+    expect(scan).not.toMatch(/continue-on-error/);
+  });
+});
+
+describe('the advisory scan action', () => {
+  const action = uncommented('.github/actions/advisory-scan/action.yml');
+
+  it('installs cargo-audit at a pinned version, and treats a failed install as a failed scan', () => {
+    expect(action).toMatch(/CARGO_AUDIT_VERSION: '\d+\.\d+\.\d+'/);
+    expect(action).toContain('cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --root "$root"');
+    // Its failure is recorded, never swallowed, and the verdict refuses on it.
+    expect(action).not.toMatch(/cargo install[^\n]*\|\|\s*true/);
+    expect(action).toContain('echo "installed=false" >> "$GITHUB_OUTPUT"');
+    expect(action).toContain(`if [ "$INSTALLED" != 'true' ]; then`);
+    expect(action).toMatch(/\[ "\$status" -eq 0 \] && status=1/);
+  });
+
+  it('fails only when told to enforce, and says the verdict either way', () => {
+    expect(action).toContain('status=$?');
+    expect(action).toContain('echo "::error::$verdict"');
+    expect(action).toContain(`if [ "$ENFORCE" = 'true' ]; then exit 1; fi`);
+    expect(action).toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(action).toContain('cp "$report" "$SAVE/advisories.txt"');
+    expect(action).toContain('set -- --save "$SAVE"');
+  });
+
+  // bash finds the stand-in `node` by its bare name, which a Windows `.cmd`
+  // stand-in does not answer to.
+  it.skipIf(process.platform === 'win32')('decides the way its header says', () => {
+    /*
+     * The action is bash around the script; run that bash against stand-in
+     * reports and check the step's own exit status and summary.
+     */
+    // The verdict step is the action's last, so its script runs to the end.
+    const start = action.indexOf('        set +e\n        report=');
+    expect(start).toBeGreaterThan(-1);
+    const body = action
+      .slice(start)
+      .split('\n')
+      .map((line) => line.replace(/^ {8}/, ''))
+      .join('\n');
+    const cases: Array<[label: string, verdict: number, installed: string, enforce: string, exit: number]> = [
+      ['clean, enforced', 0, 'true', 'true', 0],
+      ['refused, enforced', 1, 'true', 'true', 1],
+      ['refused, a dry run', 1, 'true', 'false', 0],
+      ['malformed register, enforced', 2, 'true', 'true', 1],
+      ['clean but cargo-audit missing, enforced', 0, 'false', 'true', 1],
+      ['clean but cargo-audit missing, a dry run', 0, 'false', 'false', 0],
+    ];
+    for (const [label, verdict, installed, enforce, exit] of cases) {
+      const dir = scratch();
+      const bin = scratch();
+      // `node scripts/report-advisories.mjs` answers with the verdict asked for.
+      fakeTool(bin, 'node', `console.log('report body');\nprocess.exit(${verdict});\n`);
+      const summary = join(dir, 'summary.md');
+      const result = spawnSync('bash', ['-c', body], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${bin}${delimiter}${process.env.PATH}`,
+          RUNNER_TEMP: dir,
+          GITHUB_STEP_SUMMARY: summary,
+          ENFORCE: enforce,
+          SAVE: 'provenance',
+          INSTALLED: installed,
+        },
+      });
+      expect(result.status, `${label}\n${result.stdout}${result.stderr}`).toBe(exit);
+      const written = readFileSync(summary, 'utf8');
+      expect(written, label).toContain('report body');
+      expect(written, label).toContain(verdict === 0 && installed === 'true' ? 'Nothing here refuses' : 'REFUSED');
+      expect(readFileSync(join(dir, 'provenance/advisories.txt'), 'utf8'), label).toContain('report body');
+      if (installed !== 'true') expect(written, label).toContain('cargo-audit could not be installed');
+    }
   });
 });

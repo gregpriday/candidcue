@@ -382,6 +382,11 @@ and Linux logs for the TTS-free recogniser (`sherpa-no-tts.mjs`), the GPL check
 on the linked binary (`verify-no-gpl-in-binary.mjs`), and the installer smoke
 test.
 
+Each dry run's `gates` job also runs the advisory scan and says, in an error
+annotation and its job summary, whether a tag would have been refused (below).
+A dry run carries on either way, so read that summary before tagging. The daily
+`advisories.yml` run on `develop` answers the same question every morning.
+
 In every one of them, the `Stage the release` step is the one that matters
 most for updates: it refuses a payload with no `.sig` and verifies the
 signature against the public key in `tauri.conf.json`. A signing secret that
@@ -427,6 +432,43 @@ no stable install polls. Check which one you are about to become before
 pushing.
 
 The gates refuse a tag whose commit is not on `main`.
+
+### When a tag is refused for an advisory
+
+Each release workflow's `gates` job runs `scripts/report-advisories.mjs`
+through `.github/actions/advisory-scan`, before anything is built. A `v*` tag
+that is not a dry run is refused when the scan reports any of:
+
+- a cargo-audit vulnerability, or an `unsound` warning, that
+  `docs/advisory-exceptions.json` does not cover;
+- a `pnpm audit --prod` advisory that it does not cover, at any severity;
+- a covered finding of either kind whose exception is past its `reviewBy`;
+- a scan that failed after its retries, a pnpm report that counted no
+  dependencies, or a cargo-audit that could not be installed.
+
+`unmaintained` and `yanked` warnings, overdue or not, are listed and never
+refuse. All three workflows scan the same lockfiles, so a Windows-only finding
+holds the macOS and Linux tags too. No workflow input skips the scan: the
+register is the only override.
+
+The job summary has the whole report, and its `REFUSES A TAG` section lists
+what stopped it. Nothing has been built or published. To release:
+
+1. **Fix it** where a fix can be taken: `cargo update -p <crate> --precise
+   <version>` or the pnpm equivalent, through `develop` like any change. **Or
+   record an exception** in `docs/advisory-exceptions.json`, with the exact
+   lockfile, package, version and advisory id, a `reach`, the reason, how to
+   recheck it, and a `reviewBy`. A finding that ships, is reachable and has no
+   fix yet is `accepted-risk`, which needs a `followUp` issue that owns the fix
+   and a `reviewBy` at most 30 days out. `node scripts/report-advisories.mjs`
+   on your machine sorts the live scan against the register as the gate will.
+2. Merge that to `main` as in this section, dry-run it, and **cut a new patch
+   tag**. The refused tag stays as it is: nothing was published from it, and
+   moving a pushed tag is never the fix.
+
+Re-running only a failed `build` or `publish` job reuses the gate's earlier
+verdict; re-running the whole workflow scans again, against a database that may
+have moved since.
 
 ### What publishing does
 

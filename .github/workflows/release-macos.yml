@@ -104,6 +104,8 @@ jobs:
     runs-on: macos-15
     permissions:
       contents: read
+    outputs:
+      advisories: ${{ steps.advisories.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -164,6 +166,34 @@ jobs:
         run: >
           node scripts/release-verify.mjs
           --only='repository completeness,version sync,native licence review'
+
+      # Refuses a tag on an unreviewed vulnerability advisory: a cargo-audit
+      # vulnerability or unsound warning, or any production pnpm advisory, that
+      # docs/advisory-exceptions.json does not cover or whose review is overdue,
+      # or a scan that failed. Before anything is built, and enforced exactly
+      # where publish would run (its predicate, below): a dry run or a dispatch
+      # against a branch reports the same verdict and carries on. All three
+      # release workflows scan the same lockfiles, so a finding on one target
+      # holds every release. The register is the only override; there is no
+      # input that skips this.
+      - name: No unreviewed vulnerability advisory
+        uses: ./.github/actions/advisory-scan
+        with:
+          enforce: ${{ startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true }}
+          # The raw scanner output and the report, kept for the release.
+          save: provenance
+
+      # The report the gates decided on goes into the release's provenance, so
+      # what is attached is the scan that let this build through, not a second
+      # one that could disagree with it.
+      - name: Keep the advisory report for the provenance
+        id: advisories
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: advisories-macos
+          path: provenance/
+          retention-days: 90
+          if-no-files-found: error
 
   frontend:
     name: Frontend (typecheck, node, dom)
@@ -274,6 +304,8 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+      # To download the gates job's advisory report by its ID.
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -339,6 +371,22 @@ jobs:
             echo "macos: $(sw_vers -productVersion)"
             echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
           } | tee provenance/toolchain.txt
+
+      # The gates job's advisory report and raw scanner output, into
+      # provenance/ beside the rest. By ID, with a token and this run's ID: a
+      # re-run of only this job is a new attempt, and the upload it needs
+      # belongs to the attempt that ran the gates. Such a re-run reuses that
+      # verdict; a full re-run scans again.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.gates.outputs.advisories }}
+          path: provenance
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
+      - name: The advisory report must have come with it
+        run: test -s provenance/advisories.txt
 
       - name: Import the signing certificate
         env:
@@ -640,18 +688,6 @@ jobs:
 
       - name: Record what the release is made of
         run: node scripts/verify-supply-chain.mjs all
-
-      # Advisories are NOT a gate, and that is a decision rather than an
-      # oversight: they query a database that changes without the repository
-      # changing, so a tag that built yesterday would refuse to build today for
-      # a reason nobody here introduced. They run so a new advisory is news
-      # attached to the release, and the provenance records what was found.
-      - name: Dependency advisories (reported, not enforced)
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          cargo install cargo-audit --locked --quiet 2>/dev/null || true
-          node scripts/report-advisories.mjs --save provenance 2>&1 | tee provenance/advisories.txt
 
       # Everything publish uploads, laid out as it will sit on R2, with the
       # updater signature verified against the key the app ships with.
