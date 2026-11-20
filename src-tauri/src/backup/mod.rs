@@ -689,9 +689,9 @@ struct PendingRestore {
     /// it existed, which the launch-time apply never reads anyway.
     ///
     /// Read leniently: a value that is not a string reads as no date. The
-    /// launch-time apply retires a marker it cannot parse, and this field is
+    /// launch-time apply stops on a marker it cannot parse, and this field is
     /// for display only — it must never be the reason a journal of moves
-    /// already made is thrown away.
+    /// already made reads as unreadable.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
