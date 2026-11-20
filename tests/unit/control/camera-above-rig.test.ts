@@ -218,6 +218,50 @@ describe('a prompter take on the panel afterwards', () => {
     expect(stage.mirrorY).toBe(false);
   });
 
+  it('keeps a diagonal typed in Settings for a panel discovery cannot size (#234)', () => {
+    const unsized = { ...LAPTOP, physicalSizeMm: undefined, name: 'Mystery panel' };
+    const typed = {
+      ...defaultOpticalProfile(),
+      rigName: 'Other display',
+      scale: { mmPerCssPx: 0.21, source: 'diagonal' as const, diagonalMm: 381 },
+      viewingDistanceMm: 1700,
+    };
+    const s = defaultAppSettings();
+    s.stage.presentationMode = 'prompter';
+    s.optical = withCameraAboveRig(
+      {
+        ...empty(),
+        profiles: { [opticalRigKey(unsized.fingerprint, typed.rigName)]: typed },
+        activeRig: { [unsized.fingerprint]: typed.rigName },
+      },
+      unsized,
+    );
+    const stage = stageSettingsFromSettings(s, unsized);
+    expect(stage.opticalProfile?.lensPlacement).toBe('above');
+    expect(stage.opticalProfile?.scale).toEqual(typed.scale);
+    // The camera preset's own distance, not the hood's.
+    expect(stage.opticalProfile?.viewingDistanceMm).not.toBe(1700);
+    expect(stage.optics?.calibrated).toBe(true);
+  });
+
+  it('does not carry a ruler reading, which measured glass this arrangement lacks', () => {
+    const ruler = {
+      ...defaultOpticalProfile(),
+      rigName: 'Desk hood',
+      scale: { mmPerCssPx: 0.3, source: 'ruler' as const },
+      viewingDistanceMm: 1500,
+    };
+    const next = withCameraAboveRig(
+      {
+        ...empty(),
+        profiles: { [opticalRigKey(LAPTOP.fingerprint, ruler.rigName)]: ruler },
+        activeRig: { [LAPTOP.fingerprint]: ruler.rigName },
+      },
+      LAPTOP,
+    );
+    expect(activeOpticalProfile(next, LAPTOP.fingerprint)?.scale?.source).toBe('display');
+  });
+
   it('pins the reading line under the camera even when the panel cannot be sized', () => {
     const unsized = { ...LAPTOP, physicalSizeMm: undefined, name: 'Mystery panel' };
     const s = defaultAppSettings();

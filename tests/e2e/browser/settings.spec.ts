@@ -292,12 +292,12 @@ test('a microphone grant remembered on this machine is not asked for again', asy
  */
 async function seedAppliedRig(
   page: import('@playwright/test').Page,
-  options: { scale?: boolean } = {},
+  options: { scale?: boolean; rigName?: string; active?: boolean } = {},
 ): Promise<void> {
   const fingerprint = 'dsp-e2e-prompter';
-  const rigName = 'Desk hood';
+  const rigName = options.rigName ?? 'Desk hood';
   await page.addInitScript(
-    ([fp, name, withScale]) => {
+    ([fp, name, withScale, active]) => {
       const profile = {
         schemaVersion: 1,
         rigName: name,
@@ -329,10 +329,12 @@ async function seedAppliedRig(
       const key = `${encodeURIComponent(fp)}::${encodeURIComponent(name)}`;
       localStorage.setItem(
         'speaking-glass.settings-overlay.v1',
-        JSON.stringify({ optical: { profiles: { [key]: profile }, activeRig: { [fp]: name } } }),
+        JSON.stringify({
+          optical: { profiles: { [key]: profile }, activeRig: active ? { [fp]: name } : {} },
+        }),
       );
     },
-    [fingerprint, rigName, options.scale ?? false] as const,
+    [fingerprint, rigName, options.scale ?? false, options.active ?? true] as const,
   );
 }
 
@@ -595,14 +597,19 @@ async function lastOpticalWrite(
       .map((c) => (c.args as { patch?: Record<string, Record<string, unknown>> }).patch ?? {})
       .filter((p) => p['optical']?.['profiles'] !== undefined)
       .at(-1);
-    return patch!['optical'] as never;
+    return (patch?.['optical'] ?? { profiles: {}, activeRig: {} }) as never;
   });
+}
+
+/** A rig's key in the store, as `opticalRigKey` builds it. */
+function rigKey(name: string, fingerprint = 'dsp-e2e-prompter'): string {
+  return `${encodeURIComponent(fingerprint)}::${encodeURIComponent(name)}`;
 }
 
 /** The rig list's choice for a rig, or for Automatic. */
 function rigChoice(page: Page, name: string) {
   return page.locator('.rig-list .rig-choose', {
-    has: page.locator('.rig-name', { hasText: new RegExp(`^${name}$`) }),
+    has: page.locator('.rig-name').getByText(name, { exact: true }),
   });
 }
 
@@ -630,19 +637,13 @@ test('a new rig starts from the rig in force, under a name of its own, and is ch
   await expect(rigChoice(page, 'Desk hood')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByRole('button', { name: 'Re-calibrate Standing…' })).toBeVisible();
 
-  // A copy, ruler scale and distance included; the original is untouched.
-  const fp = encodeURIComponent('dsp-e2e-prompter');
+  // A copy of everything, ruler scale and distance included; the original is
+  // untouched.
   await expect.poll(async () => (await lastOpticalWrite(page)).activeRig['dsp-e2e-prompter']).toBe('Standing');
   const written = await lastOpticalWrite(page);
-  expect(written.profiles[`${fp}::Standing`]).toMatchObject({
-    rigName: 'Standing',
-    scale: { mmPerCssPx: 0.25, source: 'ruler' },
-    viewingDistanceMm: 1200,
-  });
-  expect(written.profiles[`${fp}::${encodeURIComponent('Desk hood')}`]).toMatchObject({
-    rigName: 'Desk hood',
-    scale: { mmPerCssPx: 0.25, source: 'ruler' },
-  });
+  const original = written.profiles[rigKey('Desk hood')]!;
+  expect(original).toMatchObject({ rigName: 'Desk hood', scale: { mmPerCssPx: 0.25, source: 'ruler' } });
+  expect(written.profiles[rigKey('Standing')]).toEqual({ ...original, rigName: 'Standing' });
 });
 
 test('Automatic stops using a rig without deleting it, and the rig can be chosen again (#234)', async ({
@@ -670,6 +671,67 @@ test('Automatic stops using a rig without deleting it, and the rig can be chosen
   await rigChoice(page, 'Desk hood').click();
   await expect(rigChoice(page, 'Desk hood')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Re-calibrate Desk hood…' })).toBeVisible();
+  // Chosen again exactly as it was stored.
+  await expect.poll(async () => (await lastOpticalWrite(page)).activeRig['dsp-e2e-prompter']).toBe('Desk hood');
+  expect((await lastOpticalWrite(page)).profiles[rigKey('Desk hood')]).toEqual(
+    written.profiles[rigKey('Desk hood')],
+  );
+});
+
+test('a diagonal typed under Automatic leaves a stored ruler rig of the same name alone (#234)', async ({
+  page,
+}) => {
+  // A wizard rig named for how discovery identified this panel, measured with
+  // a ruler, and not in force. The proposal Settings sizes carries the same
+  // discovered name, so it must be stored under another one.
+  await installTauriShim(page, { welcomed: true });
+  await seedAppliedRig(page, { scale: true, rigName: 'Other display', active: false });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Prompter display and rigs');
+
+  await page.getByLabel('Panel diagonal (inches)').fill('24');
+  await page.getByRole('button', { name: 'Use diagonal' }).click();
+  await expect(rigChoice(page, 'Other display 2')).toHaveAttribute('aria-pressed', 'true');
+
+  await expect.poll(async () => (await lastOpticalWrite(page)).activeRig['dsp-e2e-prompter']).toBe('Other display 2');
+  const written = await lastOpticalWrite(page);
+  expect(written.profiles[rigKey('Other display 2')]).toMatchObject({ scale: { source: 'diagonal' } });
+  expect(written.profiles[rigKey('Other display')]).toMatchObject({
+    scale: { mmPerCssPx: 0.25, source: 'ruler' },
+    viewingDistanceMm: 1200,
+  });
+});
+
+test('correcting the size of an applied ruler rig changes its scale and nothing else (#234)', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await seedAppliedRig(page, { scale: true });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Prompter display and rigs');
+
+  // 0.25 mm per CSS px across a 1920x1080 panel is about 21.7 inches.
+  await expect(page.getByText('Measured against the glass, about 21.7 inches across.')).toBeVisible();
+  await page.getByRole('button', { name: 'Correct size…' }).click();
+  // Nothing was typed for a ruler rig, so nothing is offered back.
+  await expect(page.getByLabel('Panel diagonal (inches)')).toHaveValue('');
+  await page.getByLabel('Panel diagonal (inches)').fill('24');
+  await page.getByRole('button', { name: 'Use diagonal' }).click();
+  await expect(page.getByText('24 inches, as typed.')).toBeVisible();
+
+  await expect
+    .poll(async () => (await lastOpticalWrite(page)).profiles[rigKey('Desk hood')]?.['scale'])
+    .toMatchObject({ source: 'diagonal' });
+  const written = await lastOpticalWrite(page);
+  // Corrected in place: the same key, still chosen, every other field kept.
+  expect(Object.keys(written.profiles).filter((k) => k.startsWith(rigKey('')))).toEqual([rigKey('Desk hood')]);
+  expect(written.activeRig['dsp-e2e-prompter']).toBe('Desk hood');
+  expect(written.profiles[rigKey('Desk hood')]).toMatchObject({
+    rigName: 'Desk hood',
+    viewingDistanceMm: 1200,
+    bias: 0.4,
+    lens: { x: 0.5, y: 0.38 },
+  });
 });
 
 test('a panel nobody can size takes a typed diagonal and is then sized by distance (#234)', async ({

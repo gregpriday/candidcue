@@ -117,6 +117,19 @@ describe('a typed panel diagonal', () => {
     expect(stage.optics?.calibrated).toBe(true);
     expect(stage.optics?.viewingDistanceMm).toBe(sized!.viewingDistanceMm);
     expect(stage.optics?.mmPerCssPx).toBeCloseTo(inchesToMm(24) / Math.hypot(1920, 1080), 9);
+    // The type on the glass is the angular answer for that rig, not the fallback.
+    const resolved = resolveStageGeometry({ profile: sized!, viewport: viewportOf(unknown) });
+    expect(stage.optics?.bodyFontSizePx).toBe(resolved.optics.bodyFontSizePx);
+    expect(stage.fontSizePx).toBe(Math.round(resolved.optics.bodyFontSizePx));
+    expect(stage.fontSizePx).not.toBe(prompterSettings().teleprompter.fontSizePx);
+    // And it is sized BY DISTANCE: stand further back, read larger type.
+    const further = withOpticalProfile(optical, unknown.fingerprint, {
+      ...sized!,
+      viewingDistanceMm: sized!.viewingDistanceMm! * 1.5,
+    });
+    expect(stageSettingsFromSettings(prompterSettings(further), unknown).optics!.bodyFontSizePx).toBeGreaterThan(
+      stage.optics!.bodyFontSizePx,
+    );
   });
 
   it('records where the size came from', () => {
@@ -238,8 +251,10 @@ describe('a rig the wizard saved', () => {
    * measure again.
    */
   it('resolves to the same take geometry after every new rig management write', () => {
+    // No pinned font size, so the ruler scale is what decides the body size.
+    const wizardRig: OpticalProfile = { ...rulerRig, overrides: {} };
     const viewport = viewportOf(elgato);
-    const before = withOpticalProfile(defaultAppSettings().optical, elgato.fingerprint, rulerRig);
+    const before = withOpticalProfile(defaultAppSettings().optical, elgato.fingerprint, wizardRig);
     const geometryBefore = resolveStageGeometry({
       profile: prompterOpticalProfile(before, elgato)!,
       viewport,
@@ -248,9 +263,14 @@ describe('a rig the wizard saved', () => {
 
     // A sibling rig, corrected by diagonal; the panel switched to automatic;
     // then the wizard's rig chosen again.
-    let optical = withOpticalProfile(before, elgato.fingerprint, { ...rulerRig, rigName: 'Standing' });
+    let optical = withOpticalProfile(before, elgato.fingerprint, { ...wizardRig, rigName: 'Standing' });
     const standing = activeOpticalProfile(optical, elgato.fingerprint)!;
     optical = withOpticalProfile(optical, elgato.fingerprint, withPanelDiagonal(standing, viewport, 10)!);
+    // The correction landed on the sibling, and only there.
+    expect(activeOpticalProfile(optical, elgato.fingerprint)!.scale?.source).toBe('diagonal');
+    expect(resolveStageGeometry({ profile: prompterOpticalProfile(optical, elgato)!, viewport })).not.toEqual(
+      geometryBefore,
+    );
     optical = withoutActiveOpticalRig(optical, elgato.fingerprint);
     const stored = opticalRigsForDisplay(optical, elgato.fingerprint).find(
       (e) => e.profile.rigName === 'Desk hood',
@@ -258,7 +278,7 @@ describe('a rig the wizard saved', () => {
     optical = withOpticalProfile(optical, elgato.fingerprint, stored.profile);
 
     const after = activeOpticalProfile(optical, elgato.fingerprint)!;
-    expect(after).toEqual(rulerRig);
+    expect(after).toEqual(wizardRig);
     expect(after.scale).toEqual({ mmPerCssPx: 0.1937, source: 'ruler' });
     expect(resolveStageGeometry({ profile: prompterOpticalProfile(optical, elgato)!, viewport })).toEqual(
       geometryBefore,

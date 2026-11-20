@@ -1713,11 +1713,14 @@
   }
 
   function unusedRigName(preferred: string): string {
-    const taken = new Set(rigs.map((r) => r.profile.rigName));
-    if (!taken.has(preferred)) return preferred;
+    // Case-folded, as `rigNameProblem` judges a new name: a suggestion it
+    // would refuse is no suggestion.
+    const taken = new Set(rigs.map((r) => r.profile.rigName.toLocaleLowerCase()));
+    const free = (name: string) => !taken.has(name.toLocaleLowerCase());
+    if (free(preferred)) return preferred;
     for (let n = 2; n < 100; n += 1) {
       const candidate = `${preferred} ${n}`;
-      if (!taken.has(candidate)) return candidate;
+      if (free(candidate)) return candidate;
     }
     return `${preferred} ${Date.now().toString(36)}`;
   }

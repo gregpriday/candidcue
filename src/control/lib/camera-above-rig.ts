@@ -153,11 +153,20 @@ export function withCameraAboveRig(
   }
   const storedAt = (name: string): OpticalProfile | null =>
     normalizeOpticalProfile(optical.profiles[opticalRigKey(fingerprint, name)]);
+  /*
+   * A diagonal typed in Settings describes the panel itself, not the glass in
+   * front of it, so it is as true of a camera above the screen as of a hood —
+   * and on a panel discovery cannot size it is the only size there is. A
+   * ruler reading is not carried: it measured the optical path through glass
+   * this arrangement does not have.
+   */
+  const typedScale = activeOpticalProfile(optical, fingerprint)?.scale;
   let name = CAMERA_ABOVE_RIG_NAME;
   for (let suffix = 2; ; suffix += 1) {
     const stored = storedAt(name);
     if (stored === null) {
       const fresh = cameraAboveProfile(display, seed, name);
+      if (typedScale?.source === 'diagonal') fresh.scale = { ...typedScale };
       return withPanelMirror(withOpticalProfile(optical, fingerprint, fresh), fingerprint, unmirrored);
     }
     if (stored.lensPlacement === 'above') {
