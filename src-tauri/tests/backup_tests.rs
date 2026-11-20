@@ -3853,6 +3853,36 @@ async fn an_unjournalled_obstruction_is_refused_on_every_attempt() {
             b"not a database",
         );
     }
+
+    /*
+     * And past the attempt cap. "Every later attempt refuses" used to hold for
+     * three launches: the fourth retired the marker. Nothing can say whether
+     * that occupant is an interrupted copy or the original beside the export's
+     * output, so the marker stays and every launch names the folder.
+     */
+    let marker = h.dir.path().join("restore-pending.json");
+    for launch in 4..=5 {
+        let err = backup::apply_pending_restore(&h.paths)
+            .await
+            .expect_err("past the cap, an unexplained occupant still refuses");
+        assert_eq!(err.code(), "RESTORE_FAILED", "launch {launch}: {err}");
+        assert!(
+            err.user_message().contains(&quarantine.display().to_string()),
+            "launch {launch} must name the folder: {}",
+            err.user_message()
+        );
+        assert!(marker.exists(), "launch {launch} retired the marker");
+        assert!(live_db.is_file(), "launch {launch} removed the live database");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                fs::metadata(&live_db).expect("live database").ino(),
+                before,
+                "launch {launch} replaced the live database"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -4329,4 +4359,301 @@ async fn creating_a_script_commits_every_directory_it_makes() {
             "creating a script must go through `{expected}`"
         );
     }
+}
+
+/* ------------------------------------- a restore that cannot finish (#233) */
+
+/// A library whose first restore attempt died part way through the swap.
+///
+/// Built by hand, the way `a_restore_interrupted_mid_copy_finishes_on_the_next_launch`
+/// builds it: the originals are in quarantine and journalled, and the live
+/// scripts tree holds a partial copy of the export. The originals carry one
+/// script the export does not ("Only mine", written after the export), so a
+/// test can tell the user's data from the export's.
+struct InterruptedSwap {
+    h: Harness,
+    _dest: tempfile::TempDir,
+    export_root: std::path::PathBuf,
+    exported_id: String,
+    quarantine: std::path::PathBuf,
+}
+
+async fn interrupted_swap() -> InterruptedSwap {
+    let h = harness().await;
+    let exported = repo::create_script(&h.pool, &h.paths, create_input("In the export", "# In the export\n\nFrom the export."))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = std::path::PathBuf::from(&export.path);
+    backup::restore_all_data(&h.paths, &export_root)
+        .await
+        .expect("schedule");
+    repo::create_script(&h.pool, &h.paths, create_input("Only mine", "# Only mine\n\nWritten after the export."))
+        .await
+        .expect("create");
+    close_fully(&h.pool, h.dir.path()).await;
+
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(&quarantine).expect("quarantine");
+    let mut journalled = vec!["scripts".to_string()];
+    speaking_glass_lib::util::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("speaking-glass.sqlite3{suffix}");
+        let from = h.dir.path().join(&name);
+        if from.exists() {
+            speaking_glass_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate database");
+            journalled.push(name);
+        }
+    }
+    journal_evacuated(
+        h.dir.path(),
+        &journalled.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let partial = h.paths.scripts_dir().join("half-written");
+    fs::create_dir_all(&partial).expect("partial");
+    fs::write(partial.join("script.md"), "# Truncated").expect("partial body");
+
+    InterruptedSwap {
+        h,
+        _dest: dest,
+        export_root,
+        exported_id: exported.id,
+        quarantine,
+    }
+}
+
+fn set_attempts(dir: &Path, attempts: u32) {
+    let marker = dir.join("restore-pending.json");
+    let mut pending: serde_json::Value =
+        serde_json::from_slice(&fs::read(&marker).expect("marker")).expect("parses");
+    pending["attempts"] = serde_json::json!(attempts);
+    fs::write(&marker, serde_json::to_vec_pretty(&pending).expect("json")).expect("write");
+}
+
+fn marker_json(dir: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(dir.join("restore-pending.json")).expect("marker")).expect("parses")
+}
+
+/// The titles in the live database, read without going through `database::init`
+/// (which would apply the pending restore again).
+async fn live_titles(dir: &Path) -> Vec<String> {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    let options = SqliteConnectOptions::new()
+        .filename(dir.join("speaking-glass.sqlite3"))
+        .create_if_missing(false);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .expect("the live database opens");
+    let titles = sqlx::query_scalar("SELECT title FROM scripts ORDER BY title")
+        .fetch_all(&pool)
+        .await
+        .expect("titles");
+    pool.close().await;
+    titles
+}
+
+/// The user's own data is live again, whole, and nothing of it is left in
+/// quarantine or named by the journal.
+async fn assert_originals_back(s: &InterruptedSwap) {
+    let dir = s.h.dir.path();
+    let live: Vec<String> = fs::read_dir(s.h.paths.scripts_dir())
+        .expect("the scripts tree must be live again")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(
+        live.iter().any(|body| body.contains("Written after the export.")),
+        "the original scripts must be back, found {live:?}"
+    );
+    assert!(
+        !live.iter().any(|body| body.contains("Truncated")),
+        "and the dead attempt's partial output must not be mixed in"
+    );
+    assert!(
+        live_titles(dir).await.contains(&"Only mine".to_string()),
+        "the original database must be the live one"
+    );
+    for name in ["scripts", "speaking-glass.sqlite3", "speaking-glass.sqlite3-wal", "speaking-glass.sqlite3-shm"] {
+        assert!(
+            !s.quarantine.join(name).exists(),
+            "{name} was left in quarantine after the rollback"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_resume_whose_export_was_removed_puts_the_originals_back() {
+    /*
+     * The export is re-validated on every attempt, and it used to happen
+     * BEFORE the journal was read: after a crash mid-swap, an export that had
+     * since gone (an unplugged drive) made every attempt return early, and the
+     * rollback — which needs only the quarantine folder — never ran. After the
+     * attempt cap the marker was retired and the app opened on the mixture.
+     */
+    let s = interrupted_swap().await;
+    fs::remove_dir_all(&s.export_root).expect("remove the export");
+
+    let err = backup::apply_pending_restore(&s.h.paths)
+        .await
+        .expect_err("a restore whose export is gone cannot finish");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert!(
+        err.user_message().contains("put your previous data back"),
+        "the message must say the data was put back: {}",
+        err.user_message()
+    );
+    assert_originals_back(&s).await;
+
+    let journal = marker_json(s.h.dir.path());
+    assert_eq!(journal["evacuated"], serde_json::json!([]), "nothing is displaced any more");
+}
+
+#[tokio::test]
+async fn a_resume_whose_export_was_damaged_puts_the_originals_back() {
+    let s = interrupted_swap().await;
+    remove_from_export(&s.export_root, &format!("scripts/{}/script.md", s.exported_id));
+
+    let err = backup::apply_pending_restore(&s.h.paths)
+        .await
+        .expect_err("a restore whose export fails its checks cannot finish");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert_originals_back(&s).await;
+}
+
+#[tokio::test]
+async fn past_the_retry_cap_a_displaced_restore_is_rolled_back_before_its_marker_goes() {
+    /*
+     * The cap used to delete the marker whatever was still in quarantine. It
+     * now puts the journalled components back first, and only then retires it:
+     * the next launch opens on the user's own data, not on a fresh empty
+     * database beside half of the export.
+     */
+    let s = interrupted_swap().await;
+    set_attempts(s.h.dir.path(), 3);
+
+    let err = backup::apply_pending_restore(&s.h.paths)
+        .await
+        .expect_err("an exhausted restore reports failure");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert_originals_back(&s).await;
+    assert!(
+        !s.h.dir.path().join("restore-pending.json").exists(),
+        "with everything put back, the marker is retired"
+    );
+}
+
+#[tokio::test]
+async fn a_restore_that_can_neither_finish_nor_roll_back_never_opens_the_mixed_library() {
+    /*
+     * The documented window between a move and its journal write: the
+     * database is in quarantine and nothing names it. No attempt can resume
+     * or roll back from that — and the attempt cap used to retire the marker
+     * anyway, so the fourth launch opened a fresh empty database beside the
+     * user's scripts. The marker now stays, and every launch stays in
+     * recovery naming the folder.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Precious", "# Precious\n\nKeep me."))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    close_fully(&h.pool, h.dir.path()).await;
+
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(&quarantine).expect("quarantine");
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("speaking-glass.sqlite3{suffix}");
+        let from = h.dir.path().join(&name);
+        if from.exists() {
+            speaking_glass_lib::util::rename(&from, quarantine.join(&name)).expect("move, unjournalled");
+        }
+    }
+    set_attempts(h.dir.path(), 3);
+
+    let marker = h.dir.path().join("restore-pending.json");
+    let live_db = h.dir.path().join("speaking-glass.sqlite3");
+    for launch in 1..=2 {
+        let err = speaking_glass_lib::database::init(h.dir.path())
+            .await
+            .expect_err("a launch must not open on a displaced library");
+        assert_eq!(err.code(), "RESTORE_FAILED", "launch {launch}: {err}");
+        assert!(
+            err.user_message().contains(&quarantine.display().to_string()),
+            "launch {launch} must name the folder holding the data: {}",
+            err.user_message()
+        );
+        assert!(marker.exists(), "launch {launch} retired the marker of a displaced restore");
+        assert!(!live_db.exists(), "launch {launch} created a database in place of the user's");
+        assert!(
+            quarantine.join("speaking-glass.sqlite3").is_file(),
+            "launch {launch} moved the quarantined database"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_journalled_original_missing_from_quarantine_is_never_replaced_by_live_output() {
+    /*
+     * The journal says the database's original went to quarantine, and it is
+     * not there; what is live is a partial copy of the export. A resume used
+     * to fall through to an ordinary move — setting the partial copy aside AS
+     * the original, so a later rollback would put it back as the user's data.
+     * It now refuses, puts back what it can, and keeps the marker.
+     */
+    let s = interrupted_swap().await;
+    let dir = s.h.dir.path();
+    fs::remove_file(s.quarantine.join("speaking-glass.sqlite3")).expect("lose the original");
+    let live_db = dir.join("speaking-glass.sqlite3");
+    fs::write(&live_db, b"partial export").expect("partial live database");
+
+    let err = backup::apply_pending_restore(&s.h.paths)
+        .await
+        .expect_err("a resume missing its original must not go on");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert!(
+        err.user_message().contains(&s.quarantine.display().to_string()),
+        "the message must name the folder: {}",
+        err.user_message()
+    );
+    assert!(
+        !s.quarantine.join("speaking-glass.sqlite3").exists(),
+        "the live partial copy was set aside as if it were the original"
+    );
+    assert_eq!(fs::read(&live_db).expect("live"), b"partial export");
+    assert!(dir.join("restore-pending.json").exists(), "the marker must stay");
+    assert!(
+        marker_json(dir)["evacuated"]
+            .as_array()
+            .expect("journal")
+            .contains(&serde_json::json!("speaking-glass.sqlite3")),
+        "and keep naming the missing original"
+    );
+
+    // What could be put back was: the scripts are the user's again.
+    let live: Vec<String> = fs::read_dir(s.h.paths.scripts_dir())
+        .expect("scripts")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(live.iter().any(|body| body.contains("Written after the export.")), "{live:?}");
+
+    // And past the cap it still does not let go.
+    set_attempts(dir, 3);
+    let err = speaking_glass_lib::database::init(dir)
+        .await
+        .expect_err("a launch must not open on it");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert!(dir.join("restore-pending.json").exists(), "the cap retired the marker");
+    assert_eq!(fs::read(&live_db).expect("live"), b"partial export");
 }

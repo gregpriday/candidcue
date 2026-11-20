@@ -541,6 +541,14 @@
         {:else if advice === 'rebuild'}
           {@render rebuildOption(true)}
           {@render restoreOption()}
+        {:else if advice === 'manual'}
+          <!--
+            A restore from an export that did not finish. The cause above is
+            Rust's own account of it: put back, or not put back and where it
+            is. Nothing is recommended, and neither repair is offered: both
+            would build on a library that may be half the export's.
+          -->
+          {@render afterRestore()}
         {:else}
           {@render restoreOption()}
           {@render rebuildOption(false)}
@@ -633,6 +641,21 @@
         {os.quit} and reopen Speaking Glass — a problem like this can be a one-off. If this screen comes
         back, export a support bundle below and report the problem.
       {/if}
+    </p>
+    {@render quitAction()}
+  </div>
+{/snippet}
+
+{#snippet afterRestore()}
+  <div class="option">
+    <div class="option-head">
+      <h3 class="option-title">Reopen to carry on</h3>
+    </div>
+    <p class="option-text">
+      Each time Speaking Glass opens, it carries on from where this restore stopped, finishing it or
+      putting your previous data back, and it doesn’t open your library while any of that data is
+      still set aside. If this screen keeps coming back, export a support bundle below and report the
+      problem.
     </p>
     {@render quitAction()}
   </div>
