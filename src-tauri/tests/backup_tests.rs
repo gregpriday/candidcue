@@ -4860,3 +4860,33 @@ async fn a_live_database_that_is_a_dangling_link_is_set_aside_as_the_original() 
     assert_eq!(fs::read_link(previous.join("speaking-glass.sqlite3")).expect("link"), offline);
     assert!(live_db.is_file(), "the restored database is live");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_journalled_original_that_is_a_dangling_link_is_put_back_on_a_later_launch() {
+    /*
+     * The other half of the test above: a resume finds that link in
+     * quarantine, journalled. Judging it by what it points at refused the
+     * user's own original whenever its target was offline, so the rollback
+     * stalled. A link is accepted as the component it stands for.
+     */
+    let s = interrupted_swap().await;
+    let dir = s.h.dir.path();
+    let quarantined = s.quarantine.join("speaking-glass.sqlite3");
+    fs::remove_file(&quarantined).expect("replace the original");
+    let offline = dir.join("offline-volume").join("speaking-glass.sqlite3");
+    std::os::unix::fs::symlink(&offline, &quarantined).expect("link");
+    fs::remove_dir_all(&s.export_root).expect("remove the export");
+
+    let err = backup::apply_pending_restore(&s.h.paths)
+        .await
+        .expect_err("the export is gone");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    let live = dir.join("speaking-glass.sqlite3");
+    assert!(
+        fs::symlink_metadata(&live).expect("the link is back live").file_type().is_symlink(),
+        "the user's link must be put back"
+    );
+    assert_eq!(fs::read_link(&live).expect("link"), offline);
+    assert!(!quarantined.exists() && fs::symlink_metadata(&quarantined).is_err());
+}

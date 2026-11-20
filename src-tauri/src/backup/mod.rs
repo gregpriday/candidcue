@@ -1416,10 +1416,7 @@ fn add_journalled(paths: &DataPaths, pending: &PendingRestore, entries: &mut Vec
         if pending.absent.contains(&name) {
             entries.push(Evacuated::Absent { live });
         } else if pending.evacuated.contains(&name) {
-            let right_kind = match kind {
-                ComponentKind::Tree => quarantined.is_dir(),
-                ComponentKind::File => quarantined.is_file(),
-            };
+            let right_kind = is_kind(&quarantined, kind);
             if right_kind {
                 entries.push(Evacuated::Moved { quarantined, live });
             } else {
@@ -1849,14 +1846,11 @@ fn evacuate_component(
      * Occupied by ANY entry, a dangling link included. `exists()` follows
      * links, so a link whose target is gone read as empty, and the move
      * below would rename the live path over it and journal that as the
-     * original. The kind check that follows does follow links, so a dangling
-     * one is the wrong kind and refused.
+     * original. A link there is then judged by `is_kind` like anything else:
+     * journalled, it is the user's original link; not journalled, refused.
      */
     if occupied {
-        let right_kind = match kind {
-            ComponentKind::Tree => to.is_dir(),
-            ComponentKind::File => to.is_file(),
-        };
+        let right_kind = is_kind(&to, kind);
         if !(journalled && right_kind) {
             /*
              * The caller rolls back whatever this or an earlier attempt moved,
@@ -1926,6 +1920,23 @@ fn evacuate_component(
         write_marker(marker, pending)?;
     }
     Ok(())
+}
+
+/// Is the entry at a quarantine path what the component should be?
+///
+/// A link counts, whatever it points at: a live component that was itself a
+/// link moved into quarantine as one (see `present`), and following it here
+/// would refuse the user's own original whenever its target is offline — or
+/// always, for a relative link that no longer resolves from its new place.
+fn is_kind(path: &Path, kind: ComponentKind) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => true,
+        Ok(meta) => match kind {
+            ComponentKind::Tree => meta.is_dir(),
+            ComponentKind::File => meta.is_file(),
+        },
+        Err(_) => false,
+    }
 }
 
 /// Is there an entry at `path` — a dangling link included?
