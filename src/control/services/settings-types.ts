@@ -21,7 +21,13 @@ import {
   RIG_PRESETS,
   opticalProfileFieldsForPreset,
 } from '../../shared/optical-rig-presets';
-import { READER_READING_MEASURE } from '../../shared/optics';
+import { AUTOMATIC_RIG_NAME, defaultDistanceMm } from '../../shared/optical-discovery';
+import {
+  READER_READING_MEASURE,
+  inchesToMm,
+  isPlausibleViewingDistanceMm,
+  mmPerCssPixel,
+} from '../../shared/optics';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 
 export type { FollowFeel, FollowingSettings } from '../lib/follow-profiles';
@@ -986,6 +992,94 @@ export function withoutOpticalProfile(
   // The panel keeps its mirroring: the glass is still in front of it whether or
   // not a rig is calibrated for it.
   return { ...optical, profiles, activeRig };
+}
+
+/**
+ * Stop using a rig on this panel without deleting any.
+ *
+ * Only the panel's choice goes: every stored rig stays listed and can be
+ * chosen again, and the next take on the panel is sized automatically (or, on
+ * a panel discovery cannot size, at the flat fallback) — exactly what
+ * `prompterOpticalProfile` does for a panel nobody has chosen a rig for.
+ */
+export function withoutActiveOpticalRig(
+  optical: OpticalSettings,
+  displayFingerprint: string,
+): OpticalSettings {
+  const activeRig = { ...optical.activeRig };
+  delete activeRig[displayFingerprint];
+  return { ...optical, activeRig };
+}
+
+/** Why a typed rig name was refused, or null when it can be used. */
+export type RigNameProblem = 'empty' | 'reserved' | 'duplicate';
+
+/**
+ * Whether a new rig on this panel may take this name.
+ *
+ * Duplicates are judged case-insensitively, because the store keys on the
+ * exact name: "desk hood" beside "Desk hood" is two rigs nobody can tell
+ * apart in a list. `Automatic` is what the panel runs on with no rig chosen,
+ * and `Reading window` is the reading rig's key, so neither can be a prompter
+ * rig's name.
+ */
+export function rigNameProblem(
+  optical: OpticalSettings,
+  displayFingerprint: string,
+  name: string,
+): RigNameProblem | null {
+  const trimmed = name.trim();
+  if (trimmed === '') return 'empty';
+  const folded = trimmed.toLocaleLowerCase();
+  if (
+    folded === AUTOMATIC_RIG_NAME.toLocaleLowerCase() ||
+    folded === READER_RIG_NAME.toLocaleLowerCase()
+  ) {
+    return 'reserved';
+  }
+  const taken = opticalRigsForDisplay(optical, displayFingerprint).some(
+    (entry) => entry.profile.rigName.toLocaleLowerCase() === folded,
+  );
+  return taken ? 'duplicate' : null;
+}
+
+/**
+ * A profile sized from the panel diagonal somebody typed, or null when the
+ * diagonal or the panel cannot produce a usable scale.
+ *
+ * `viewport` is the whole panel in CSS pixels — a display's `logicalSize`,
+ * which is the space the stage lays out in, exactly as `scaleForDisplay` and
+ * the wizard's own diagonal step measure it. Everything else on the profile is
+ * kept: a typed size corrects the scale and nothing a person chose.
+ *
+ * A scale alone does not size a take — the angular model needs a distance as
+ * well — so a profile with no usable distance is given the starting distance
+ * discovery would have assumed for a panel of this size. An unrecognised panel
+ * has none until its diagonal is known, which is why this is the moment to
+ * supply one.
+ */
+export function withPanelDiagonal(
+  profile: OpticalProfile,
+  viewport: { widthPx: number; heightPx: number },
+  inches: number,
+): OpticalProfile | null {
+  if (!Number.isFinite(inches) || !(inches > 0)) return null;
+  const diagonalMm = inchesToMm(inches);
+  const mmPerCssPx = mmPerCssPixel({
+    diagonalMm,
+    widthPx: viewport.widthPx,
+    heightPx: viewport.heightPx,
+  });
+  if (mmPerCssPx === null) return null;
+  const viewingDistanceMm = isPlausibleViewingDistanceMm(profile.viewingDistanceMm)
+    ? profile.viewingDistanceMm
+    : defaultDistanceMm(profile.hardwareKind, diagonalMm);
+  if (viewingDistanceMm === null) return null;
+  return {
+    ...profile,
+    scale: { mmPerCssPx, source: 'diagonal', diagonalMm },
+    viewingDistanceMm,
+  };
 }
 
 const FRAMING_PRESETS: readonly FramingPreset[] = [
