@@ -13,7 +13,8 @@ description: >
 # `enforce` decides only what the verdict does here. 'true' fails the step, so
 # a refused tag stops in its gates job before anything is built. Anything else
 # (a dry run, a dispatch against a branch) prints the same verdict as an error
-# annotation and in the job summary, and carries on. There is no other input:
+# annotation and in the job summary, and carries on. Any other value fails the
+# step, so a mistyped caller is never quietly report-only. There is no other input:
 # docs/advisory-exceptions.json is the only override.
 
 inputs:
@@ -44,9 +45,9 @@ runs:
       env:
         CARGO_AUDIT_VERSION: '0.23.0'
       run: |
-        set +e
         root="$RUNNER_TEMP/cargo-audit"
-        if cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --root "$root"; then
+        if cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --root "$root" &&
+          test -x "$root/bin/cargo-audit"; then
           echo "$root/bin" >> "$GITHUB_PATH"
           echo "installed=true" >> "$GITHUB_OUTPUT"
         else
@@ -55,7 +56,9 @@ runs:
         fi
 
     # The report and its exit status are captured before anything prints
-    # them, so neither `tee` nor the runner's errexit can lose the verdict.
+    # them, so neither a pipe nor errexit can lose the verdict, and errexit
+    # stays on for everything else: a summary or a copy that cannot be
+    # written fails the step rather than passing it.
     - name: Scan, and say whether a tag would be refused
       shell: bash
       env:
@@ -63,18 +66,21 @@ runs:
         SAVE: ${{ inputs.save }}
         INSTALLED: ${{ steps.install.outputs.installed }}
       run: |
-        set +e
+        case "$ENFORCE" in
+          true | false) ;;
+          *) echo "::error::enforce must be 'true' or 'false', not '$ENFORCE'"; exit 1 ;;
+        esac
         report="$RUNNER_TEMP/advisories.txt"
         set --
         if [ -n "$SAVE" ]; then
           mkdir -p "$SAVE"
           set -- --save "$SAVE"
         fi
-        node scripts/report-advisories.mjs "$@" > "$report" 2>&1
-        status=$?
+        status=0
+        node scripts/report-advisories.mjs "$@" > "$report" 2>&1 || status=$?
         if [ "$INSTALLED" != 'true' ]; then
           printf '\nSCAN FAILED: cargo-audit could not be installed, so the Cargo lockfiles were not scanned.\n' >> "$report"
-          [ "$status" -eq 0 ] && status=1
+          if [ "$status" -eq 0 ]; then status=1; fi
         fi
         cat "$report"
         if [ -n "$SAVE" ]; then cp "$report" "$SAVE/advisories.txt"; fi
@@ -102,4 +108,3 @@ runs:
         fi
         echo "::error::$verdict"
         if [ "$ENFORCE" = 'true' ]; then exit 1; fi
-        exit 0

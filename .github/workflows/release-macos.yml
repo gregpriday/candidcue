@@ -168,7 +168,8 @@ jobs:
           --only='repository completeness,version sync,native licence review'
 
       # Refuses a tag on an unreviewed vulnerability advisory: a cargo-audit
-      # vulnerability or unsound warning, or any production pnpm advisory, that
+      # vulnerability or warning other than unmaintained or yanked (unsound,
+      # notice), or any production pnpm advisory, that
       # docs/advisory-exceptions.json does not cover or whose review is overdue,
       # or a scan that failed. Before anything is built, and enforced exactly
       # where publish would run (its predicate, below): a dry run or a dispatch
@@ -377,6 +378,12 @@ jobs:
       # re-run of only this job is a new attempt, and the upload it needs
       # belongs to the attempt that ran the gates. Such a re-run reuses that
       # verdict; a full re-run scans again.
+      # An empty ID would make the downloader take every artifact in the run.
+      - name: The gates job must have handed over its advisory report
+        env:
+          ADVISORIES: ${{ needs.gates.outputs.advisories }}
+        run: '[[ "$ADVISORIES" =~ ^[0-9]+$ ]]'
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           artifact-ids: ${{ needs.gates.outputs.advisories }}

@@ -85,7 +85,8 @@ jobs:
           --only='repository completeness,version sync,native licence review'
 
       # Refuses a tag on an unreviewed vulnerability advisory: a cargo-audit
-      # vulnerability or unsound warning, or any production pnpm advisory, that
+      # vulnerability or warning other than unmaintained or yanked (unsound,
+      # notice), or any production pnpm advisory, that
       # docs/advisory-exceptions.json does not cover or whose review is overdue,
       # or a scan that failed. Before anything is built, and enforced exactly
       # where publish would run (its predicate, below): a dry run or a dispatch

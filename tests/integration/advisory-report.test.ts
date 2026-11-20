@@ -260,6 +260,12 @@ describe('the advisory report', () => {
         { app: { ...cargoReport(), vulnerabilities: { found: true, count: 1, list: [] } } },
       ],
       ['warnings that are not a list', { app: { ...cargoReport(), warnings: { unsound: null } } }],
+      ['no warnings map at all', { app: { ...cargoReport(), warnings: undefined } }],
+      [
+        'vulnerabilities found, and none listed',
+        { app: { ...cargoReport(), vulnerabilities: { found: true, count: 0, list: [] } } },
+      ],
+      ['no vulnerability count', { app: { ...cargoReport(), vulnerabilities: { found: false, list: [] } } }],
       [
         'an advisory without the versions it matched',
         {
@@ -306,6 +312,8 @@ describe('the advisory report', () => {
           ...process.env,
           GITHUB_ACTIONS: '',
           SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+          CARGO_HOME: scratch(),
+        CARGO_HOME: scratch(),
           PATH: `${bin}${delimiter}${process.env.PATH}`,
         },
       },
@@ -482,6 +490,26 @@ describe('what refuses a release tag', () => {
     expect(refused(result.output)).toBe('');
   });
 
+  it('does not let a no-vulnerability exception cover a finding that refuses', () => {
+    /*
+     * The exception was written about a maintenance notice. If the same id
+     * comes back as a flaw, the reason no longer holds.
+     */
+    const unic = { package: 'unic-common', version: '0.9.0', id: 'RUSTSEC-2025-0080' };
+    const register = registerOf([exception({ findings: [unic], reach: 'no-vulnerability' })]);
+
+    const notice = report(saved({ app: cargoReport([], { notice: [['unic-common', '0.9.0', unic.id]] }) }), register);
+    expect(notice.status, notice.output).toBe(1);
+    expect(section(notice.output, 'NEW').join('\n')).toContain('accepted as no-vulnerability, but reported as notice');
+
+    const unmaintained = report(
+      saved({ app: cargoReport([], { unmaintained: [['unic-common', '0.9.0', unic.id]] }) }),
+      register,
+    );
+    expect(unmaintained.status, unmaintained.output).toBe(0);
+    expect(section(unmaintained.output, 'ACCEPTED').join('\n')).toContain('unic-common 0.9.0');
+  });
+
   it('refuses a failed scan', () => {
     const result = report(saved({ crates: null }), registerOf([]));
 
@@ -578,6 +606,7 @@ console.log(${JSON.stringify(JSON.stringify(cargoReport()))});
         ...process.env,
         GITHUB_ACTIONS: '',
         SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+        CARGO_HOME: scratch(),
         PNPM_CALLS: calls,
         PATH: `${bin}${delimiter}${process.env.PATH}`,
       },
@@ -612,6 +641,7 @@ process.kill(process.pid, 'SIGKILL');
         ...process.env,
         GITHUB_ACTIONS: '',
         SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+        CARGO_HOME: scratch(),
         PATH: `${bin}${delimiter}${process.env.PATH}`,
       },
     });
@@ -621,6 +651,93 @@ process.kill(process.pid, 'SIGKILL');
     const failed = section(output, 'SCAN FAILED').join('\n');
     expect(failed).toContain('src-tauri/Cargo.lock: cargo was killed by SIGKILL');
     expect(failed).toContain('crates/Cargo.lock');
+  });
+});
+
+/** Run the script against stand-in scanners on PATH, the way a release does. */
+function live(bin: string, args: string[] = [], env: Record<string, string> = {}) {
+  const result = spawnSync(process.execPath, [SCRIPT, '--register', registerOf([]), '--today', TODAY, ...args], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GITHUB_ACTIONS: '',
+      SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+      CARGO_HOME: scratch(),
+      PATH: `${bin}${delimiter}${process.env.PATH}`,
+      ...env,
+    },
+  });
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+/** Stand-ins that print a clean report, then exit with `exit`. */
+function cleanScanners(exit = 0): string {
+  const bin = scratch();
+  fakeTool(bin, 'cargo', `console.log(${JSON.stringify(JSON.stringify(cargoReport()))});\nprocess.exitCode = ${exit};\n`);
+  fakeTool(bin, 'pnpm', `console.log(${JSON.stringify(JSON.stringify(pnpmReport()))});\nprocess.exitCode = ${exit};\n`);
+  return bin;
+}
+
+describe('a live scan', () => {
+  it('reads a report from a scanner that exits 1 for its findings, and fails one that exits otherwise', () => {
+    expect(live(cleanScanners(1)).status).toBe(0);
+
+    const crashed = live(cleanScanners(3));
+    expect(crashed.status, crashed.output).toBe(1);
+    const failed = section(crashed.output, 'SCAN FAILED').join('\n');
+    expect(failed).toContain('src-tauri/Cargo.lock: cargo exited with status 3');
+    expect(failed).toContain('pnpm-lock.yaml (production): pnpm exited with status 3');
+  });
+
+  it('asks pnpm for every severity, and only the production tree unless --dev', () => {
+    const bin = scratch();
+    const calls = join(scratch(), 'pnpm-args');
+    fakeTool(bin, 'cargo', `console.log(${JSON.stringify(JSON.stringify(cargoReport()))});\n`);
+    fakeTool(
+      bin,
+      'pnpm',
+      `import fs from 'node:fs';
+fs.appendFileSync(process.env.PNPM_ARGS, process.argv.slice(2).join(' ') + '\\n');
+console.log(${JSON.stringify(JSON.stringify(pnpmReport()))});
+`,
+    );
+    expect(live(bin, [], { PNPM_ARGS: calls }).status).toBe(0);
+    expect(live(bin, ['--dev'], { PNPM_ARGS: calls }).status).toBe(0);
+    expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual([
+      'audit --json --prod --audit-level low',
+      'audit --json --audit-level low',
+    ]);
+  });
+
+  it('fails the Cargo scans when a cargo-audit configuration could hide findings', () => {
+    const cargoHome = scratch();
+    writeFileSync(join(cargoHome, 'audit.toml'), '[advisories]\nignore = ["RUSTSEC-2026-0548"]\n');
+    const result = live(cleanScanners(), [], { CARGO_HOME: cargoHome });
+
+    expect(result.status, result.output).toBe(1);
+    const failed = section(result.output, 'SCAN FAILED').join('\n');
+    expect(failed).toContain('audit.toml configures cargo audit');
+    expect(failed).not.toContain('pnpm-lock.yaml');
+  });
+
+  it('clears what an earlier run saved, so a silent scanner is not replayed as clean', () => {
+    const out = scratch();
+    writeFileSync(join(out, 'advisories-cargo-app.json'), JSON.stringify(cargoReport()));
+    const bin = cleanScanners();
+    fakeTool(bin, 'cargo', 'process.exit(1);\n');
+
+    expect(live(bin, ['--save', out]).status).toBe(1);
+    expect(readdirSync(out)).toEqual(['advisories-pnpm-prod.json']);
+    expect(section(report(out, registerOf([])).output, 'SCAN FAILED').join('\n')).toContain('src-tauri/Cargo.lock');
+  });
+
+  it('refuses an argument it does not know, inherited names included', () => {
+    for (const arg of ['constructor', '__proto__', '--nope']) {
+      const result = report(saved({}), registerOf([]), [arg, 'x']);
+      expect(result.status, arg).toBe(2);
+      expect(result.output, arg).toContain('Unknown argument');
+    }
   });
 });
 
@@ -644,11 +761,27 @@ describe('the accepted-risk reach', () => {
     expect(accepted).toContain('Follow-up: https://github.com/gregpriday/candidcue/issues/487');
   });
 
+  it('still loads once its review date has passed, and then refuses as overdue', () => {
+    const result = report(
+      saved({ app: cargoReport([['zip', '4.6.1', 'RUSTSEC-2026-0548']]) }),
+      registerOf([zip({ reviewBy: '2026-10-16' })]),
+    );
+
+    expect(result.status, result.output).toBe(1);
+    expect(section(result.output, 'REFUSES A TAG').join('\n')).toContain('review overdue: src-tauri/Cargo.lock  zip 4.6.1');
+  });
+
   it('refuses an entry with no follow-up issue, or one reviewed more than 30 days out', () => {
     const { followUp: _omitted, ...noFollowUp } = zip();
     for (const [label, broken, problem] of [
       ['no follow-up', noFollowUp as Exception, 'links no follow-up issue'],
       ['a follow-up that is not an issue', zip({ followUp: 'see the tracker' }), 'not a GitHub issue URL'],
+      [
+        'a follow-up in a list',
+        zip({ followUp: ['https://github.com/gregpriday/candidcue/issues/487'] as unknown as string }),
+        'not a GitHub issue URL',
+      ],
+      ['a follow-up with no repository', zip({ followUp: 'https://github.com/.././issues/1' }), 'not a GitHub issue URL'],
       ['31 days out', zip({ reviewBy: '2026-11-17' }), 'more than 30 days ahead'],
     ] as const) {
       const result = report(saved({}), registerOf([broken]));
@@ -750,6 +883,7 @@ describe('the release advisory gate', () => {
     const gates = jobOf(workflow, 'gates');
     const step = stepOf(gates, SCAN_ACTION);
 
+    expect(step).toMatch(/^ {8}uses: \.\/\.github\/actions\/advisory-scan$/m);
     expect(step).toContain(ENFORCED_ON_TAGS);
     // Nothing turns the verdict back into a report: not the step, not a
     // condition on it, not an input of the workflow.
@@ -759,7 +893,7 @@ describe('the release advisory gate', () => {
     expect(workflow).toMatch(/^ {6}dry_run:\n/m);
 
     // The publish job runs on exactly the condition the gate enforces on.
-    expect(jobOf(workflow, 'publish')).toMatch(/if: startsWith\(github\.ref, 'refs\/tags\/v'\) && inputs\.dry_run != true/);
+    expect(jobOf(workflow, 'publish')).toMatch(/^ {4}if: startsWith\(github\.ref, 'refs\/tags\/v'\) && inputs\.dry_run != true$/m);
 
     // No job anywhere else scans, so no other step can contradict the gate.
     expect(workflow.split(SCAN_ACTION)).toHaveLength(2);
@@ -780,7 +914,12 @@ describe('the release advisory gate', () => {
     // provenance is uploaded.
     const build = jobOf(workflow, 'build');
     expect(build).toMatch(/^\s*actions: read$/m);
+    expect(build).toContain(`run: '[[ "$ADVISORIES" =~ ^[0-9]+$ ]]'`);
+    expect(build.indexOf('ADVISORIES: ${{ needs.gates.outputs.advisories }}')).toBeLessThan(
+      build.indexOf('actions/download-artifact@'),
+    );
     const download = stepOf(build, 'actions/download-artifact@');
+    expect(download).not.toMatch(/^\s*if:/m);
     expect(download).toContain('artifact-ids: ${{ needs.gates.outputs.advisories }}');
     expect(download).toMatch(/^\s*path: provenance$/m);
     expect(download).toMatch(/^\s*merge-multiple: true$/m);
@@ -798,46 +937,55 @@ describe('the release advisory gate', () => {
     expect(workflow).not.toMatch(/^ {2}(push|pull_request):/m);
     // Its own concurrency group, apart from CI and the releases.
     expect(workflow).toContain('group: advisories-${{ github.ref }}');
-    const scan = stepOf(jobOf(workflow, 'scan'), SCAN_ACTION);
+    const job = jobOf(workflow, 'scan');
+    expect(job).not.toMatch(/^ {4}if:/m);
+    const scan = stepOf(job, SCAN_ACTION);
+    expect(scan).toMatch(/^ {8}uses: \.\/\.github\/actions\/advisory-scan$/m);
     expect(scan).toMatch(/^\s*enforce: 'true'$/m);
-    expect(scan).not.toMatch(/continue-on-error/);
+    expect(scan).not.toMatch(/continue-on-error|^\s*if:/m);
+    // Daily, not some rarer schedule that would still match a looser check.
+    expect(workflow).toMatch(/- cron: '\d+ \d+ \* \* \*'/);
   });
 });
 
 describe('the advisory scan action', () => {
-  const action = uncommented('.github/actions/advisory-scan/action.yml');
+  const ACTION = '.github/actions/advisory-scan/action.yml';
+  const action = uncommented(ACTION);
+  const VERDICT_STEP = '- name: Scan, and say whether a tag would be refused';
 
   it('installs cargo-audit at a pinned version, and treats a failed install as a failed scan', () => {
-    expect(action).toMatch(/CARGO_AUDIT_VERSION: '\d+\.\d+\.\d+'/);
-    expect(action).toContain('cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --root "$root"');
+    const install = action.slice(action.indexOf('- name: Install cargo-audit'), action.indexOf(VERDICT_STEP));
+    expect(install).toMatch(/^\s*id: install$/m);
+    expect(install).toMatch(/CARGO_AUDIT_VERSION: '\d+\.\d+\.\d+'/);
+    expect(install).toContain('cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --root "$root"');
     // Its failure is recorded, never swallowed, and the verdict refuses on it.
-    expect(action).not.toMatch(/cargo install[^\n]*\|\|\s*true/);
-    expect(action).toContain('echo "installed=false" >> "$GITHUB_OUTPUT"');
-    expect(action).toContain(`if [ "$INSTALLED" != 'true' ]; then`);
-    expect(action).toMatch(/\[ "\$status" -eq 0 \] && status=1/);
+    expect(install).not.toMatch(/\|\|\s*true/);
+    expect(install).not.toMatch(/set \+e/);
+    expect(install).toContain('echo "installed=false" >> "$GITHUB_OUTPUT"');
   });
 
-  it('fails only when told to enforce, and says the verdict either way', () => {
-    expect(action).toContain('status=$?');
-    expect(action).toContain('echo "::error::$verdict"');
-    expect(action).toContain(`if [ "$ENFORCE" = 'true' ]; then exit 1; fi`);
-    expect(action).toContain('>> "$GITHUB_STEP_SUMMARY"');
-    expect(action).toContain('cp "$report" "$SAVE/advisories.txt"');
-    expect(action).toContain('set -- --save "$SAVE"');
+  it('binds the verdict step to its inputs, and nothing can skip it', () => {
+    const step = action.slice(action.indexOf(VERDICT_STEP));
+    expect(step).not.toMatch(/^\s*(if|continue-on-error):/m);
+    expect(step).toContain('ENFORCE: ${{ inputs.enforce }}');
+    expect(step).toContain('SAVE: ${{ inputs.save }}');
+    expect(step).toContain('INSTALLED: ${{ steps.install.outputs.installed }}');
+    expect(step).not.toMatch(/set \+e/);
+    expect(action).not.toMatch(/^\s*(if|continue-on-error):/m);
   });
 
   // bash finds the stand-in `node` by its bare name, which a Windows `.cmd`
   // stand-in does not answer to.
-  it.skipIf(process.platform === 'win32')('decides the way its header says', () => {
+  it.skipIf(process.platform === 'win32')('decides the way its header says, run as the runner runs it', () => {
     /*
-     * The action is bash around the script; run that bash against stand-in
-     * reports and check the step's own exit status and summary.
+     * The verdict step's whole `run` block, with the flags GitHub runs a
+     * composite `shell: bash` step with, against a stand-in `node` that
+     * answers as the report would, and only when it is asked for the report.
      */
-    // The verdict step is the action's last, so its script runs to the end.
-    const start = action.indexOf('        set +e\n        report=');
-    expect(start).toBeGreaterThan(-1);
-    const body = action
-      .slice(start)
+    const raw = readFileSync(join(REPO_ROOT, ACTION), 'utf8');
+    const step = raw.slice(raw.indexOf(VERDICT_STEP));
+    const block = step.slice(step.indexOf('      run: |\n') + '      run: |\n'.length);
+    const body = block
       .split('\n')
       .map((line) => line.replace(/^ {8}/, ''))
       .join('\n');
@@ -848,14 +996,26 @@ describe('the advisory scan action', () => {
       ['malformed register, enforced', 2, 'true', 'true', 1],
       ['clean but cargo-audit missing, enforced', 0, 'false', 'true', 1],
       ['clean but cargo-audit missing, a dry run', 0, 'false', 'false', 0],
+      ['clean, but enforce is neither true nor false', 0, 'true', 'True', 1],
+      ['refused, and enforce is empty', 1, 'true', '', 1],
     ];
     for (const [label, verdict, installed, enforce, exit] of cases) {
       const dir = scratch();
       const bin = scratch();
-      // `node scripts/report-advisories.mjs` answers with the verdict asked for.
-      fakeTool(bin, 'node', `console.log('report body');\nprocess.exit(${verdict});\n`);
+      fakeTool(
+        bin,
+        'node',
+        `const args = process.argv.slice(2);
+if (args.join(' ') !== 'scripts/report-advisories.mjs --save provenance') {
+  console.log('unexpected node ' + args.join(' '));
+  process.exit(99);
+}
+console.log('report body');
+process.exit(${verdict});
+`,
+      );
       const summary = join(dir, 'summary.md');
-      const result = spawnSync('bash', ['-c', body], {
+      const result = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', body], {
         cwd: dir,
         encoding: 'utf8',
         env: {
@@ -868,10 +1028,18 @@ describe('the advisory scan action', () => {
           INSTALLED: installed,
         },
       });
-      expect(result.status, `${label}\n${result.stdout}${result.stderr}`).toBe(exit);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.status, `${label}\n${output}`).toBe(exit);
+      if (enforce !== 'true' && enforce !== 'false') {
+        expect(output, label).toContain('enforce must be');
+        continue;
+      }
       const written = readFileSync(summary, 'utf8');
       expect(written, label).toContain('report body');
-      expect(written, label).toContain(verdict === 0 && installed === 'true' ? 'Nothing here refuses' : 'REFUSED');
+      expect(written, label).not.toContain('unexpected node');
+      const clean = verdict === 0 && installed === 'true';
+      expect(written, label).toContain(clean ? 'Nothing here refuses' : 'REFUSED');
+      if (!clean) expect(result.stdout, label).toMatch(/^::error::.*REFUSED/m);
       expect(readFileSync(join(dir, 'provenance/advisories.txt'), 'utf8'), label).toContain('report body');
       if (installed !== 'true') expect(written, label).toContain('cargo-audit could not be installed');
     }

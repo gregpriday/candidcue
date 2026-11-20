@@ -5,11 +5,12 @@ name: Advisories
 #
 # The same scan and the same policy as the gates job of every release workflow
 # (`.github/actions/advisory-scan`, `scripts/report-advisories.mjs`): a
-# cargo-audit vulnerability or unsound warning, or any production pnpm
+# cargo-audit vulnerability or warning other than unmaintained or yanked
+# (unsound, notice), or any production pnpm
 # advisory, that docs/advisory-exceptions.json does not cover or whose review
-# is overdue, or a scan that failed, turns this run red, and GitHub emails
-# about a red scheduled run. Unmaintained and yanked warnings are listed and
-# never turn it red. A red run here is a tag that would be refused today: fix
+# is overdue, or a scan that failed, turns this run red, which GitHub reports
+# to whoever its notification settings name for scheduled runs. Unmaintained
+# and yanked warnings are listed and never turn it red. A red run here is a tag that would be refused today: fix
 # the finding or record an exception (docs/release-runbook.md).
 #
 # Scheduled runs use the default branch, which is develop. A manual dispatch
@@ -34,7 +35,8 @@ jobs:
   scan:
     name: Dependency advisories
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Room for the cargo-audit build and every scan's retries.
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
