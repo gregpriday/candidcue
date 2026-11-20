@@ -4822,3 +4822,41 @@ async fn an_unreadable_restore_marker_keeps_the_library_shut() {
         assert!(!dir.join("speaking-glass.sqlite3").exists(), "launch {launch} created a database");
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_live_database_that_is_a_dangling_link_is_set_aside_as_the_original() {
+    /*
+     * `exists()` follows links, so a live database that was a link to a
+     * volume that is offline read as absent: the restore journalled it
+     * absent, and the commit then wrote through the link (failing) and the
+     * rollback set the user's link aside as if the commit had made it. The
+     * link is the component; it now moves into quarantine like one.
+     */
+    let h = harness().await;
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    close_fully(&h.pool, h.dir.path()).await;
+
+    let live_db = h.dir.path().join("speaking-glass.sqlite3");
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = fs::remove_file(h.dir.path().join(format!("speaking-glass.sqlite3{suffix}")));
+    }
+    let offline = h.dir.path().join("offline-volume").join("speaking-glass.sqlite3");
+    std::os::unix::fs::symlink(&offline, &live_db).expect("link");
+
+    let previous = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect("the restore goes ahead")
+        .expect("a restore ran");
+    let kept = fs::symlink_metadata(previous.join("speaking-glass.sqlite3"))
+        .expect("the link must be kept in quarantine as the original");
+    assert!(kept.file_type().is_symlink());
+    assert_eq!(fs::read_link(previous.join("speaking-glass.sqlite3")).expect("link"), offline);
+    assert!(live_db.is_file(), "the restored database is live");
+}

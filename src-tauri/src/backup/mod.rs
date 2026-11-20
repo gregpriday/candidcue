@@ -1822,7 +1822,7 @@ fn evacuate_component(
      * rollback still puts the absence back.
      */
     if pending.absent.iter().any(|n| n == name) {
-        if from.exists() {
+        if present(from) {
             set_aside(from, previous, attempt)?;
         }
         evacuated.push(Evacuated::Absent {
@@ -1871,7 +1871,7 @@ fn evacuate_component(
                 to.display()
             )));
         }
-        if from.exists() {
+        if present(from) {
             set_aside(from, previous, attempt)?;
         }
         evacuated.push(Evacuated::Moved {
@@ -1880,7 +1880,7 @@ fn evacuate_component(
         });
         return Ok(());
     }
-    if from.exists() {
+    if present(from) {
         match move_or_copy(from, &to) {
             Ok(()) => {
                 evacuated.push(Evacuated::Moved {
@@ -1900,7 +1900,7 @@ fn evacuate_component(
              * reason to fail a restore.
              */
             Err(AppError::Storage(e))
-                if e.kind() == std::io::ErrorKind::NotFound && !from.exists() =>
+                if e.kind() == std::io::ErrorKind::NotFound && !present(from) =>
             {
                 evacuated.push(Evacuated::Absent {
                     live: from.to_path_buf(),
@@ -1926,6 +1926,16 @@ fn evacuate_component(
         write_marker(marker, pending)?;
     }
     Ok(())
+}
+
+/// Is there an entry at `path` — a dangling link included?
+///
+/// `exists()` follows links, so a live database or scripts tree that is a
+/// link to a volume that is offline read as absent: the restore journalled it
+/// absent, and the rollback then set the user's link aside as if the commit
+/// had created it. The link is the component, and it moves like one.
+fn present(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
 }
 
 /// Move an interrupted attempt's output out of the way, keeping every byte.
