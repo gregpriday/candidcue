@@ -259,7 +259,99 @@ exists, a tag builds and stages, then stops at publishing with
 
 Replacing the account-wide R2 keys with a token scoped to that bucket (#306)
 is a separate change, not part of the rename: it takes effect only once
-`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` hold the new token's keys.
+`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` hold the new token's keys
+(next section).
+
+### An R2 token for the release bucket only (#306)
+
+`R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` were derived from an
+account-level Cloudflare API token. They can reach every R2 bucket on the
+account, Daintree's update bucket included, and they stop working the day
+that token is rolled. Publishing needs one bucket. Nothing in the workflows
+changes: `R2_ENDPOINT` and `SPEAKING_GLASS_R2_BUCKET` keep their values, and
+only the two key secrets are replaced. The owner's checklist:
+
+- [ ] In Cloudflare, open R2 › Manage API tokens and create an **Account API
+  token** (it outlives any one member's access; a User API token works the
+  same until its user leaves). Permissions: **Object Read & Write**. Specify
+  bucket(s): **Apply to specific buckets only**, with the one bucket that
+  `SPEAKING_GLASS_R2_BUCKET` names, the bucket whose Settings › Custom
+  Domains lists `updates.speakingglass.com`. TTL: **Forever**, or a release
+  months from now fails at its upload. Leave client IP filtering empty:
+  GitHub-hosted runners have no fixed address. Keep the page open after
+  creating it, because the Secret Access Key is shown only once.
+- [ ] Before it goes into GitHub, check its reach from a shell, with the
+  settings publishing uses. Replace the three `<…>` placeholders first: `E`
+  is the `R2_ENDPOINT` value, `B` the `SPEAKING_GLASS_R2_BUCKET` value, and
+  the third another bucket that exists on the same account, such as
+  Daintree's update bucket. The parentheses run it in a subshell, so the
+  keys are gone when it ends however it ends. Every call reads; none
+  writes:
+
+  ```bash
+  (
+    unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_PROFILE
+    printf 'Access Key ID: '; read -rs AWS_ACCESS_KEY_ID; echo
+    printf 'Secret Access Key: '; read -rs AWS_SECRET_ACCESS_KEY; echo
+    [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ] || exit 1
+    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION=auto \
+      AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+      AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+    E='https://<account id>.r2.cloudflarestorage.com'
+    B='<release bucket>'
+    aws s3api list-objects-v2 --bucket "$B" --prefix releases/ --max-keys 1 --endpoint-url "$E"
+    aws s3api list-objects-v2 --bucket '<another bucket>' --max-keys 1 --endpoint-url "$E"
+    aws s3api list-buckets --endpoint-url "$E"
+  )
+  ```
+
+  The first must succeed: it lists one key under `releases/`, or none
+  before the first release. The second must fail with `AccessDenied`: the
+  token does not reach that bucket. `NoSuchBucket` there proves nothing;
+  check the bucket's name and the endpoint. The third must fail with
+  `AccessDenied` too. A token that lists the account's buckets has Admin
+  permissions, but a denial does not prove the scope, because an Object
+  Read & Write token applied to every bucket is denied as well.
+- [ ] So check the scope where it is set, and the write with it, since no
+  read proves a write: the token's row under Manage API tokens shows
+  Object Read & Write, not Object Read only, applied to that one bucket
+  and no other.
+- [ ] Replace the two secrets where the other two R2 secrets live, keeping
+  the four together (above), and finish both before tagging a release.
+  `gh secret set` prompts for each value, so neither reaches shell
+  history. At repository level:
+
+  ```bash
+  gh secret set R2_ACCESS_KEY_ID && gh secret set R2_SECRET_ACCESS_KEY
+  gh secret list
+  ```
+
+  On the environments instead, set both on each of them (a repository-level
+  `gh secret set` would leave the environment's old keys in force, since an
+  environment secret overrides a repository one):
+
+  ```bash
+  for env in release-stable release-prerelease; do
+    gh secret set R2_ACCESS_KEY_ID --env "$env" &&
+      gh secret set R2_SECRET_ACCESS_KEY --env "$env" || break
+  done
+  gh secret list --env release-stable
+  gh secret list --env release-prerelease
+  ```
+
+  The commands stop at the first set that fails; run both sets again for
+  that environment, because a pair that is half new and half old fails the
+  next publish at R2 however recent the dates look. Each list shows both
+  keys updated today, beside `R2_ENDPOINT` and `SPEAKING_GLASS_R2_BUCKET`.
+- [ ] The first real publish after the swap (§5) proves the write; a dry run
+  does not reach R2. In that publish, `Every publishing credential must be
+  present` lists all four present, and `Upload the release files` and both
+  read-backs pass. A token that cannot write fails at `Upload the release
+  files`, before the feed is touched: fix the token and re-run only the
+  `publish` job.
+
+After the swap no release depends on the account-level token the old keys
+came from, so rolling or deleting it no longer touches publishing.
 
 ### The dry run
 
@@ -354,8 +446,8 @@ order, and stops at the first failure:
 4. Refuses to change a file that is already published: every file already
    under `releases/<version>/` must be byte for byte the one staged.
 5. Uploads the installers, the updater payload and its `.sig`, and
-   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
-   bucket, with `Cache-Control: public, max-age=31536000, immutable`.
+   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the R2 bucket
+   `SPEAKING_GLASS_R2_BUCKET` names, with `Cache-Control: public, max-age=31536000, immutable`.
 6. Downloads every one of them back from `https://updates.speakingglass.com`,
    compares the bytes, and checks each is served with that `Cache-Control`
    (read as directives, so their order and case do not matter).
