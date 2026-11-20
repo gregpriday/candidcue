@@ -730,6 +730,9 @@ describe('take boundaries', () => {
       expect(summary.wordsInFlight, 'and B’s open utterance is still open').toBe(2);
     } finally {
       closing.release?.();
+      // B too, if an assertion threw before its stop: otherwise the wait below
+      // times out and replaces the failure it was meant to report.
+      clearSession();
       await until(
         () => (listeners.get('stt://event') ?? []).length === 0,
         'both takes to stop listening',
