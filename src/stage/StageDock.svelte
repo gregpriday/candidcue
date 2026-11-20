@@ -946,169 +946,178 @@
       edge, which put the menu over the audio readout a hundred-odd pixels from
       the cog that raised it and made it read as the readout's.
     -->
-    <div class="dock-slot">
-      <!--
-        THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
-
-        Everything behind it is a verb somebody reaches for and then forgets:
-        adjust the appearance, switch to the teleprompter and back. One of them
-        is not —
-        voice following sets a MODE, and a mode that hides itself is how a
-        presenter ends up staring at a script that will not move, with the control
-        that explains it invisible until they happen to move the mouse.
-
-        So the trigger obeys `buttonsVisible` in exactly one direction. While
-        following is on — the ordinary case, the whole take — it fades with the
-        rest, because it is then reporting the state everybody already assumes.
-        While it is off it stays lit and amber, because it is then the answer to
-        the only question the presenter is going to ask.
-
-        It is NOT disabled while the appearance panel is up, unlike the End
-        control: it is the panel's anchor and stays drawn as expanded. Pressing
-        it then does not cancel — that threw away whatever had just been tuned —
-        it calls the panel's attention, exactly as a click away does, and the
-        panel's own Cancel and Done end it.
-      -->
-      <button
-        type="button"
-        class="dock-button menu-trigger"
-        class:flagged={followPaused}
-        data-hidden={!buttonsVisible && !followPaused}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen || appearanceOpen}
-        aria-label={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
-        title={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
-        bind:this={menuButton}
-        onpointerdown={(event) => {
-          // Pressed while the appearance panel is up, it only calls that panel's
-          // attention — so the keyboard stays inside the panel instead of
-          // following the press out to a trigger the panel's trap reaches past.
-          if (appearanceOpen) event.preventDefault();
-        }}
-        onmousedown={onTriggerMouseDown}
-        onclick={onTriggerClick}
-        onkeydown={onTriggerKeydown}
-      >
+    <!--
+      No menu at all when there is nothing in it. A standalone stage window (a
+      Settings preview) has no follow switch, no appearance panel and no
+      presentation toggle to offer, and a cog that opens an empty popover is a
+      control that does nothing. The appearance popover lives in this slot too,
+      and it needs the row that opens it.
+    -->
+    {#if rows.length > 0}
+      <div class="dock-slot">
         <!--
-          Lucide's cog, inlined.
+          THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
 
-          Inlined rather than taken from `Icon.svelte` because that component
-          lives in control's tree, and the standalone stage window is a separate
-          entry point that must not pull control in behind one glyph. Every other
-          icon in this dock is drawn here for the same reason.
+          Everything behind it is a verb somebody reaches for and then forgets:
+          adjust the appearance, switch to the teleprompter and back. One of them
+          is not —
+          voice following sets a MODE, and a mode that hides itself is how a
+          presenter ends up staring at a script that will not move, with the control
+          that explains it invisible until they happen to move the mouse.
+
+          So the trigger obeys `buttonsVisible` in exactly one direction. While
+          following is on — the ordinary case, the whole take — it fades with the
+          rest, because it is then reporting the state everybody already assumes.
+          While it is off it stays lit and amber, because it is then the answer to
+          the only question the presenter is going to ask.
+
+          It is NOT disabled while the appearance panel is up, unlike the End
+          control: it is the panel's anchor and stays drawn as expanded. Pressing
+          it then does not cancel — that threw away whatever had just been tuned —
+          it calls the panel's attention, exactly as a click away does, and the
+          panel's own Cancel and Done end it.
         -->
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+        <button
+          type="button"
+          class="dock-button menu-trigger"
+          class:flagged={followPaused}
+          data-hidden={!buttonsVisible && !followPaused}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen || appearanceOpen}
+          aria-label={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
+          title={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
+          bind:this={menuButton}
+          onpointerdown={(event) => {
+            // Pressed while the appearance panel is up, it only calls that panel's
+            // attention — so the keyboard stays inside the panel instead of
+            // following the press out to a trigger the panel's trap reaches past.
+            if (appearanceOpen) event.preventDefault();
+          }}
+          onmousedown={onTriggerMouseDown}
+          onclick={onTriggerClick}
+          onkeydown={onTriggerKeydown}
         >
-          <path
-            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
-          />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
+          <!--
+            Lucide's cog, inlined.
+
+            Inlined rather than taken from `Icon.svelte` because that component
+            lives in control's tree, and the standalone stage window is a separate
+            entry point that must not pull control in behind one glyph. Every other
+            icon in this dock is drawn here for the same reason.
+          -->
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+            />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <!--
+            The mode mark, drawn as well as tinted.
+
+            A hue shift and a shape fail under different conditions — colour goes
+            first through a beamsplitter, geometry goes first at 16px on a
+            non-Retina panel — so the state that must never be missed is carried by
+            both. `aria-hidden`, because the trigger's own name already says it.
+          -->
+          {#if followPaused}
+            <span class="flag" aria-hidden="true"></span>
+          {/if}
+        </button>
+
         <!--
-          The mode mark, drawn as well as tinted.
+          LEVEL ONE. It is not rendered at the same time as level two: choosing the
+          panel row replaces the menu with it, in the same place, rising from the
+          same control.
 
-          A hue shift and a shape fail under different conditions — colour goes
-          first through a beamsplitter, geometry goes first at 16px on a
-          non-Retina panel — so the state that must never be missed is carried by
-          both. `aria-hidden`, because the trigger's own name already says it.
+          `role="menu"` ends here on purpose. The level it opens is a form with
+          sliders in it, and inside a menu a slider loses its own left/right arrows
+          to the menu's — so the appearance popover below claims `dialog` and this
+          claims nothing about it beyond `aria-haspopup` on the row.
+
+          `!appearanceOpen` makes the two levels exclusive STRUCTURALLY rather than
+          by every path that opens one happening to close the other. The dock does
+          not own `appearanceOpen` — the host does — so a second opener added over
+          there later would otherwise put both levels on the glass at once, and
+          this file promises in several places that it cannot.
         -->
-        {#if followPaused}
-          <span class="flag" aria-hidden="true"></span>
-        {/if}
-      </button>
+        {#if menuOpen && !appearanceOpen}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            class="dock-popover menu-popover"
+            role="menu"
+            tabindex="-1"
+            aria-label="Take menu"
+            bind:this={menuPanel}
+            onpointerdown={onMenuPointerDown}
+          >
+            {#each rows as row, index (row.id)}
+              <!-- A rule between kinds of row, never an index of its own: the
+                   arrows walk `rows`, and a separator is not somewhere to land. -->
+              {#if index > 0 && rows[index - 1]?.group !== row.group}
+                <div class="menu-separator" role="separator"></div>
+              {/if}
+              <button
+                type="button"
+                class="menu-row"
+                class:active={highlighted && index === activeIndex}
+                data-menu-row={row.id}
+                role={row.kind === 'checkbox' ? 'menuitemcheckbox' : 'menuitem'}
+                aria-checked={row.kind === 'checkbox' ? row.checked : undefined}
+                aria-haspopup={row.kind === 'panel' ? 'dialog' : undefined}
+                tabindex={menuItemTabIndex(activeIndex, index)}
+                onclick={() => chooseRow(row)}
+                onpointerenter={() => focusRow(index)}
+              >
+                <!--
+                  A fixed gutter, filled only by a checked row.
 
-      <!--
-        LEVEL ONE. It is not rendered at the same time as level two: choosing the
-        panel row replaces the menu with it, in the same place, rising from the
-        same control.
-
-        `role="menu"` ends here on purpose. The level it opens is a form with
-        sliders in it, and inside a menu a slider loses its own left/right arrows
-        to the menu's — so the appearance popover below claims `dialog` and this
-        claims nothing about it beyond `aria-haspopup` on the row.
-
-        `!appearanceOpen` makes the two levels exclusive STRUCTURALLY rather than
-        by every path that opens one happening to close the other. The dock does
-        not own `appearanceOpen` — the host does — so a second opener added over
-        there later would otherwise put both levels on the glass at once, and
-        this file promises in several places that it cannot.
-      -->
-      {#if menuOpen && !appearanceOpen}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div
-          class="dock-popover menu-popover"
-          role="menu"
-          tabindex="-1"
-          aria-label="Take menu"
-          bind:this={menuPanel}
-          onpointerdown={onMenuPointerDown}
-        >
-          {#each rows as row, index (row.id)}
-            <!-- A rule between kinds of row, never an index of its own: the
-                 arrows walk `rows`, and a separator is not somewhere to land. -->
-            {#if index > 0 && rows[index - 1]?.group !== row.group}
-              <div class="menu-separator" role="separator"></div>
-            {/if}
-            <button
-              type="button"
-              class="menu-row"
-              class:active={highlighted && index === activeIndex}
-              data-menu-row={row.id}
-              role={row.kind === 'checkbox' ? 'menuitemcheckbox' : 'menuitem'}
-              aria-checked={row.kind === 'checkbox' ? row.checked : undefined}
-              aria-haspopup={row.kind === 'panel' ? 'dialog' : undefined}
-              tabindex={menuItemTabIndex(activeIndex, index)}
-              onclick={() => chooseRow(row)}
-              onpointerenter={() => focusRow(index)}
-            >
-              <!--
-                A fixed gutter, filled only by a checked row.
-
-                The tick is the state — `aria-checked` says it to a screen reader
-                and this says it to an eye — and it has to hold its column whether
-                or not it is drawn, or every label in the menu shifts sideways as
-                modes are flipped from inside it.
-              -->
-              <span class="menu-mark" aria-hidden="true">
-                {#if row.kind === 'checkbox' && row.checked}
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round" />
+                  The tick is the state — `aria-checked` says it to a screen reader
+                  and this says it to an eye — and it has to hold its column whether
+                  or not it is drawn, or every label in the menu shifts sideways as
+                  modes are flipped from inside it.
+                -->
+                <span class="menu-mark" aria-hidden="true">
+                  {#if row.kind === 'checkbox' && row.checked}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                  {/if}
+                </span>
+                <span class="menu-label">{row.label}</span>
+                {#if row.kind === 'panel'}
+                  <!-- The chevron says "there is another level", which is the one
+                       thing the ellipsis in the label cannot say on its own. -->
+                  <svg
+                    class="menu-into"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    aria-hidden="true"
+                  >
+                    <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
                 {/if}
-              </span>
-              <span class="menu-label">{row.label}</span>
-              {#if row.kind === 'panel'}
-                <!-- The chevron says "there is another level", which is the one
-                     thing the ellipsis in the label cannot say on its own. -->
-                <svg
-                  class="menu-into"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  aria-hidden="true"
-                >
-                  <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
 
-      {#if appearanceOpen && appearancePanel}
-        <div class="dock-popover appearance-popover" data-attention={appearanceAttention ? '' : undefined}>
-          {@render appearancePanel()}
-        </div>
-      {/if}
-    </div>
+        {#if appearanceOpen && appearancePanel}
+          <div class="dock-popover appearance-popover" data-attention={appearanceAttention ? '' : undefined}>
+            {@render appearancePanel()}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!--
       THE WAY OUT SAYS WHAT IT DOES, AND STANDS APART.

@@ -167,8 +167,9 @@ describe('a Settings preview opened cold', () => {
   it('shows its first document from the replay and completes the handshake', async () => {
     const container = await mountColdPreview();
 
-    // Both handshake steps carry the envelope's generation and session: Rust
-    // checks each against the stage it has open and drops a mismatch.
+    // Both handshake steps carry the envelope's generation and session. Rust
+    // gates each on the generation of the stage it has open, and forwards the
+    // session on `stage://ready` for Settings to match.
     const sent = previewEnvelope();
     const hydrated = emitted
       .filter(([name]) => name === STAGE_EVENT.hydrated)

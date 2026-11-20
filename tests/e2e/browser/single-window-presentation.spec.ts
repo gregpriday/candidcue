@@ -287,14 +287,15 @@ test('the embedded stage reports the tokens on the glass to Rust', async ({ page
     });
 
   /*
-   * At least twice. An unchanged range is repeated every
-   * `VIEWPORT_HINT_REFRESH_MS` (2 s) so a hint Rust dropped before the
-   * alignment session existed is not lost for the whole take, and a stage
-   * that said it once and fell silent is the slack leash this guards against.
+   * Three times: the opening report and two refreshes. An unchanged range is
+   * repeated every `VIEWPORT_HINT_REFRESH_MS` (2 s) so a hint Rust dropped
+   * before the alignment session existed is not lost for the whole take, and
+   * a stage that reported at startup and then fell silent is the slack leash
+   * this guards against.
    */
   await expect
-    .poll(async () => (await hint())?.count ?? 0, { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(2);
+    .poll(async () => (await hint())?.count ?? 0, { timeout: 12_000 })
+    .toBeGreaterThanOrEqual(3);
   const reported = await hint();
   expect(reported?.sessionGeneration).toBe(reported?.expectedGeneration);
   expect(reported?.sessionGeneration).toBeGreaterThan(0);
