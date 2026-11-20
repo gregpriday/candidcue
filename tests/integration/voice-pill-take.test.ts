@@ -655,7 +655,7 @@ describe('take boundaries', () => {
 
     // A move repositions the take; it is not a take boundary, so the evidence
     // that the microphone is heard still stands.
-    goToToken(5);
+    goToToken(1);
     await run(150);
     expect(latest().reading).toBe('steady');
     expect(get(session).heardAnything).toBe(true);

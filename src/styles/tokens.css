@@ -154,7 +154,7 @@
 
      A workspace toolbar is 44px and a status bar is 24px, and neither changes
      height for any reason. That constancy is doing real work: the editor's save
-     state, the Live console's fault chips and the Library's result count all
+     state, the take drawer's fault chips and the Library's result count all
      appear and disappear, and a band that resized when they did would shove the
      document under the cursor mid-sentence. Anything that cannot fit goes to
      overflow rather than to a second line. */

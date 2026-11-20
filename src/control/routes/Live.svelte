@@ -1259,11 +1259,12 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * The panel belongs to the take that opened it.
    *
-   * This is component state and this component survives the end of a session —
-   * Live stays mounted for the summary, and "Present again" starts a fresh take
-   * inside it. A panel left open across that boundary remounts over the new
-   * take holding the OLD take's rollback snapshot, and an `appearanceOpen` left
-   * true suspends the new stage's keyboard until somebody opens and closes it.
+   * This is component state, and the session can end before this component
+   * unmounts: End Take stops it before navigating, the quit handshake stops it
+   * without navigating, and a refused navigation leaves Live mounted. A panel
+   * left open across that boundary would come back over the next take holding
+   * the OLD take's rollback snapshot, and an `appearanceOpen` left true would
+   * suspend the new stage's keyboard until somebody opened and closed it.
    */
   $effect(() => {
     if ($session.active) return;
@@ -1561,10 +1562,10 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * The drawer belongs to the take, exactly as the appearance panel does.
    *
-   * Live survives the end of a session — it stays mounted for the summary, and
-   * "Present again" builds a fresh take inside it — so anything left open here
-   * would reappear over the next take, and a stale device list would offer the
-   * previous take's microphones as the cure for this one's.
+   * The session can end before Live unmounts (see the appearance panel's note
+   * above), so anything left open here could reappear over the next take, and
+   * a stale device list would offer the previous take's microphones as the
+   * cure for this one's.
    */
   $effect(() => {
     if ($session.active) return;

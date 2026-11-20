@@ -225,7 +225,7 @@ describe('scriptFollowedLabel', () => {
     );
   });
 
-  it('says when a take began past the end of the part', () => {
+  it('falls back to saying none of the part was left when nothing of it was', () => {
     expect(
       scriptFollowedLabel({
         ...base,

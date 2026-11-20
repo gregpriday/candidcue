@@ -1419,9 +1419,9 @@ export function startLiveSession(input: StartSessionInput): string {
          *
          * The picker belongs in the take-controls drawer, which is mounted for
          * the duration of the take, and the attention dot on its tab is what
-         * points at it. The Live status bar renders only when NO take is
-         * running, so a picker there cannot be reached in the one state it
-         * exists for — a microphone dying mid-take.
+         * points at it. A picker anywhere that only renders with no take
+         * running cannot be reached in the one state it exists for — a
+         * microphone dying mid-take.
          */
       },
       /*
@@ -2494,8 +2494,8 @@ const followActions = {
    *
    * Its caller is `smoothFollow.requestLayoutRebuild()`, raised from the
    * `rebuild_layout` action on the `invalid_line_map` notice. `FollowStatePanel`
-   * renders that notice both in Live's console arm and in the take-controls
-   * drawer, so a presenter can reach it mid-take.
+   * renders that notice in the take-controls drawer, so a presenter can reach
+   * it mid-take.
    */
   rebuildStageLayout(): void {
     state.update((s) =>

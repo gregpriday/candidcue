@@ -269,13 +269,16 @@ describe('#214 — a take keeps its summary and its session row without the hist
 
   let seq = 0;
 
-  function heardAt(token: number): Record<string, unknown> {
+  function heardAt(
+    token: number,
+    decision: 'localConfirmed' | 'retakeAccepted' = 'localConfirmed',
+  ): Record<string, unknown> {
     seq += 1;
     return {
       sessionGeneration: 7,
       seq,
       state: 'following',
-      decision: 'localConfirmed',
+      decision,
       confirmedToken: token,
       observedToken: token,
       rateTokensPerSecond: 2,
@@ -336,7 +339,11 @@ describe('#214 — a take keeps its summary and its session row without the hist
     alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
     alignmentFeed.push?.(heardAt(middle!.startTokenIndex));
     alignmentFeed.push?.(heardAt(close!.startTokenIndex));
-    alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
+    // A re-read of the opening, which the engine accepts as a retake.
+    alignmentFeed.push?.(heardAt(opening!.startTokenIndex, 'retakeAccepted'));
+    expect(get(session).snapshot?.confirmedToken, 'the re-read was delivered').toBe(
+      opening!.startTokenIndex,
+    );
 
     // Opening, Middle and Close — each once, though Opening was read twice.
     const summary = stopSession();
@@ -1711,14 +1718,19 @@ describe('#287 — time the presenter set following aside is not charged to foll
   });
 
   it('still reports a silent minute that a pause came after', async () => {
-    // The pause at the end does not excuse the minute of silence before it.
+    // The pause at the end does not excuse the minute of silence before it —
+    // half of it with following switched off, which still listens.
     await startScript({ speak: false });
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    toggleVoiceFollow();
+    await vi.advanceTimersByTimeAsync(30_000);
     togglePlayPause();
     await vi.advanceTimersByTimeAsync(20_000);
 
     const summary = stopSession();
-    expect(summary.listenedSeconds).toBeCloseTo(60, 1);
+    expect(summary.listenedSeconds, 'listening is the take less its pauses').toBeCloseTo(60, 1);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(30, 1);
+    expect(summary.followingTime.offSeconds).toBeCloseTo(30, 1);
     expect(summary.followingTime.pausedSeconds).toBeCloseTo(20, 1);
     expect(resolveTakeOutcome(summary).headline).toBe('Nothing was transcribed');
   });

@@ -702,9 +702,18 @@ describe('script followed, out of what the take was given', () => {
     expect(coverage()).toEqual({ wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' });
   });
 
+  it('does not credit the run-up to a part to a take opened above it', () => {
+    // `startTake` never opens a bounded take above its part, but the store
+    // measures from the part's start whatever it is handed.
+    present(PART_TWO, PART_THREE, { startTokenIndex: 30 });
+    at(60);
+    expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
+  });
+
   it('does not credit the run-up to a part to a take moved back above it', () => {
     present(PART_TWO, PART_THREE);
     at(30, 'manualAnchor');
+    expect(get(session).snapshot?.confirmedToken, 'the move landed').toBe(30);
     at(60);
     expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
   });

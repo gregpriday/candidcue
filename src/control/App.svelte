@@ -258,7 +258,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
         case 'editor':
           return $editor.title ? `Script: ${$editor.title}` : 'Script editor';
         case 'live':
-          return 'Live console';
+          return 'Presentation';
         case 'settings':
           return 'Settings';
         case 'calibrate':

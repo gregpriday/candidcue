@@ -808,6 +808,18 @@ async function raiseStickyToast(page: Page, message: string): Promise<void> {
   }, message);
 }
 
+/** How many un-presents (`set_control_presenting` with `enabled: false`) were asked for. */
+function unpresentCalls(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      window.__E2E__.calls.filter(
+        (call) =>
+          call.command === 'set_control_presenting' &&
+          (call.args as { enabled?: boolean } | null)?.enabled === false,
+      ).length,
+  );
+}
+
 function toastRegionBottom(page: Page): Promise<string> {
   return page.evaluate(() => {
     const region = document.querySelector('[data-stage-chrome].region');
@@ -819,9 +831,21 @@ test('End Take never attaches the operator console, cover included, and toasts k
   page,
 }) => {
   const errors = watchPageErrors(page);
-  await present(page);
+  // Watched from before Present, so the opening is covered too.
+  await page.goto('/control.html');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await watchForConsole(page);
+  await page
+    .getByRole('listbox')
+    .getByRole('button', { name: 'Present', exact: true })
+    .first()
+    .click();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+    timeout: 20_000,
+  });
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
   await expect(page.locator('.present-cover')).toHaveCount(0);
+  expect(await consoleSeen(page)).toEqual([]);
 
   // During the take the tray lines up with the stage's dock: the stage
   // chrome's bottom inset, and nothing a route publishes moves it.
@@ -829,27 +853,23 @@ test('End Take never attaches the operator console, cover included, and toasts k
   await expect(page.getByText('Something needs a look')).toBeVisible();
   expect(await toastRegionBottom(page)).toBe('16px');
 
-  await watchForConsole(page);
-  expect(await consoleSeen(page)).toEqual([]);
-
   // Hold the un-present, so the covered interval lasts as long as this needs.
+  // Counted from here: the app also un-presents once at startup.
+  const unpresentsBefore = await unpresentCalls(page);
   await page.evaluate(() => window.__E2E__.setHeld('set_control_presenting', true));
   await page.keyboard.press('Escape');
   await expect(page.locator('.escape-hint')).toBeVisible();
   await page.keyboard.press('Escape');
 
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          window.__E2E__.calls.filter(
-            (call) =>
-              call.command === 'set_control_presenting' &&
-              (call.args as { enabled?: boolean } | null)?.enabled === false,
-          ).length,
-      ),
-    )
-    .toBe(1);
+  await expect.poll(() => unpresentCalls(page)).toBe(unpresentsBefore + 1);
+  expect(
+    await page.evaluate(() => window.__E2E__.settled.filter((c) => c === 'set_control_presenting').length),
+    'the un-present is still held',
+  ).toBe(
+    await page.evaluate(
+      () => window.__E2E__.calls.filter((c) => c.command === 'set_control_presenting').length - 1,
+    ),
+  );
   // Mid-teardown: the session is stopped, the stage is gone, the cover is up,
   // and Live is still the route — the interval the console used to fill.
   await expect(page.locator('.present-cover')).toBeVisible();
@@ -858,10 +878,15 @@ test('End Take never attaches the operator console, cover included, and toasts k
   expect(await consoleSeen(page)).toEqual([]);
 
   await page.evaluate(() => window.__E2E__.setHeld('set_control_presenting', false));
-  await expect(page.getByRole('dialog', { name: 'Take complete' })).toBeVisible();
+  const summary = page.getByRole('dialog', { name: 'Take complete' });
+  await expect(summary).toBeVisible();
   await expect(page.locator('.present-cover')).toHaveCount(0);
   await expect(page.locator('aside.sidebar')).toBeVisible();
   expect(await consoleSeen(page)).toEqual([]);
+  // The manual retake went with the console, and its count with it.
+  await summary.locator('summary', { hasText: 'Take details' }).click();
+  await expect(summary.getByText('Sections reached')).toBeVisible();
+  await expect(summary.getByText('Retakes', { exact: true })).toHaveCount(0);
 
   // Back on the desk the tray sits above the status band again, with the
   // sticky toast still up: the band's height plus the page gutter.
