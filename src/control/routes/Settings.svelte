@@ -26,6 +26,7 @@
   import Slider from '../components/Slider.svelte';
   import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill from '../components/StatusPill.svelte';
+  import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { chooseStageDisplay } from '../lib/start-take';
   import { stagePreviewSettingsFromSettings } from '../services/stage-envelope';
@@ -91,8 +92,11 @@
     opticalRigsForDisplay,
     panelMirrorFor,
     readerThemeFor,
+    rigNameProblem,
     withOpticalProfile,
+    withoutActiveOpticalRig,
     withoutOpticalProfile,
+    withPanelDiagonal,
     withPanelMirror,
     type ReaderTheme,
     type SessionMode,
@@ -116,6 +120,7 @@
   import { isMacPlatform, presentationModeShortcutLabel } from '../lib/shortcuts';
   import { formatAccelerator } from '../lib/commands';
   import { automaticProfile, discoverProfile } from '../../shared/optical-discovery';
+  import { isLikelySidecarDisplay } from '../../shared/sidecar';
   import {
     DEFAULT_BOTTOM_FADE_LINES,
     DEFAULT_DEAD_ZONE_LINES,
@@ -143,6 +148,7 @@
     MAX_VIEWING_DISTANCE_MM,
     READING_MEASURE,
     UNCALIBRATED_FIT_ADVICE,
+    inchesToMm,
     isPlausibleViewingDistanceMm,
   } from '../../shared/optics';
   import {
@@ -1422,6 +1428,169 @@
     await patchSettings(
       'optical',
       withoutOpticalProfile($settings.optical, fingerprint, name),
+    );
+  }
+
+  /**
+   * Stop using a rig on this panel, and keep every one of them.
+   *
+   * Forget was the only way off a rig, and it deleted the measurements; this
+   * clears the panel's choice alone, so a take sizes automatically (or at the
+   * fallback) and the rigs stay in the list to be chosen again.
+   */
+  async function useAutomaticSizing(): Promise<void> {
+    const fingerprint = rigFingerprint;
+    if (fingerprint === null || appliedRig === null) return;
+    await patchSettings('optical', withoutActiveOpticalRig($settings.optical, fingerprint));
+  }
+
+  /* ------------------------------------------------------ the panel's size */
+
+  /**
+   * The panel's diagonal, typed — the way out of the flat fallback for a panel
+   * discovery cannot size: an unrecognised monitor that reports no
+   * millimetres, or an iPad over Sidecar, which is recognised by name and
+   * never sized. On a panel that is already sized the same field corrects a
+   * wrong size, behind a quieter link.
+   */
+  let diagonalField = $state('');
+  let diagonalError = $state<string | null>(null);
+  let diagonalOpen = $state(false);
+
+  /** Sidecar's setup advice, for a panel that is, or looks like, an iPad. */
+  const sidecarPanel = $derived(
+    discovered.identification.kind === 'ipad-sidecar' || isLikelySidecarDisplay(displayShape),
+  );
+
+  /** The size in force, said in inches, with where it came from. */
+  const panelSizeLabel = $derived.by((): string | null => {
+    const scale = rig.scale;
+    const d = effectiveDisplay;
+    if (scale === null) return null;
+    const diagonalMm =
+      scale.diagonalMm ??
+      (d ? scale.mmPerCssPx * Math.hypot(d.logicalSize.width, d.logicalSize.height) : null);
+    const inches =
+      diagonalMm === null ? null : (diagonalMm / inchesToMm(1)).toFixed(1).replace(/\.0$/, '');
+    switch (scale.source) {
+      case 'ruler':
+        return inches === null
+          ? 'Measured against the glass'
+          : `Measured against the glass, about ${inches} inches across`;
+      case 'diagonal':
+        return `${inches} inches, as typed`;
+      case 'display':
+        return `${inches} inches, as the display reports`;
+      default:
+        return `${inches} inches, the panel model’s size`;
+    }
+  });
+
+  /*
+   * A draft typed for one panel, or one rig, is not an answer for another: the
+   * field closes and empties when the panel, the rig in force or the panel's
+   * logical size (a Sidecar mode change) moves under it.
+   */
+  const panelSizeContext = $derived(
+    `${rigFingerprint ?? ''}\u0000${appliedRig?.rigName ?? ''}\u0000${effectiveDisplay?.logicalSize.width ?? 0}x${effectiveDisplay?.logicalSize.height ?? 0}`,
+  );
+  $effect(() => {
+    void panelSizeContext;
+    untrack(() => {
+      diagonalField = '';
+      diagonalError = null;
+      diagonalOpen = false;
+      newRigOpen = false;
+      newRigError = null;
+    });
+  });
+
+  function openDiagonalCorrection(): void {
+    const diagonalMm = rig.scale?.diagonalMm;
+    diagonalField =
+      typeof diagonalMm === 'number'
+        ? (diagonalMm / inchesToMm(1)).toFixed(1).replace(/\.0$/, '')
+        : '';
+    diagonalError = null;
+    diagonalOpen = true;
+  }
+
+  /**
+   * Size the panel from the diagonal typed, onto the profile shown.
+   *
+   * With a rig applied that is the rig, corrected in place; with none it is
+   * the proposal, whose name no stored rig is using, so it becomes a new rig
+   * and is chosen. `rig` is read here, at submission, rather than captured
+   * when the field opened, so a switch to Automatic in between cannot send
+   * the draft to the rig that was in force before it.
+   */
+  async function applyPanelDiagonal(): Promise<void> {
+    const fingerprint = rigFingerprint;
+    const d = effectiveDisplay;
+    if (fingerprint === null || !d) return;
+    const text = diagonalField.trim().replace(/\s*(?:in(?:ches)?|"|″)$/i, '');
+    const inches = Number(text);
+    if (text === '' || !Number.isFinite(inches)) {
+      diagonalError = 'Type the diagonal in inches — 24, say.';
+      return;
+    }
+    const next = withPanelDiagonal(
+      rig,
+      { widthPx: d.logicalSize.width, heightPx: d.logicalSize.height },
+      inches,
+    );
+    if (next === null) {
+      diagonalError = 'That is not a diagonal Speaking Glass can use. Type the size in inches.';
+      return;
+    }
+    diagonalError = null;
+    diagonalOpen = false;
+    diagonalField = '';
+    await patchSettings('optical', withOpticalProfile($settings.optical, fingerprint, next));
+  }
+
+  /* ---------------------------------------------------------- a new rig */
+
+  /**
+   * Another named rig on this panel — seated and standing at one Elgato —
+   * made from the rig in force (or the automatic sizing) and chosen.
+   *
+   * It copies everything, a measured scale included: the second arrangement
+   * shares the panel, and what differs (distance, framing) is edited here
+   * afterwards. Not offered on a panel with nothing in force, because there is
+   * nothing to start from; the diagonal comes first there.
+   */
+  let newRigOpen = $state(false);
+  let newRigName = $state('');
+  let newRigError = $state<string | null>(null);
+  const canCreateRig = $derived(rigFingerprint !== null && (appliedRig !== null || automaticRig !== null));
+
+  const RIG_NAME_PROBLEMS: Record<NonNullable<ReturnType<typeof rigNameProblem>>, string> = {
+    empty: 'Give the rig a name.',
+    reserved: 'That name is taken by Speaking Glass itself. Choose another.',
+    duplicate: 'This display already has a rig with that name.',
+  };
+
+  function openNewRig(): void {
+    newRigName = unusedRigName(appliedRig?.rigName ?? 'New rig');
+    newRigError = null;
+    newRigOpen = true;
+  }
+
+  async function createRig(): Promise<void> {
+    const fingerprint = rigFingerprint;
+    if (fingerprint === null || !canCreateRig) return;
+    const name = newRigName.trim();
+    const problem = rigNameProblem($settings.optical, fingerprint, name);
+    if (problem !== null) {
+      newRigError = RIG_NAME_PROBLEMS[problem];
+      return;
+    }
+    newRigError = null;
+    newRigOpen = false;
+    await patchSettings(
+      'optical',
+      withOpticalProfile($settings.optical, fingerprint, { ...rig, rigName: name }),
     );
   }
 
@@ -3266,7 +3435,7 @@
                 {/if}
               </span>
               <button type="button" class="inline-link" onclick={() => jumpToRig()}>
-                {appliedRig || automaticRig ? 'Adjust sizing' : 'Calibrate'}
+                {appliedRig || automaticRig ? 'Adjust sizing' : 'Set panel size'}
               </button>
             </p>
           {/if}
@@ -3371,16 +3540,16 @@
           description={`How the text on ${effectiveDisplay?.name ?? 'the panel above'} is sized — from how far away you stand, not a pixel default.`}
         >
           <!--
-            The primary action names the rig it will change, and measuring
+            The primary action names the rig it will change, and making
             another stays reachable beside it.
 
-            `calibrate()` with no argument mints a name no stored rig is using,
-            which is right for measuring a second arrangement and wrong for
-            everything else: as the only button here it gave somebody with "Desk
-            hood" applied a "Desk hood 2" they did not ask for, leaving the one
-            they meant to adjust untouched. Both paths matter: one panel
-            legitimately holds several rigs, and the store keys on (panel, name),
-            so the two must never be the same button.
+            A new rig gets a name no stored rig is using, which is right for a
+            second arrangement and wrong for everything else: as the only button
+            here it gave somebody with "Desk hood" applied a "Desk hood 2" they
+            did not ask for, leaving the one they meant to adjust untouched. Both
+            paths matter: one panel legitimately holds several rigs, and the
+            store keys on (panel, name), so the two must never be the same
+            button.
           -->
           {#snippet actions()}
             <!-- Not while searching: a search that found one Advanced row has
@@ -3401,13 +3570,14 @@
               >
                 <span class="rig-action-label">Re-calibrate {appliedRig.rigName}…</span>
               </Button>
-              <Button size="sm" variant="ghost" onclick={() => calibrate()}>
-                Measure another rig…
-              </Button>
+              <Button size="sm" variant="ghost" onclick={() => openNewRig()}>New rig…</Button>
             {:else}
               <Button size="sm" disabled={!rigFingerprint} onclick={() => calibrate()}>
                 Calibrate…
               </Button>
+              {#if canCreateRig}
+                <Button size="sm" variant="ghost" onclick={() => openNewRig()}>New rig…</Button>
+              {/if}
             {/if}
           {/snippet}
 
@@ -3421,8 +3591,53 @@
                  monitor routinely holds several: the same Elgato on the desk
                  for a seated waist-up shot and on the boom arm for a standing
                  close-up are two different rigs sharing one fingerprint. -->
+            {#if newRigOpen}
+              <!-- A copy of the rig in force under a new name, chosen at once;
+                   what differs about the new arrangement is edited below. -->
+              <div class="new-rig" data-search-row>
+                <TextField
+                  label="Rig name"
+                  value={newRigName}
+                  error={newRigError ?? undefined}
+                  hint={appliedRig
+                    ? `Starts as a copy of ${appliedRig.rigName}.`
+                    : 'Starts from the automatic sizing.'}
+                  oninput={(value) => {
+                    newRigName = value;
+                    newRigError = null;
+                  }}
+                  onsubmit={() => void createRig()}
+                />
+                <div class="new-rig-actions">
+                  <Button size="sm" variant="primary" onclick={() => void createRig()}>
+                    Create rig
+                  </Button>
+                  <Button size="sm" variant="ghost" onclick={() => (newRigOpen = false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            {/if}
             {#if rigs.length > 0}
               <div class="rig-list" data-search-row>
+                <!-- Automatic is a choice like any rig, so stopping using one
+                     no longer means deleting it: the rigs below stay stored
+                     and can be chosen again. -->
+                <div class="rig-row" class:active={appliedRig === null}>
+                  <button
+                    type="button"
+                    class="rig-choose"
+                    aria-pressed={appliedRig === null}
+                    onclick={() => void useAutomaticSizing()}
+                  >
+                    <span class="rig-name">Automatic</span>
+                    <span class="rig-meta">
+                      {automaticRig
+                        ? 'Sized from what this display is known to be'
+                        : `The ${$settings.teleprompter.fontSizePx} px fallback — this display cannot be sized on its own`}
+                    </span>
+                  </button>
+                </div>
                 {#each rigs as entry (entry.key)}
                   <div class="rig-row" class:active={entry.active}>
                     <button
@@ -3476,7 +3691,7 @@
                   {discovered.identification.confidence === 'unknown'
                     ? 'Speaking Glass does not recognise this panel and it does not report its size'
                     : `Speaking Glass recognised ${discovered.identification.label} but cannot assume its size`},
-                  so it cannot size text by distance until you calibrate it.
+                  so it cannot size text by distance until you give its size below.
                 {:else}
                   <strong>Sized automatically</strong> for {discovered.identification.label}, assuming
                   you stand about {(automaticRig.viewingDistanceMm ?? 0) / 1000} m away. Changing
@@ -3486,6 +3701,56 @@
                 {/if}
               </p>
             {/if}
+
+            <!--
+              The panel's physical size: the one number every angle is
+              multiplied by. Asked for outright when nothing knows it, and
+              behind a quieter link when something does, because a correction
+              replaces a size that may have been measured at the glass.
+            -->
+            <div class="control-block panel-size" data-search-row>
+              <span class="control-label">Panel size</span>
+              {#if panelSizeLabel !== null && !diagonalOpen}
+                <p class="panel-size-line">
+                  <span>{panelSizeLabel}.</span>
+                  <button type="button" class="inline-link" onclick={() => openDiagonalCorrection()}>
+                    Correct size…
+                  </button>
+                </p>
+              {:else}
+                <div class="panel-size-entry">
+                  <TextField
+                    label="Panel diagonal (inches)"
+                    placeholder="24"
+                    value={diagonalField}
+                    error={diagonalError ?? undefined}
+                    hint={panelSizeLabel === null
+                      ? 'From the spec sheet — the panel itself, not the glass in front of it.'
+                      : `Replaces the size in use: ${panelSizeLabel.toLowerCase()}.`}
+                    oninput={(value) => {
+                      diagonalField = value;
+                      diagonalError = null;
+                    }}
+                    onsubmit={() => void applyPanelDiagonal()}
+                  />
+                  <div class="panel-size-actions">
+                    <Button size="sm" onclick={() => void applyPanelDiagonal()}>Use diagonal</Button>
+                    {#if panelSizeLabel !== null}
+                      <Button size="sm" variant="ghost" onclick={() => (diagonalOpen = false)}>
+                        Cancel
+                      </Button>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+              {#if sidecarPanel}
+                <p class="hint-line">
+                  On an iPad over Sidecar, set it to extend the desktop rather than mirror it,
+                  turn off the Sidecar sidebar and the Touch Bar so they do not cover the script's
+                  edges, and use a cable rather than wireless if you can.
+                </p>
+              {/if}
+            </div>
 
             <!-- The resolved answer, live. This is what makes the maths
                  trustworthy: it is the same `resolveStageGeometry` a take runs
@@ -3570,8 +3835,8 @@
               </div>
               {#if rig.viewingDistanceMm !== null && rig.scale === null}
                 <p class="hint-line">
-                  This panel has no physical scale yet, so the distance changes nothing until it is
-                  calibrated.
+                  This panel has no physical size yet, so the distance changes nothing until its
+                  diagonal is set above.
                 </p>
               {/if}
             </div>
@@ -5066,6 +5331,36 @@
     font-size: var(--text-2xs);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* A new rig's name, then its two actions on the field's baseline. */
+  .new-rig,
+  .panel-size-entry {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    max-width: var(--prose-measure);
+  }
+  .new-rig > :global(.field),
+  .panel-size-entry > :global(.field) {
+    flex: 1 1 220px;
+  }
+  /* Level with the input, below the field's label. */
+  .new-rig-actions,
+  .panel-size-actions {
+    display: flex;
+    gap: var(--space-2);
+    padding-top: calc(var(--lh-label) + var(--space-1));
+  }
+  .panel-size-line {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
   }
 
   /* How the display is sized, in one sentence above the numbers. */

@@ -572,9 +572,9 @@ test('the prominent calibrate action re-measures the applied rig instead of star
   // It names the rig it will change. Pressing the most prominent button on the
   // panel used to mint "Desk hood 2" and leave the applied rig untouched.
   await expect(page.getByRole('button', { name: 'Re-calibrate Desk hood…' })).toBeVisible();
-  // Measuring a second arrangement stays reachable — one panel legitimately
+  // Making a second arrangement stays reachable — one panel legitimately
   // holds several rigs, so this must not simply replace the old behaviour.
-  await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New rig…' })).toBeVisible();
 
   // The LABEL is not the fix; where the button goes is. Rewiring this back to
   // calibrate() would restore the original defect with the copy still correct,
@@ -585,18 +585,160 @@ test('the prominent calibrate action re-measures the applied rig instead of star
   await expect(page.getByLabel('Rig name')).toHaveValue('Desk hood');
 });
 
-test('measuring another rig opens the wizard on a new name, not the applied one', async ({ page }) => {
+/** The last `update_settings` patch that carried the optical section. */
+async function lastOpticalWrite(
+  page: Page,
+): Promise<{ profiles: Record<string, Record<string, unknown>>; activeRig: Record<string, string> }> {
+  return await page.evaluate(() => {
+    const patch = window.__E2E__.calls
+      .filter((c) => c.command === 'update_settings')
+      .map((c) => (c.args as { patch?: Record<string, Record<string, unknown>> }).patch ?? {})
+      .filter((p) => p['optical']?.['profiles'] !== undefined)
+      .at(-1);
+    return patch!['optical'] as never;
+  });
+}
+
+/** The rig list's choice for a rig, or for Automatic. */
+function rigChoice(page: Page, name: string) {
+  return page.locator('.rig-list .rig-choose', {
+    has: page.locator('.rig-name', { hasText: new RegExp(`^${name}$`) }),
+  });
+}
+
+test('a new rig starts from the rig in force, under a name of its own, and is chosen (#234)', async ({
+  page,
+}) => {
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: true });
   await page.goto('/control.html');
   await openSettingsSection(page, 'Prompter display and rigs');
 
-  // The other half of the same rule: the store keys on (panel, name), so this
-  // path must NOT reuse "Desk hood" — that would silently replace the
-  // measurements of an arrangement somebody believes is saved.
-  await page.getByRole('button', { name: 'Measure another rig…' }).click();
-  await page.getByRole('button', { name: 'Next' }).click();
-  await expect(page.getByLabel('Rig name')).not.toHaveValue('Desk hood');
+  await page.getByRole('button', { name: 'New rig…' }).click();
+  const name = page.getByLabel('Rig name');
+  // The store keys on (panel, name): reusing "Desk hood" would replace it.
+  await expect(name).toHaveValue('Desk hood 2');
+
+  // A name a list could not tell apart from the stored rig is refused.
+  await name.fill('desk hood');
+  await page.getByRole('button', { name: 'Create rig' }).click();
+  await expect(page.getByText('This display already has a rig with that name.')).toBeVisible();
+
+  await name.fill('Standing');
+  await page.getByRole('button', { name: 'Create rig' }).click();
+  await expect(rigChoice(page, 'Standing')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rigChoice(page, 'Desk hood')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Re-calibrate Standing…' })).toBeVisible();
+
+  // A copy, ruler scale and distance included; the original is untouched.
+  const fp = encodeURIComponent('dsp-e2e-prompter');
+  await expect.poll(async () => (await lastOpticalWrite(page)).activeRig['dsp-e2e-prompter']).toBe('Standing');
+  const written = await lastOpticalWrite(page);
+  expect(written.profiles[`${fp}::Standing`]).toMatchObject({
+    rigName: 'Standing',
+    scale: { mmPerCssPx: 0.25, source: 'ruler' },
+    viewingDistanceMm: 1200,
+  });
+  expect(written.profiles[`${fp}::${encodeURIComponent('Desk hood')}`]).toMatchObject({
+    rigName: 'Desk hood',
+    scale: { mmPerCssPx: 0.25, source: 'ruler' },
+  });
+});
+
+test('Automatic stops using a rig without deleting it, and the rig can be chosen again (#234)', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await seedAppliedRig(page, { scale: true });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Prompter display and rigs');
+
+  await expect(rigChoice(page, 'Automatic')).toHaveAttribute('aria-pressed', 'false');
+  await rigChoice(page, 'Automatic').click();
+  await expect(rigChoice(page, 'Automatic')).toHaveAttribute('aria-pressed', 'true');
+  // Still listed, just not in force.
+  await expect(rigChoice(page, 'Desk hood')).toHaveAttribute('aria-pressed', 'false');
+  // This panel reports no size, so automatic means the flat fallback.
+  await expect(page.getByText('Using the 64 px fallback.')).toBeVisible();
+
+  await expect.poll(async () => (await lastOpticalWrite(page)).activeRig['dsp-e2e-prompter']).toBeUndefined();
+  const written = await lastOpticalWrite(page);
+  expect(Object.keys(written.profiles)).toContain(
+    `${encodeURIComponent('dsp-e2e-prompter')}::${encodeURIComponent('Desk hood')}`,
+  );
+
+  await rigChoice(page, 'Desk hood').click();
+  await expect(rigChoice(page, 'Desk hood')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Re-calibrate Desk hood…' })).toBeVisible();
+});
+
+test('a panel nobody can size takes a typed diagonal and is then sized by distance (#234)', async ({
+  page,
+}) => {
+  // The shim's second panel is an unnamed 1920x1080 that reports no size.
+  await installTauriShim(page, { welcomed: true });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Prompter display and rigs');
+
+  await expect(page.getByText('Using the 64 px fallback.')).toBeVisible();
+  await expect(page.getByText(/until you calibrate it/)).toHaveCount(0);
+  // Not iPad-shaped, so no Sidecar advice.
+  await expect(page.getByText(/over Sidecar/)).toHaveCount(0);
+
+  const diagonal = page.getByLabel('Panel diagonal (inches)');
+  await diagonal.fill('2400');
+  await page.getByRole('button', { name: 'Use diagonal' }).click();
+  await expect(page.getByText('That is not a diagonal Speaking Glass can use. Type the size in inches.')).toBeVisible();
+
+  await diagonal.fill('24');
+  await page.getByRole('button', { name: 'Use diagonal' }).click();
+
+  // The fallback is gone, and the panel names the rig the next take runs on.
+  await expect(page.getByText('Using the 64 px fallback.')).toHaveCount(0);
+  await expect(page.getByText('24 inches, as typed.')).toBeVisible();
+  await expect(page.locator('.sizing-summary')).toContainText(/the “.+” rig, \d+ px/);
+
+  await expect.poll(async () => Object.keys((await lastOpticalWrite(page)).activeRig)).toContain('dsp-e2e-prompter');
+  const written = await lastOpticalWrite(page);
+  const rigName = written.activeRig['dsp-e2e-prompter']!;
+  const profile = written.profiles[
+    `${encodeURIComponent('dsp-e2e-prompter')}::${encodeURIComponent(rigName)}`
+  ] as { scale: { source: string; diagonalMm: number; mmPerCssPx: number }; viewingDistanceMm: number };
+  expect(profile.scale.source).toBe('diagonal');
+  expect(profile.scale.diagonalMm).toBeCloseTo(24 * 25.4, 6);
+  expect(profile.scale.mmPerCssPx).toBeCloseTo((24 * 25.4) / Math.hypot(1920, 1080), 9);
+  // A scale alone sizes nothing; the starting distance comes with it.
+  expect(profile.viewingDistanceMm).toBe(Math.round(24 * 25.4 * 4.5));
+});
+
+test('a sized panel offers its size for correction behind a quieter link (#234)', async ({ page }) => {
+  // A 1024x600 grid is the 9-inch Elgato, which the hardware table sizes.
+  await installTauriShim(page, { welcomed: true, prompterPanel: { width: 1024, height: 600 } });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Prompter display and rigs');
+
+  await expect(page.getByText('9 inches, the panel model’s size.')).toBeVisible();
+  await expect(page.getByLabel('Panel diagonal (inches)')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Correct size…' }).click();
+  const diagonal = page.getByLabel('Panel diagonal (inches)');
+  await expect(diagonal).toHaveValue('9');
+  await diagonal.fill('10.1');
+  await page.getByRole('button', { name: 'Use diagonal' }).click();
+  await expect(page.getByText('10.1 inches, as typed.')).toBeVisible();
+});
+
+test('an iPad gets the Sidecar advice beside its size (#234)', async ({ page }) => {
+  await installTauriShim(page, {
+    welcomed: true,
+    prompterPanel: { width: 1194, height: 834, name: 'Studio iPad Pro' },
+  });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Prompter display and rigs');
+
+  // Recognised by name and never sized, so it asks for the diagonal.
+  await expect(page.getByLabel('Panel diagonal (inches)')).toBeVisible();
+  await expect(page.getByText(/On an iPad over Sidecar, set it to extend the desktop/)).toBeVisible();
 });
 
 /** The sentence under the Session mode choice, whatever it says. */
