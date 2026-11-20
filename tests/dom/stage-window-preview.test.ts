@@ -43,6 +43,7 @@ const { dispatchLocalStageEvent } = await import('../../src/stage/events');
 import type {
   StageEscapePayload,
   StageHydratedPayload,
+  StageReadyPayload,
   StageRenderDocument,
   StageSessionEnvelope,
   StageStatePayload,
@@ -166,15 +167,22 @@ describe('a Settings preview opened cold', () => {
   it('shows its first document from the replay and completes the handshake', async () => {
     const container = await mountColdPreview();
 
+    // Both handshake steps carry the envelope's generation and session: Rust
+    // checks each against the stage it has open and drops a mismatch.
+    const sent = previewEnvelope();
     const hydrated = emitted
       .filter(([name]) => name === STAGE_EVENT.hydrated)
       .map(([, payload]) => payload as StageHydratedPayload);
-    expect(hydrated.map((h) => h.stageGeneration)).toEqual([STAGE_GENERATION]);
+    expect(hydrated).toEqual([{ stageGeneration: sent.stageGeneration, sessionId: sent.sessionId }]);
 
     // `layout-ready` is what Rust turns into `stage://ready` for Settings.
-    await wait(420);
+    await vi.waitFor(() => expect(names()).toContain(STAGE_EVENT.layoutReady), { timeout: 3000 });
+    const ready = emitted.find(([name]) => name === STAGE_EVENT.layoutReady)?.[1] as StageReadyPayload;
+    expect(ready.stageGeneration).toBe(sent.stageGeneration);
+    expect(ready.sessionId).toBe(sent.sessionId);
+    expect(ready.hydrated).toBe(true);
+    expect(ready.layoutReady).toBe(true);
     await settle();
-    expect(names()).toContain(STAGE_EVENT.layoutReady);
     expect(container.textContent).toContain('Read this aloud');
     expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).toBe('ready');
   });

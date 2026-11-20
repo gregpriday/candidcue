@@ -430,12 +430,15 @@ describe('Clean Take against Diagnostic Take', () => {
     const { container, update } = await mountTake('clean');
     await settleLayout();
 
-    await update({ transcript: 'hello there' });
+    // Live, and hearing words: the state in which Diagnostic Take draws both.
+    await update({ alignment: snapshot(), transcript: 'hello there' });
+    expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).toBe('live');
     expect(container.querySelector('.transcript-tap')).toBeNull();
     expect(container.querySelector('.diagnostics')).toBeNull();
 
     // The replacement: a named fault, in the mirrored chip the presenter reads.
     await update({
+      alignment: snapshot(),
       transcript: 'hello there',
       voicePill: pillPayload({ reading: 'fault', label: 'No audio' }),
     });
@@ -456,12 +459,17 @@ describe('Clean Take against Diagnostic Take', () => {
     const { container, update } = await mountTake('clean');
     await settleLayout();
 
-    await update({ followPaused: true });
+    await update({ alignment: snapshot(), followPaused: true });
     const chip = container.querySelector('.hold-status');
     expect(chip?.getAttribute('data-visible'), 'a paused take must say so').toBe('true');
     expect(chip?.textContent).toContain('Following off');
 
+    // Following back on takes the notice back with it.
+    await update({ alignment: snapshot(), followPaused: false });
+    expect(container.querySelector('.hold-status')?.getAttribute('data-visible')).not.toBe('true');
+
     await update({
+      alignment: snapshot(),
       followPaused: false,
       voicePill: pillPayload({ reading: 'fault', levels: [0, 0], label: 'Not connected' }),
     });

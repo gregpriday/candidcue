@@ -184,10 +184,10 @@ describe('the voice pill on the stage', () => {
     const { container, rerender } = await mountStage(pillPayload());
     expect(pill(container)?.getAttribute('aria-label')).toBe('Listening');
 
-    await rerender(bridge(pillPayload({ reading: 'fault', label: 'No audio' })));
+    await rerender(bridge(pillPayload({ reading: 'fault', label: 'Not hearing you' })));
     await settle();
     expect(pill(container)?.dataset.reading).toBe('fault');
-    expect(container.querySelector('.voice-pill .label')?.textContent).toBe('No audio');
+    expect(container.querySelector('.voice-pill .label')?.textContent).toBe('Not hearing you');
   });
 
   it('fades rather than unmounts when control clears `visible`', async () => {
@@ -199,13 +199,15 @@ describe('the voice pill on the stage', () => {
      * unmounts it.
      */
     const { container, rerender } = await mountStage(pillPayload({ reading: 'confirmed' }));
-    expect(pill(container)?.dataset.visible).toBe('true');
+    const before = pill(container);
+    expect(before?.dataset.visible).toBe('true');
 
     await rerender(bridge(pillPayload({ reading: 'confirmed', visible: false })));
     await settle();
-    // Still mounted: a pill that was removed would pop back at full opacity in
-    // the corner of a script somebody is reading.
-    expect(pill(container), 'the pill fades, it is not removed').not.toBeNull();
+    // Still mounted, and the SAME node: a pill that was removed or remounted
+    // would pop back at full opacity in the corner of a script somebody is
+    // reading.
+    expect(pill(container), 'the pill fades, it is not removed').toBe(before);
     expect(pill(container)?.dataset.visible).toBe('false');
   });
 
@@ -218,5 +220,10 @@ describe('the voice pill on the stage', () => {
     await rerender(bridge(pillPayload(), true));
     await settle();
     expect(pill(container)).toBeNull();
+
+    // And it comes back when the glass does.
+    await rerender(bridge(pillPayload(), false));
+    await settle();
+    expect(pill(container)).not.toBeNull();
   });
 });

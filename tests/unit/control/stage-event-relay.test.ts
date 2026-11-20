@@ -115,6 +115,24 @@ describe('stage → control event relay (S1)', () => {
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.escapeRequested);
   });
 
+  it('the stage window no longer subscribes to the take-only events', () => {
+    const subscribed = new Set<string>();
+    for (const source of stageSources) {
+      for (const match of source.matchAll(/subscribeStageEvent(?:<[^>]*>)?\(\s*STAGE_EVENT\.(\w+)/g)) {
+        if (match[1]) subscribed.add(match[1]);
+      }
+    }
+    // A guard on the guard: the scan still finds the subscriptions that stay.
+    expect(subscribed).toContain('loadSession');
+    expect(subscribed).toContain('applyCommand');
+    for (const retired of ['heartbeat', 'transcriptTap', 'voicePill', 'liveSync']) {
+      expect(subscribed, `the stage still subscribes to ${retired}`).not.toContain(retired);
+    }
+    for (const source of stageSources) {
+      expect(source).not.toMatch(/STAGE_EVENT\.(heartbeat|heartbeatAck|syncRequest|liveSync|transcriptTap|voicePill|motionReport|layoutError|intent)\b/);
+    }
+  });
+
   it('the stage window no longer sends the reports nothing on the control side reads', () => {
     const emitted = keysEmittedByStage();
     for (const retired of ['motionReport', 'layoutError', 'intent', 'heartbeatAck', 'syncRequest']) {

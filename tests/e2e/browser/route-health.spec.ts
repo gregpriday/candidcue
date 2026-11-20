@@ -126,6 +126,11 @@ test('the stage and identify entries render and raise nothing', async ({ page })
   await page.goto('/stage.html');
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'handshake');
 
+  // The browser harness: the separate window's own entry, driven over the
+  // local bus with a document and alignment.
+  await page.goto('/stage.html?preview=1');
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'live');
+
   await page.goto('/identify.html?n=2&primary=1');
   await expect(page.locator('.identify .number')).toHaveText('2');
 

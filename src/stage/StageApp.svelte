@@ -63,7 +63,7 @@
     type StageAlignmentPayload,
     ALIGNMENT_RELOCATIONS,
   } from '../shared/contracts';
-  import { subscribeStageEvent, emitStageEvent, type Unsubscribe } from './events';
+  import { subscribeStageEvent, emitStageEvent, isTauri, type Unsubscribe } from './events';
   import {
     initialStageState,
     stageReducer,
@@ -1331,11 +1331,16 @@
             sessionId: envelope.sessionId,
           });
         }),
+        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         /*
-         * Alignment snapshots for this window. The browser harness feeds them
-         * over the local bus; under Tauri, Rust still publishes a take's
-         * snapshots to the stage label (until #491), and a Settings preview
-         * open beside a take rejects them on generation.
+         * Alignment snapshots, for the browser harness only: the synthetic
+         * driver and the recorded-speech replay feed them over the local bus.
+         *
+         * Not under Tauri. Snapshots exist only during a take, and a take's
+         * stage is embedded and gets them through the bridge. Rust still
+         * publishes them to the stage label until #491, and a Settings preview
+         * open beside a take would only reject each one on session generation
+         * and count it as dropped in its diagnostics.
          *
          * They reach the motion engine directly rather than through the
          * reducer: the engine's own receiver is the gate that validates and
@@ -1343,11 +1348,14 @@
          * Svelte update between the presenter's voice and the glass. The
          * reducer gets a copy for the status readout only.
          */
-        subscribeStageEvent<StageAlignmentPayload>(
-          STAGE_EVENT.alignmentSnapshot,
-          applyAlignment,
-        ),
-        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
+        ...(isTauri
+          ? []
+          : [
+              subscribeStageEvent<StageAlignmentPayload>(
+                STAGE_EVENT.alignmentSnapshot,
+                applyAlignment,
+              ),
+            ]),
         ]);
         if (disposed) {
           subs.forEach((u) => u());
@@ -2746,7 +2754,9 @@
         readout={!app.blanked}
         revealed={dockVisible}
         {followPaused}
-        onfollowtoggle={voiceInput ? () => sendIntent({ kind: 'toggle_follow' }) : undefined}
+        onfollowtoggle={embedded && voiceInput
+          ? () => sendIntent({ kind: 'toggle_follow' })
+          : undefined}
         presentationMode={embedded?.presentationMode ?? 'prompter'}
         onpresentationtoggle={embedded?.onpresentationtoggle}
         practice={embedded?.practice ?? false}
