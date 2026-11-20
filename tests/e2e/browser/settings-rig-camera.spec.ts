@@ -42,7 +42,7 @@ const WIZARD_RIG = {
   completedSteps: ['hardware', 'distance', 'safe-area', 'lens'],
 };
 
-async function seedWizardRig(page: Page): Promise<void> {
+async function seedWizardRig(page: Page, patch: Record<string, unknown> = {}): Promise<void> {
   await page.addInitScript(
     ([key, profile, fp, name]) => {
       localStorage.setItem(
@@ -50,7 +50,7 @@ async function seedWizardRig(page: Page): Promise<void> {
         JSON.stringify({ optical: { profiles: { [key]: profile }, activeRig: { [fp]: name } } }),
       );
     },
-    [RIG_KEY, WIZARD_RIG, PANEL, RIG_NAME] as const,
+    [RIG_KEY, { ...WIZARD_RIG, ...patch }, PANEL, RIG_NAME] as const,
   );
 }
 
@@ -103,6 +103,16 @@ test('a wizard rig opens showing its stored placement, lens and insets', async (
   await expect(page.getByRole('slider', { name: 'Inset from the bottom' })).toHaveValue('12');
   await expect(page.getByRole('slider', { name: 'Inset from the left' })).toHaveValue('5');
   await expect(page.getByRole('slider', { name: 'Inset from the right' })).toHaveValue('3');
+});
+
+test('a stored camera off the glass opens as that placement, with no Down', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await seedWizardRig(page, { lensPlacement: 'below' });
+  await openPrompterDisplay(page);
+
+  await expect(page.getByRole('combobox', { name: 'Where the camera is' })).toHaveValue('below');
+  await expect(page.getByRole('slider', { name: 'Camera across' })).toHaveValue('40');
+  await expect(page.getByRole('slider', { name: 'Lens down' })).toHaveCount(0);
 });
 
 test('each value round-trips, and an edit leaves everything else the wizard stored', async ({
@@ -164,16 +174,26 @@ test('Down is offered only for a camera behind the glass, and Across names what 
   await expect(page.getByRole('slider', { name: 'Lens down' })).toHaveCount(0);
   await expect(page.getByRole('slider', { name: 'Camera across' })).toHaveValue('40');
 
+  await placement.selectOption('below');
+  await expect(page.getByRole('slider', { name: 'Lens down' })).toHaveCount(0);
+
   await placement.selectOption('none');
+  await expect(page.getByRole('slider', { name: 'Lens down' })).toHaveCount(0);
   await expect(page.getByRole('slider', { name: 'Column centre' })).toHaveValue('40');
+
+  await placement.selectOption('in-panel');
+  await expect(page.getByRole('slider', { name: 'Lens down' })).toHaveValue('30');
 
   // The insets do not depend on where the camera is.
   await expect(page.getByRole('slider', { name: 'Inset from the top' })).toHaveValue('8');
 });
 
 test('on a panel running automatically, the first change stores a rig for it', async ({ page }) => {
-  await installTauriShim(page, { welcomed: true });
+  // The 9-inch Elgato's grid, which discovery sizes from the hardware table —
+  // so this is a panel genuinely running automatically, not the flat fallback.
+  await installTauriShim(page, { welcomed: true, prompterPanel: { width: 1024, height: 600 } });
   await openPrompterDisplay(page);
+  await expect(page.locator('strong', { hasText: /^Sized automatically$/ })).toBeVisible();
 
   const before = await writtenRig(page);
   expect(before).toBeNull();
@@ -182,6 +202,10 @@ test('on a panel running automatically, the first change stores a rig for it', a
   await expect
     .poll(async () => (await writtenRig(page))?.['safeArea'])
     .toEqual({ top: 0, right: 0, bottom: 0, left: 0.06 });
+  // The discovered sizing is what got stored, with the inset on top of it.
+  const stored = (await writtenRig(page))!;
+  expect(stored['scale']).not.toBeNull();
+  expect(stored['viewingDistanceMm']).not.toBeNull();
 
   const writes = await opticalWrites(page);
   const last = writes.at(-1)!;
@@ -220,6 +244,11 @@ test('the preview is beside the controls, marks the rig and follows each change'
       lens: WIZARD_RIG.lens,
       lensPlacement: 'in-panel',
     });
+
+  await page.getByRole('slider', { name: 'Lens across' }).fill('70');
+  await expect
+    .poll(async () => ((await settingsDirectives(page)).at(-1)?.['rigMarks'] as { lens?: unknown })?.lens)
+    .toEqual({ x: 0.7, y: WIZARD_RIG.lens.y });
 
   await page.getByRole('combobox', { name: 'Where the camera is' }).selectOption('above');
   await expect
@@ -266,6 +295,31 @@ test('one preview between Prompter display and Teleprompter, closed by any other
   // Anywhere else takes it down.
   await gotoSection(page, 'General');
   await expect.poll(closes).toBe(closedBefore + 1);
+});
+
+test('choosing another display while the preview is opening closes it when it lands', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await seedWizardRig(page);
+  await openPrompterDisplay(page);
+
+  await page.evaluate(() => window.__E2E__.setHeld('open_stage', true));
+  await page.getByRole('button', { name: 'Show on teleprompter' }).click();
+  await page
+    .locator('.monitor-tile', {
+      has: page.locator('.monitor-name', { hasText: /^Built-in Display$/ }),
+    })
+    .click();
+  await page.evaluate(() => window.__E2E__.setHeld('open_stage', false));
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'close_stage').length),
+    )
+    .toBeGreaterThan(0);
+  await expect(page.getByRole('button', { name: 'Show on teleprompter' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop preview' })).toHaveCount(0);
 });
 
 test('choosing another display closes the preview on the old one', async ({ page }) => {

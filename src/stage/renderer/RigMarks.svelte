@@ -52,7 +52,13 @@
    */
   const lensOnPanel = $derived({
     x: edges.left + clampUnit(marks.lens?.x, 0.5) * Math.max(0, 1 - edges.left - edges.right),
-    y: edges.top + clampUnit(marks.lens?.y, 0.5) * Math.max(0, 1 - edges.top - edges.bottom),
+    // 10–90% of the safe height: the resolver's own bound on the band an
+    // in-panel lens places, and the wizard's Down slider. A stored value
+    // outside it would otherwise put the crosshair where the band cannot go.
+    y:
+      edges.top +
+      Math.min(0.9, Math.max(0.1, clampUnit(marks.lens?.y, 0.5))) *
+        Math.max(0, 1 - edges.top - edges.bottom),
   });
 
   const placement = $derived(marks.lensPlacement);
@@ -81,11 +87,15 @@
     <!-- A camera off the glass cannot be lined up inside it, but Across still
          centres the column under it, so that is what is marked: a pointer on
          the edge the camera is beyond. -->
+    <!-- On the frame's edge rather than the panel's, so a hood that hides the
+         outer edge cannot hide the pointer with it. -->
     <div
       class="rig-lens-edge"
       class:above={placement === 'above'}
       class:below={placement === 'below'}
       style:left="{lensOnPanel.x * 100}%"
+      style:top={placement === 'above' ? `${edges.top * 100}%` : undefined}
+      style:bottom={placement === 'below' ? `${edges.bottom * 100}%` : undefined}
     ></div>
   {/if}
 </div>
@@ -155,12 +165,10 @@
   }
 
   .rig-lens-edge.above {
-    top: 0;
     border-bottom: 24px solid #ffffff;
   }
 
   .rig-lens-edge.below {
-    bottom: 0;
     border-top: 24px solid #ffffff;
   }
 </style>

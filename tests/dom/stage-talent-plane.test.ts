@@ -637,12 +637,13 @@ describe("the rig preview's marks", () => {
       settings: settingsWith({
         ...HOOD,
         safeArea: { top: 0, right: 0, bottom: 0, left: 0.3 },
-        lens: { x: 0, y: 0.5 },
+        lens: { x: 0.5, y: 0.5 },
       }) as never,
     });
     await settle();
     expect(percent(container.querySelector('.rig-frame'), 'left')).toBeCloseTo(30);
-    expect(percent(container.querySelector('.rig-lens'), 'left')).toBeCloseTo(30);
+    // Half of the 70% left inside the frame, past its 30% edge.
+    expect(percent(container.querySelector('.rig-lens'), 'left')).toBeCloseTo(65);
     expect(percent(container.querySelector('.rig-lens'), 'top')).toBeCloseTo(50);
 
     // Teleprompter's preview sends settings without marks.
@@ -659,10 +660,14 @@ describe("the rig preview's marks", () => {
     const edge = container.querySelector('.rig-lens-edge');
     expect(edge?.classList.contains('above')).toBe(true);
     expect(percent(edge, 'left')).toBeCloseTo((0.06 + 0.5 * 0.9) * 100);
+    // On the frame's edge, so the hood that set the inset cannot hide it.
+    expect(percent(edge, 'top')).toBeCloseTo(10);
 
     directive({ kind: 'settings', settings: settingsWith({ ...HOOD, lensPlacement: 'below' }) as never });
     await settle();
-    expect(container.querySelector('.rig-lens-edge')?.classList.contains('below')).toBe(true);
+    const below = container.querySelector('.rig-lens-edge');
+    expect(below?.classList.contains('below')).toBe(true);
+    expect(percent(below, 'bottom')).toBeCloseTo(20);
 
     directive({ kind: 'settings', settings: settingsWith({ ...HOOD, lensPlacement: 'none' }) as never });
     await settle();
@@ -687,12 +692,40 @@ describe("the rig preview's marks", () => {
     expect(percent(frame, 'bottom')).toBeCloseTo(0);
   });
 
-  it('gives way to a calibration card', async () => {
+  it("keeps the lens inside the band's own 10–90% of the frame", async () => {
+    const container = await mountStage();
+    directive({ kind: 'settings', settings: settingsWith({ ...HOOD, lens: { x: 1.4, y: 0.02 } }) as never });
+    await settle();
+    const lens = container.querySelector('.rig-lens');
+    // The resolver never puts the band above 10% of the safe height, so the
+    // mark must not claim the camera is there either.
+    expect(percent(lens, 'top')).toBeCloseTo((0.1 + 0.1 * 0.7) * 100);
+    expect(percent(lens, 'left')).toBeCloseTo((0.06 + 1 * 0.9) * 100);
+  });
+
+  it('goes dark with the stage when it is blanked', async () => {
     const container = await mountStage();
     directive({ kind: 'settings', settings: settingsWith(HOOD) as never });
+    await settle();
+    expect(container.querySelector('.rig-marks')).not.toBeNull();
+    directive({ kind: 'blank', blanked: true });
+    await settle();
+    expect(container.querySelector('.rig-marks')).toBeNull();
+  });
+
+  it('gives way to a calibration card, and comes back after it', async () => {
+    const container = await mountStage();
+    directive({ kind: 'settings', settings: settingsWith(HOOD) as never });
+    await settle();
+    expect(container.querySelector('.rig-marks')).not.toBeNull();
+
     directive({ kind: 'calibration', active: true, mode: 'safe-area', safeArea: HOOD.safeArea });
     await settle();
     expect(container.querySelector('.calibration-card')).not.toBeNull();
     expect(container.querySelector('.rig-marks')).toBeNull();
+
+    directive({ kind: 'calibration', active: false });
+    await settle();
+    expect(container.querySelector('.rig-marks')).not.toBeNull();
   });
 });

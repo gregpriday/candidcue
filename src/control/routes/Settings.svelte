@@ -787,24 +787,6 @@
   let stagePreviewError = $state<string | null>(null);
 
   /**
-   * The appearance the preview should be showing, from the same function a take
-   * uses. Deriving it — rather than assembling one for the preview — is what
-   * makes the window trustworthy: there is no arrangement of settings that can
-   * look one way here and another way when the presenter hits Present.
-   *
-   * With one exception, and it is the glass: the preview fills the stage
-   * display, so it is never drawn on a reading window's paper — see
-   * `stagePreviewSettingsFromSettings`. In Prompter display it is that
-   * section's rig, as a prompter, with its frame and camera marked — see
-   * `rigPreviewSettingsFromSettings`.
-   */
-  const previewStageSettings = $derived(
-    section === 'stage'
-      ? rigPreviewSettingsFromSettings($settings, effectiveDisplay, rig)
-      : stagePreviewSettingsFromSettings($settings, effectiveDisplay),
-  );
-
-  /**
    * Push every change straight to the glass.
    *
    * The point of the feature is dragging a slider and watching the band move,
@@ -1016,7 +998,16 @@
   $effect(() => {
     const fingerprint = effectiveDisplay?.fingerprint ?? null;
     untrack(() => {
-      if (previewTarget !== null && previewTarget !== fingerprint) abandonStagePreview();
+      /*
+       * Only a DIFFERENT panel closes it. No panel at all is what a failed
+       * display read leaves (`displays` is emptied), and moving between the two
+       * sections re-reads the list — so treating that as a change would take a
+       * healthy preview down on a transient error. A panel genuinely unplugged
+       * shows up as a successful list choosing another one.
+       */
+      if (fingerprint !== null && previewTarget !== null && previewTarget !== fingerprint) {
+        abandonStagePreview();
+      }
     });
   });
 
@@ -1336,6 +1327,25 @@
       readingCue: $settings.teleprompter.readingCue,
       rigName: unusedRigName(discovered.profile.rigName),
     },
+  );
+
+  /**
+   * The appearance the preview should be showing, from the same function a take
+   * uses. Deriving it — rather than assembling one for the preview — is what
+   * makes the window trustworthy: there is no arrangement of settings that can
+   * look one way here and another way when the presenter hits Present.
+   *
+   * With one exception, and it is the glass: the preview fills the stage
+   * display, so it is never drawn on a reading window's paper — see
+   * `stagePreviewSettingsFromSettings`. In Prompter display it is that
+   * section's rig, as a prompter, with its frame and camera marked — see
+   * `rigPreviewSettingsFromSettings`. (Declared here, after `rig`, which that
+   * composition reads.)
+   */
+  const previewStageSettings = $derived(
+    section === 'stage'
+      ? rigPreviewSettingsFromSettings($settings, effectiveDisplay, rig)
+      : stagePreviewSettingsFromSettings($settings, effectiveDisplay),
   );
 
   /**
@@ -2661,7 +2671,7 @@
   <div class="preview-row" data-search-row>
     <Button
       variant={stagePreview ? 'default' : 'primary'}
-      disabled={stagePreviewBusy || displays.length === 0}
+      disabled={stagePreviewBusy || stageTesting || displays.length === 0}
       onclick={() => void toggleStagePreview()}
     >
       {stagePreview ? 'Stop preview' : 'Show on teleprompter'}
@@ -3854,7 +3864,7 @@
               {#if rig.lensPlacement === 'in-panel'}
                 <Slider
                   label="Lens down"
-                  description="Also where the reading band sits — your eyeline for the whole take."
+                  description="The reading band follows it — your eyeline for the whole take — unless the band is placed by hand under Advanced."
                   value={Math.round(rig.lens.y * 100)}
                   min={10}
                   max={90}
