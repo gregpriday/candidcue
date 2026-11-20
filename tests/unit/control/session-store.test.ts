@@ -7,7 +7,6 @@ import {
   liveStatusLabel,
   moveSentences,
   pauseListening,
-  restartParagraph,
   resumeSession,
   session,
   startLiveSession,
@@ -133,16 +132,15 @@ describe('live session store', () => {
     expect(get(session).elapsedSeconds).toBeGreaterThanOrEqual(64);
   });
 
-  it('counts manual moves and retakes for the summary', () => {
+  it('counts manual moves for the summary', () => {
     start();
     startPrompting();
     moveSentences(1);
     moveSentences(-1);
-    restartParagraph();
     vi.advanceTimersByTime(60_000);
 
     const summary = stopSession();
-    expect(summary.retakes).toBe(1);
+    expect(summary.manualJumps).toBe(2);
     expect(summary.durationSeconds).toBeGreaterThanOrEqual(59);
 
     const s = get(session);

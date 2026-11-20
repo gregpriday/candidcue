@@ -2,26 +2,23 @@
   The take route. While a take is active it renders the production stage in
   this window (`StageApp`, through its `embedded` prop), with the take-controls
   drawer and the appearance panel over it; a take ends by leaving for the
-  editor, where App's `SessionSummary` shows the report. The `{:else}` arm is
-  the older operator console in the dark studio theme (status bar, outline /
-  stage preview / diagnostics regions, bottom transport), on screen only when
-  this route is up with no take active.
+  editor, where App's `SessionSummary` shows the report. With no take active it
+  renders nothing but the (inert) drawer: the only way here is `startTake`,
+  after the session is already up, and the moments this route outlives its
+  take — End Take's covered navigation, a guarded navigation that is refused,
+  the quit handshake — show nothing in the stage's place (#239).
 -->
 <script lang="ts">
   import { tick } from 'svelte';
   import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
   import Button from '../components/Button.svelte';
-  import Dialog from '../components/Dialog.svelte';
   import FollowControls from '../components/FollowControls.svelte';
   import FollowDiagnostics from '../components/FollowDiagnostics.svelte';
   import FollowStatePanel from '../components/FollowStatePanel.svelte';
-  import { sessionModeLabel } from '../../shared/take-vocabulary';
   import { isAutomaticProfile } from '../../shared/optical-discovery';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
-  import OverflowMenu from '../components/OverflowMenu.svelte';
   import StageAppearanceSheet from '../components/StageAppearanceSheet.svelte';
-  import Slider from '../components/Slider.svelte';
   import {
     readStageAppearance,
     stageAppearanceEquals,
@@ -35,13 +32,10 @@
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
   import { onRouteCommand } from '../stores/command-bus';
-  import Disclosure from '../components/Disclosure.svelte';
   import { formatAccelerator } from '../lib/commands';
   import { detectPlatform } from '../lib/platform';
   import { osCopy } from '../lib/os-copy';
-  import PaneDivider from '../components/PaneDivider.svelte';
-  import { PANE_LIMITS, setPaneWidth, workspace } from '../stores/workspace';
-  import { resolveLandedDisplay, startTake, takeStarting } from '../lib/start-take';
+  import { resolveLandedDisplay, takeStarting } from '../lib/start-take';
   import {
     awaitViewportSettled,
     exitPresentation,
@@ -73,13 +67,8 @@ import { onShortcut } from '../lib/shortcuts';
     goToToken,
     acceptSuggestedPlace,
     hardPause,
-    liveStatusLabel,
     moveSentences,
-    pauseListening,
-    restartParagraph,
-    resumeSession,
     session,
-    startPrompting,
     stopSession,
     switchMicrophone,
     retryMicrophone,
@@ -114,13 +103,9 @@ import { onShortcut } from '../lib/shortcuts';
   }
   let { sessionId, scriptId }: Props = $props();
 
-  const stageFontSize = $derived($session.stageFontSizePx);
   const connection = $derived(connectionPill($session.connection));
 
   const snapshot = $derived($session.snapshot);
-  // From the glossary, so the pill names the take what the controls that drive
-  // it are called. "Fixed" and "Roll at pace" were the same mode.
-  const modeLabel = $derived(sessionModeLabel($session.mode));
 
   /**
    * Is there a voice pipeline and an open microphone to report on at all?
@@ -128,7 +113,7 @@ import { onShortcut } from '../lib/shortcuts';
    * `connection` and `micState` are optimistic defaults ('connected' / 'live')
    * that only a running voice pipeline ever corrects. In a manual or
    * fixed-speed take nothing ever constructs that pipeline, so the pills sat on
-   * their defaults and the status bar cheerfully read "Connected · Mic live"
+   * their defaults and the status lights cheerfully read "Connected · Mic live"
    * over a take with no connection and no microphone — and kept reading it
    * after the session ended. The operator uses those two pills to decide
    * whether a problem is their microphone or their script, so a comforting
@@ -158,9 +143,8 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * Offer a swap when there is a voice pipeline to swap on and the INPUT is
    * what failed, or a fallback input was chosen for it. Read by the
-   * take-controls drawer, never only by the console arm: that arm renders only
-   * with no take active, which made the condition
-   * unsatisfiable. See the take-controls block further down.
+   * take-controls drawer, the only surface a running take has for it. See the
+   * take-controls block further down.
    */
   const micRecoveryOffered = $derived(
     hasVoiceTransport &&
@@ -274,22 +258,6 @@ import { onShortcut } from '../lib/shortcuts';
     }
   }
 
-  /**
-   * Toast placement (see ToastRegion). The transport is a fixed-height bar the
-   * toasts must never cover, and its height depends on its own controls, so it
-   * is measured rather than guessed. Published on the document element because
-   * the toast region is mounted at the app root, outside this route.
-   */
-  let transportHeightPx = $state(0);
-  $effect(() => {
-    const root = document.documentElement;
-    root.style.setProperty(
-      '--toast-safe-bottom',
-      `calc(${transportHeightPx}px + var(--space-6))`,
-    );
-    return () => root.style.removeProperty('--toast-safe-bottom');
-  });
-
   const flatOutline = $derived(flatten($session.outline));
 
   /** The last section starting at or before `token`; -1 ahead of the first. */
@@ -305,8 +273,8 @@ import { onShortcut } from '../lib/shortcuts';
   /*
    * The section a section jump is measured from (#284).
    *
-   * Not `currentSectionIndex`, which is what the tracking panel reports and so
-   * stays "none" until the take has a position. A take from the top publishes
+   * Not `currentSectionIndex`, which is what the drawer's follow panel reports
+   * and so stays "none" until the take has a position. A take from the top publishes
    * nothing until the voice locks or a key moves it, and measured from "none"
    * the first ⌥↓ asked for the FIRST section — the one already on the glass —
    * and went nowhere. Before any snapshot the take is where it opened, and the
@@ -319,27 +287,6 @@ import { onShortcut } from '../lib/shortcuts';
         ? sectionIndexAt($session.stageEnvelope.initialTokenIndex)
         : -1,
   );
-
-  const sentenceIndex = $derived(
-    snapshot
-      ? Math.max(0, $session.sentences.findIndex(
-          (s) =>
-            snapshot.confirmedToken >= s.startTokenIndex &&
-            snapshot.confirmedToken <= s.endTokenIndex,
-        ))
-      : $session.sentences.length > 0
-        ? 0
-        : -1,
-  );
-
-  const previewWindow = $derived.by(() => {
-    if ($session.sentences.length === 0 || sentenceIndex < 0) return [];
-    const start = Math.max(0, sentenceIndex - 2);
-    return $session.sentences.slice(start, sentenceIndex + 4).map((sentence, i) => ({
-      sentence,
-      offset: start + i - sentenceIndex,
-    }));
-  });
 
   const currentSectionTitle = $derived(
     currentSectionIndex >= 0 ? (flatOutline[currentSectionIndex]?.node.title ?? null) : null,
@@ -369,11 +316,11 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /**
-   * Outline navigation: an absolute move to the section's first sentence.
+   * Section navigation: an absolute move to the section's first sentence.
    *
    * It used to be a relative `moveSentences` whenever a cursor existed, with
-   * the distance counted from this screen's `sentenceIndex` — the sentence
-   * CONTAINING the cursor, or 0 when none does. The driver applies a relative
+   * the distance counted from the sentence CONTAINING the cursor, or 0 when
+   * none does. The driver applies a relative
    * move from its own index, the last sentence STARTING at or before the
    * cursor. A cursor between two sentences reads differently to each, and the
    * jump landed that many sentences away from the section. A section is a
@@ -405,7 +352,7 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * End the session, having asked first if the setting says to.
    *
-   * ONE VOCABULARY. It is "end" everywhere — this dialog, the transport and
+   * ONE VOCABULARY. It is "end" everywhere — this dialog, the drawer and
    * the stage's dock — and every path lands in `endTake` below. Three names
    * for one action read as three actions, and the one the presenter reaches
    * for at the end of a take is whichever they happen to see.
@@ -540,10 +487,9 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * IT ENDS ON THE EDITOR, not here. A finished take has exactly three things
    * anybody wants — the report, the script they just read, and another go — and
-   * this route's inactive state is none of them: it falls back to the operator
-   * console, whose transport offers to Start and End a session that has just
-   * ended. The summary itself is hosted by App, so it survives the navigation
-   * and opens over the editor. See
+   * this route's inactive state is none of them: it renders nothing in the
+   * stage's place. The summary itself is hosted by App, so it survives the
+   * navigation and opens over the editor. See
    * `leavePresentation` for why the route swap happens under the cover.
    */
   async function endTake(): Promise<void> {
@@ -1313,11 +1259,12 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * The panel belongs to the take that opened it.
    *
-   * This is component state and this component survives the end of a session —
-   * Live stays mounted for the summary, and "Present again" starts a fresh take
-   * inside it. A panel left open across that boundary remounts over the new
-   * take holding the OLD take's rollback snapshot, and an `appearanceOpen` left
-   * true suspends the new stage's keyboard until somebody opens and closes it.
+   * This is component state, and the session can end before this component
+   * unmounts: End Take stops it before navigating, the quit handshake stops it
+   * without navigating, and a refused navigation leaves Live mounted. A panel
+   * left open across that boundary would come back over the next take holding
+   * the OLD take's rollback snapshot, and an `appearanceOpen` left true would
+   * suspend the new stage's keyboard until somebody opened and closed it.
    */
   $effect(() => {
     if ($session.active) return;
@@ -1326,12 +1273,11 @@ import { onShortcut } from '../lib/shortcuts';
 
   /* ------------------------------------------------- the take controls
    *
-   * The console — the status bar, the tracking panel and its recovery
-   * actions, the microphone picker — sits in the `{:else}` arm, because
-   * single-window presentation gives the whole window to the stage, so none
-   * of it is on screen during a read. This layer is what a running take uses
-   * instead. `onInputDeviceLost` stays silent precisely BECAUSE the picker in
-   * here is the remedy.
+   * Single-window presentation gives the whole window to the stage, so the
+   * status readout, the follow panel with its recovery actions and the
+   * microphone picker have no other surface during a read. This layer is it.
+   * `onInputDeviceLost` stays silent precisely BECAUSE the picker in here is
+   * the remedy.
    *
    * ---------------------------------------------------------------------------
    * A SIBLING LAYER, NOT A RESTRUCTURED `{#if}`
@@ -1356,10 +1302,11 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * What is in here is what has nowhere else to go during a take:
    * the status readout, microphone recovery, and the following panel with its
-   * degraded-state actions. The transport is deliberately NOT duplicated — every
-   * one of its actions already has both a keyboard shortcut that fires during a
-   * take and a control on the stage's own dock, so a second copy would be a
-   * surface to keep in sync for no new capability.
+   * degraded-state actions. A transport is deliberately NOT added — every
+   * transport action already has both a keyboard shortcut that fires during a
+   * take and a control on the stage's own dock (End take aside, which is in the
+   * footer), so a second copy would be a surface to keep in sync for no new
+   * capability.
    *
    * (`takeControlsOpen`, `takeControlsTab` and `takeControlsPanel` are declared
    * at the top of this script, next to the microphone state.)
@@ -1615,10 +1562,10 @@ import { onShortcut } from '../lib/shortcuts';
   /**
    * The drawer belongs to the take, exactly as the appearance panel does.
    *
-   * Live survives the end of a session — it stays mounted for the summary, and
-   * "Present again" builds a fresh take inside it — so anything left open here
-   * would reappear over the next take, and a stale device list would offer the
-   * previous take's microphones as the cure for this one's.
+   * The session can end before Live unmounts (see the appearance panel's note
+   * above), so anything left open here could reappear over the next take, and
+   * a stale device list would offer the previous take's microphones as the
+   * cure for this one's.
    */
   $effect(() => {
     if ($session.active) return;
@@ -1669,13 +1616,7 @@ import { onShortcut } from '../lib/shortcuts';
 {/snippet}
 
 <!--
-  The three blocks below are rendered in TWO places — the `.live` console that
-  shows with no take active, and the take-controls drawer that shows during
-  one — so they are snippets rather than copies. Copies rot: a pill added to
-  one status bar and not the other reads as a pill that works sometimes.
--->
-<!--
-  The console's continuous health, as STATUS LIGHTS: a dot and a word for
+  The take's continuous health, as STATUS LIGHTS: a dot and a word for
   each, not pills. A capsule's SHAPE helps scanning only for the exceptional
   and the actionable; for adjacent always-present states every capsule shouts
   equally, so a genuine fault reads exactly like "Mic live".
@@ -1684,18 +1625,11 @@ import { onShortcut } from '../lib/shortcuts';
   ("Mic live", "Mic lost"), so the state survives a monochrome display and a
   colour-blind reader.
 -->
-{#snippet partStatus(stacked = false)}
+{#snippet partStatus()}
   <!--
     The part. Which piece of the script this take is recording, and whether its
-    end has been reached (by reading or by auto-scroll).
-
-    RENDERED IN TWO PLACES, and it had to be. Everything under
-    `{#if $session.active}` is the embedded stage — during a single-window take
-    this route IS the prompter — so the console status bar below it is only on
-    screen when no take is running. Put there alone, this said nothing during
-    the one period it describes. The take-controls drawer is the surface that
-    survives into a live take, and it is where the rest of the operator's
-    readouts already live: the clock, the session status, the pills.
+    end has been reached (by reading or by auto-scroll). In the take-controls
+    drawer, beside the operator's other readouts: the clock and the lights.
 
     The completed state is a QUIET one. It is not an alarm and it is not an
     instruction: nothing stops, and reading on past the boundary is a legitimate
@@ -1705,46 +1639,33 @@ import { onShortcut } from '../lib/shortcuts';
   -->
   {#if $session.part}
     <!--
-      `stacked` is the drawer's form: the ordinal and the name on their own
-      lines, the name wrapping. The drawer is a third of a prompter panel wide,
-      and on one line "Quarterly results f…" left the part unreadable and the
-      status beside it running into the close button.
+      Stacked: the ordinal and the name on their own lines, the name wrapping.
+      The drawer is a third of a prompter panel wide, and on one line
+      "Quarterly results f…" left the part unreadable and the status beside it
+      running into the close button.
     -->
-    {#if stacked}
-      <span
-        class="take-part stacked"
-        class:complete={$session.partComplete}
-        role="status"
-        aria-live="polite"
-      >
-        <span class="part-ordinal">
-          Part {$session.part.ordinal} of {$session.part.totalParts}
-          {#if $session.partComplete}<span class="part-done">· end reached</span>{/if}
-        </span>
-        <span class="part-label">{$session.part.label}</span>
+    <span
+      class="take-part stacked"
+      class:complete={$session.partComplete}
+      role="status"
+      aria-live="polite"
+    >
+      <span class="part-ordinal">
+        Part {$session.part.ordinal} of {$session.part.totalParts}
+        {#if $session.partComplete}<span class="part-done">· end reached</span>{/if}
       </span>
-    {:else}
-      <span class="take-part" class:complete={$session.partComplete} role="status" aria-live="polite">
-        Part {$session.part.ordinal} of {$session.part.totalParts} · {$session.part.label}
-        {#if $session.partComplete}<span class="part-done">— end reached</span>{/if}
-      </span>
-    {/if}
+      <span class="part-label">{$session.part.label}</span>
+    </span>
   {/if}
 {/snippet}
 
-{#snippet statusPills(withMode = true)}
+{#snippet statusPills()}
   <!--
-    The drawer leaves the mode out. In a voice take it read "Follow voice" — the
-    same words as the button that resumes following — beside a status saying
-    "Text held", so a light describing what the take was OPENED as read as a
-    claim about what the text was doing. The drawer's status line says that.
+    No mode light. In a voice take it read "Follow voice" — the same words as
+    the button that resumes following — beside a status saying "Text held", so
+    a light describing what the take was OPENED as read as a claim about what
+    the text was doing. The drawer's status line says that.
   -->
-  {#if withMode}
-    <span class="live-status">
-      <span class="status-dot accent" aria-hidden="true"></span>
-      {modeLabel}
-    </span>
-  {/if}
   <!--
     Only a voice take has a recogniser session and an open microphone to
     report. Anything else says so plainly instead of showing the
@@ -1804,24 +1725,24 @@ import { onShortcut } from '../lib/shortcuts';
   the recogniser session stays up, so the recovery is a picker right where
   the failure is reported.
 -->
-{#snippet micRecovery(stacked = false)}
+{#snippet micRecovery()}
   {#if micRecoveryOffered}
     <!--
-      `stacked` in the drawer: the picker on its own full-width line and the
-      two actions under it. Squeezed into one row at a third of a 1024px panel,
-      "Use this input" overflowed its own button and ran into Rescan.
+      Stacked: the picker on its own full-width line and the two actions under
+      it. Squeezed into one row at a third of a 1024px panel, "Use this input"
+      overflowed its own button and ran into Rescan.
     -->
-    <div class="mic-recovery" class:stacked>
-      {#if stacked && !$session.inputDeviceLost}
+    <div class="mic-recovery stacked">
+      {#if !$session.inputDeviceLost}
         <p class="lf-note">
           Speaking Glass is using a fallback input. Choose the microphone you meant to use.
         </p>
       {/if}
-      {#if stacked && micListing === 'failed'}
+      {#if micListing === 'failed'}
         <p class="lf-note listing">Could not list microphones. Choose Rescan to try again.</p>
-      {:else if stacked && micListing === 'done' && micInputs.length === 0}
+      {:else if micListing === 'done' && micInputs.length === 0}
         <p class="lf-note listing">No microphones found. Connect one, then choose Rescan.</p>
-      {:else if stacked && micListing === 'scanning' && micInputs.length === 0}
+      {:else if micListing === 'scanning' && micInputs.length === 0}
         <p class="lf-note listing">Looking for microphones…</p>
       {/if}
       <select
@@ -1889,7 +1810,7 @@ import { onShortcut } from '../lib/shortcuts';
 -->
 {#snippet takeRemedy()}
   {@render micAccessRecovery()}
-  {@render micRecovery(true)}
+  {@render micRecovery()}
   {#if voiceModelRefused}
     <div class="mic-access-actions">
       <Button size="sm" onclick={() => void openSettingsWindow('speech')}>
@@ -1960,8 +1881,8 @@ import { onShortcut } from '../lib/shortcuts';
         voiceInput: $session.mode === 'voice',
         /*
          * The part, for the stage's "what is running" label (#241): it
-         * was readable only in the console and the drawer, neither of which is
-         * on screen while reading. A label, and nothing the follow loop reads.
+         * was readable only in the drawer, which is not on screen while
+         * reading. A label, and nothing the follow loop reads.
          */
         part: $session.part,
         partComplete: $session.partComplete,
@@ -2002,326 +1923,6 @@ import { onShortcut } from '../lib/shortcuts';
   {:else}
     <div class="stage-preparing" class:paper={paperTake}>Preparing script…</div>
   {/if}
-{:else}
-<div class="live">
-  <!-- Top status bar -->
-  <header class="statusbar">
-    <div class="status-left">
-      <span class="live-dot" class:paused={$session.paused !== 'none' || !$session.prompting}></span>
-      <span class="script-title">{$session.scriptTitle}</span>
-      {@render partStatus()}
-      <span class="elapsed">{formatClock($session.elapsedSeconds)}</span>
-      <!-- Session status; the follow state itself lives in the Tracking panel. -->
-      <span class="session-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
-    </div>
-    <div class="status-right">
-      {@render statusPills()}
-      {@render micRecovery()}
-      <span class="display-name">{$session.displayLabel}</span>
-    </div>
-  </header>
-
-  <!-- Main three-region area -->
-  <div class="main">
-    <aside class="outline" aria-label="Sections" style="width: {$workspace.liveOutlineWidth}px">
-      <p class="region-label">Sections</p>
-      {#if flatOutline.length > 0}
-        <ul class="outline-list">
-          {#each flatOutline as entry, index (entry.node.id)}
-            <li>
-              <button
-                type="button"
-                class="outline-item"
-                class:current={index === currentSectionIndex}
-                style="padding-left: {10 + entry.depth * 12}px"
-                onclick={() => jumpToSection(entry.node)}
-              >
-                {entry.node.title}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="region-empty">No headings in this script.</p>
-      {/if}
-    </aside>
-    <PaneDivider
-      orientation="vertical"
-      side="leading"
-      label="Sections width"
-      pane="Sections"
-      value={$workspace.liveOutlineWidth}
-      min={PANE_LIMITS.liveOutline.min}
-      max={PANE_LIMITS.liveOutline.max}
-      defaultValue={PANE_LIMITS.liveOutline.default}
-      onresize={(w) => setPaneWidth('liveOutline', w)}
-    />
-
-    <section class="preview" aria-label="Stage preview">
-      {#if $session.stageBlanked}
-        <div class="blanked">
-          <Icon name="eye-off" size={22} />
-          <p>Stage blanked</p>
-        </div>
-      {:else if previewWindow.length > 0}
-        <div class="preview-text">
-          {#each previewWindow as entry (entry.sentence.id)}
-            <p
-              class="preview-sentence"
-              class:past={entry.offset < 0}
-              class:current={entry.offset === 0}
-            >
-              {entry.sentence.normalizedText}
-            </p>
-          {/each}
-        </div>
-      {:else}
-        <div class="preview-placeholder">
-          <p class="ph-title">Stage preview</p>
-          <!--
-            "Cursor at token 417" is gone. A token is the engine's own unit — a
-            measured span on the glass — and it is not a word index, not a
-            character offset and not convertible into either by anybody reading
-            this. It leaked an implementation detail into the one line here
-            addressed to the presenter, and said nothing they could use.
-          -->
-          <!--
-            "Where you are", not "the stage".
-
-            This said "the scaled stage view appears here", which is a claim
-            this panel does not honour: what it renders is a handful of
-            normalised sentences in workspace type, with none of the stage's
-            optics, geometry, mirroring or line breaking. A preview has to be
-            EXPLICIT about whether it is optically exact or only
-            representative, and the honest answer here is that it is neither —
-            it is a position readout.
-          -->
-          <p class="ph-note">
-            The lines around your place appear here once the script has compiled. This is a
-            position readout, not an optical preview of the glass.
-          </p>
-        </div>
-      {/if}
-    </section>
-
-    <!--
-      A real divider on both rails. An operator working a rig wants the
-      diagnostics wide while hunting a fault and narrow while reading; the
-      widths are theirs, and they are remembered.
-    -->
-    <PaneDivider
-      orientation="vertical"
-      side="trailing"
-      label="Tracking width"
-      pane="Tracking"
-      value={$workspace.diagnosticsWidth}
-      min={PANE_LIMITS.liveDiagnostics.min}
-      max={PANE_LIMITS.liveDiagnostics.max}
-      defaultValue={PANE_LIMITS.liveDiagnostics.default}
-      onresize={(w) => setPaneWidth('liveDiagnostics', w)}
-    />
-    <aside class="diagnostics" aria-label="Tracking" style="width: {$workspace.diagnosticsWidth}px">
-      <p class="region-label">Tracking</p>
-      <FollowStatePanel
-        follow={$smoothFollow}
-        sectionTitle={currentSectionTitle}
-        voiceInput={hasVoiceTransport}
-        micState={$session.micState}
-
-        inputDeviceLost={$session.inputDeviceLost}
-        microphoneRefused={$session.microphoneRefused}
-
-        heardAnything={$session.heardAnything}
-
-        heldByUser={$session.followPausedByUser}
-
-        rollingAtPace={$autoScrollLive.running}
-        onnoticeaction={handleNoticeAction}
-      />
-
-      <!--
-        The follow CONTROLS stay visible — they are things an operator reaches
-        for, not readings. The numbers behind them do not: raw alignment and
-        performance details sit behind a disclosure.
-      -->
-      <p class="region-label">Following</p>
-      <FollowControls follow={$smoothFollow} voiceInput={$session.mode === 'voice'} />
-
-      <Disclosure label="Follow diagnostics">
-        <FollowDiagnostics
-          follow={$smoothFollow}
-          developerMode={$settings.following.developerDiagnostics}
-        />
-      </Disclosure>
-
-      <!--
-        THE RAW TRANSCRIPT IS BEHIND A DISCLOSURE.
-
-        Default to a concise status summary, and put raw alignment, transcript
-        and performance detail behind disclosure. This is the raw recogniser
-        output — the most engineering-looking thing on the console — and open
-        by default it competes with the fault states above it.
-
-        It stays one click away rather than moving to a Diagnostic mode,
-        because it is the first thing anybody looks at when following goes
-        wrong: "is it hearing me at all" is answered here and nowhere else on
-        this pane.
-      -->
-      <Disclosure label="Raw transcript">
-        {#if $session.transcriptTail.length > 0}
-          <div class="transcript-tail">
-            {#each $session.transcriptTail as line, index (index)}
-              <p class="tail-line" class:latest={index === $session.transcriptTail.length - 1}>
-                {line}
-              </p>
-            {/each}
-          </div>
-        {:else}
-          <p class="region-empty">Speak and the latest transcript appears here.</p>
-        {/if}
-      </Disclosure>
-
-      <p class="region-label">Stage</p>
-      {@render stageFaultNotice()}
-      <div class="quick-controls">
-        <div class="font-row">
-          <IconButton
-            icon="chevron-down"
-            label="Decrease stage text"
-            onclick={() => adjustFontSize(-2)}
-          />
-          <span class="font-value">{stageFontSize} px</span>
-          <IconButton
-            icon="chevron-up"
-            label="Increase stage text"
-            onclick={() => adjustFontSize(2)}
-          />
-        </div>
-        <Button size="sm" onclick={() => toggleMirror()}>Mirror text</Button>
-      </div>
-
-      <!--
-        THE FIXED-SPEED SLIDER IS GONE FROM HERE, AND NOT BECAUSE IT STOPPED
-        MATTERING.
-
-        It was a disabled range input beside the words "not available yet". The
-        transport exists now — but this panel does not render during a take
-        (single-window presentation replaces the whole screen with the stage),
-        so a live control here would set a pace for a session that is over.
-        Its two real homes are Settings, where the saved default lives, and the
-        `[` / `]` keys, which are the only interface that exists at the moment
-        somebody actually needs to change it.
-      -->
-      <p class="region-empty">
-        Auto-scroll rolls the script at a set pace when your voice is not getting through.
-        Press <kbd>A</kbd> during a take to start it, <kbd>[</kbd> and <kbd>]</kbd> to change
-        the pace. Its starting speed is under Settings → Teleprompter.
-      </p>
-    </aside>
-  </div>
-
-  <!-- Bottom transport -->
-  <footer class="transport" bind:clientHeight={transportHeightPx}>
-    <div class="transport-left">
-      <!--
-        Transport controls with a key name it in their tooltip. During a take the
-        keys are the interface, so the tooltip is where somebody learns the key
-        they will actually use.
-
-        `transportKey` spells them for this platform through the same
-        `formatAccelerator` the menu and the Shortcuts dialog use, so a key
-        cannot be advertised here in a form the app does not answer.
-      -->
-      {#if !$session.prompting}
-        <Button
-          variant="primary"
-          title={`Start (${transportKey('Space')})`}
-          onclick={() => startPrompting()}
-        >
-          <Icon name="play" size={16} />
-          Start
-        </Button>
-      {:else if $session.paused === 'none'}
-        <div class="pause-split">
-          <Button title={`Pause (${transportKey('Space')})`} onclick={() => pauseListening()}>
-            <Icon name="pause" size={16} />
-            Pause
-          </Button>
-          <!--
-            Left-aligned, because this trigger lives at the LEFT end of the
-            transport. The default right alignment pins the popover's right edge
-            to the trigger, and this menu's one item is a long `nowrap` label — so
-            it extended roughly 320px leftwards from a trigger sitting about 145px
-            in, putting its opening words at a negative coordinate. That truncated
-            the only route to "Hard pause — mic off" in the app.
-          -->
-          <OverflowMenu
-            label="Pause options"
-            align="left"
-            items={[
-              {
-                label: 'Hard pause — mic off, resume by click only',
-                onselect: () => hardPause(),
-              },
-            ]}
-          />
-        </div>
-      {:else}
-        <Button
-          variant="primary"
-          title={`Resume (${transportKey('Space')})`}
-          onclick={() => resumeSession()}
-        >
-          <Icon name="play" size={16} />
-          Resume
-        </Button>
-      {/if}
-      <!--
-        End stays last in the left group, after the primary control and apart
-        from the secondary actions.
-      -->
-      <Button
-        variant="danger"
-        title={`End take (${transportKey('Mod+.')})`}
-        onclick={() => requestEndSession()}
-      >
-        <Icon name="stop" size={14} />
-        End take
-      </Button>
-    </div>
-
-    <div class="transport-center">
-      <IconButton
-        icon="chevron-left"
-        label={`Back one sentence (${transportKey('Alt+Left')})`}
-        onclick={() => moveSentences(-1)}
-      />
-      <IconButton
-        icon="chevron-right"
-        label={`Forward one sentence (${transportKey('Alt+Right')})`}
-        onclick={() => moveSentences(1)}
-      />
-      <IconButton icon="restore" label="Restart paragraph" onclick={() => restartParagraph()} />
-      <IconButton
-        icon="eye-off"
-        label={$session.stageBlanked ? 'Unblank stage' : 'Blank stage'}
-        active={$session.stageBlanked}
-        onclick={() => toggleBlankStage()}
-      />
-    </div>
-
-    <div class="transport-right">
-      <label class="voice-follow">
-        <input
-          type="checkbox"
-          checked={$session.voiceFollow}
-          onchange={() => toggleVoiceFollow()}
-        />
-        <span>Voice follow</span>
-      </label>
-    </div>
-  </footer>
-</div>
 {/if}
 
 <!--
@@ -2437,8 +2038,8 @@ import { onShortcut } from '../lib/shortcuts';
         </span>
       </div>
       <div class="tc-head-detail" inert={takeControlsRevealing}>
-        {@render partStatus(true)}
-        <div class="tc-lights">{@render statusPills(false)}</div>
+        {@render partStatus()}
+        <div class="tc-lights">{@render statusPills()}</div>
       </div>
     </header>
 
@@ -2478,8 +2079,8 @@ import { onShortcut } from '../lib/shortcuts';
 
       <!--
         "Why did it move?" and Copy diagnostics, HERE because this is the only
-        place a take can reach them. They used to live only in the console's
-        Tracking rail, which a take replaces with the stage — so the explanation
+        place a take can reach them. They used to live only in the old operator
+        console's Tracking rail, which a take never showed — so the explanation
         of an odd movement, and the export written for a bug report, were on a
         panel nobody could open while the movement was happening. Collapsed by
         its own disclosure; nothing about it is in the presenter's way.
@@ -2519,32 +2120,11 @@ import { onShortcut } from '../lib/shortcuts';
     color: #6d6961;
   }
 
-  .live {
-    flex: 1 1 auto;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-app);
-    color: var(--text-primary);
-  }
-
-  /* --- status bar --- */
-  .statusbar {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    padding: var(--space-3) var(--space-5);
-    background: var(--bg-chrome);
-    border-bottom: 1px solid var(--border);
-  }
   /*
    * A status light: a 7px dot and a word.
    *
-   * Deliberately quieter than the pill it replaces. Four of these sit together
-   * and none of them is news — they are the console's resting vital signs, and
+   * Deliberately quieter than the pill it replaces. Two of these sit together
+   * and neither is news — they are the take's resting vital signs, and
    * a fault has to be able to shout over them. `--live-status-*` colours come
    * from the shared status tokens so a warning here is the same warning
    * everywhere else.
@@ -2564,9 +2144,6 @@ import { onShortcut } from '../lib/shortcuts';
     border-radius: 50%;
     background: var(--text-faint);
   }
-  .status-dot.accent {
-    background: var(--accent);
-  }
   .status-dot.success {
     background: var(--success);
   }
@@ -2580,38 +2157,9 @@ import { onShortcut } from '../lib/shortcuts';
     background: var(--text-faint);
   }
 
-  .status-left {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    min-width: 0;
-  }
-  .live-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--live);
-    flex: 0 0 auto;
-  }
-  .live-dot.paused {
-    background: var(--text-faint);
-  }
-  .script-title {
-    font-size: var(--text-base);
-    font-weight: 650;
-    letter-spacing: var(--ls-title);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
   .take-part {
     font-size: var(--text-sm);
     color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    /* Shrinks before the title and the clock do: of the three, this is the one
-       that can be read from a truncated form. */
     min-width: 0;
   }
   .take-part.complete {
@@ -2620,22 +2168,6 @@ import { onShortcut } from '../lib/shortcuts';
   .part-done {
     color: var(--accent-strong);
     font-weight: 600;
-  }
-  .elapsed {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  .status-right {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: 0 0 auto;
-  }
-  .display-name {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    white-space: nowrap;
   }
 
   /* --- mid-session input recovery --- */
@@ -2993,8 +2525,6 @@ import { onShortcut } from '../lib/shortcuts';
     display: flex;
     flex-direction: column;
     gap: 1px;
-    white-space: normal;
-    overflow: visible;
   }
   .part-ordinal {
     font-size: var(--text-meta);
@@ -3063,282 +2593,4 @@ import { onShortcut } from '../lib/shortcuts';
     font-size: var(--text-meta);
     color: var(--text-muted);
   }
-
-  /* --- main regions --- */
-  /*
-   * OPERATED PANES, not a fixed grid. The widths are the operator's, and no
-   * rail vanishes silently when the window narrows — that looks like a bug
-   * the first time it happens, with no way to ask for it back.
-   *
-   * Both rails are dragged and remembered. They are not toggled from View:
-   * a take replaces this console with the stage, so a menu item for them would
-   * describe a pane nobody can see (#236). The stage preview keeps
-   * `flex: 1 1 auto` with `min-width: 0`, so it takes what is left and shrinks
-   * last: the least critical pane collapses before the preview stops being
-   * useful.
-   */
-  .main {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    min-width: 0;
-  }
-
-  .region-label {
-    margin: 0 0 var(--space-2);
-    font-size: var(--text-2xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: var(--ls-caps);
-    color: var(--text-muted);
-  }
-  .region-empty {
-    margin: 0;
-    font-size: var(--text-xs);
-    color: var(--text-faint);
-    line-height: 1.5;
-  }
-
-  .outline {
-    /*
-     * The width is an inline style from the persisted pane size; the divider
-     * beside it is what changes it. No border — the divider draws the line.
-     *
-     * `flex-shrink: 1` with a `min-width`, NOT `0 0 auto`.
-     *
-     * The first version was `flex: 0 0 auto` on both rails, which made the
-     * PREVIEW the only shrinkable item — so a narrow window crushed the stage
-     * preview to nothing while the rails kept their full width. The least
-     * critical pane collapses before the preview shrinks below usefulness, so the rails
-     * give way first and stop at a width where their content is still readable.
-     */
-    flex: 0 1 auto;
-    /*
-     * 140px, and NOT `min-width: 0` after it.
-     *
-     * Both were declared, in that order, so the second won and this rail
-     * collapsed to nothing rather than stopping where its section titles are
-     * still readable. The floor is the point: the least critical pane gives
-     * way FIRST but does not vanish — a rail that shrinks to zero without being
-     * toggled reads as a bug.
-     */
-    min-width: 140px;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--space-3);
-    background: var(--bg-chrome);
-  }
-  .outline-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .outline-item {
-    position: relative;
-    display: block;
-    width: 100%;
-    min-height: 30px;
-    padding: var(--space-1) 10px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    transition:
-      background var(--dur-fast) var(--ease-out),
-      color var(--dur-fast) var(--ease-out);
-  }
-  .outline-item:hover {
-    background: var(--bg-hover-chrome);
-    color: var(--text-primary);
-  }
-  /* Current section: inset accent bar (never a one-sided border on the box). */
-  .outline-item.current {
-    background: var(--bg-selected);
-    color: var(--text-primary);
-    font-weight: 600;
-  }
-  .outline-item.current::before {
-    content: '';
-    position: absolute;
-    left: 3px;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-  }
-
-  /* --- stage preview --- */
-  .preview {
-    /*
-     * Takes what is left and shrinks LAST.
-     *
-     * True because of three declarations together, not because of this one:
-     * the rails are `flex: 0 1 auto`, so they are shrinkable while this is
-     * `flex: 1 1 auto`; they carry floors (140px and 200px) so they stop where
-     * their content is still readable; and this carries a floor of its own so
-     * the preview is never reduced to a sliver once both rails have reached
-     * theirs. Below that the window itself scrolls rather than any pane
-     * disappearing.
-     */
-    flex: 1 1 auto;
-    min-width: 260px;
-    min-height: 0;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-6);
-    background: var(--bg-sunken);
-  }
-  .preview-text {
-    max-width: var(--prose-measure-narrow);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-  .preview-sentence {
-    margin: 0;
-    font-size: var(--text-live-question);
-    line-height: var(--text-live-question-leading);
-    font-weight: 500;
-    color: var(--text-secondary);
-    transition: color var(--dur-med) var(--ease-out), opacity var(--dur-med) var(--ease-out);
-  }
-  .preview-sentence.past {
-    opacity: 0.4;
-  }
-  .preview-sentence.current {
-    color: var(--text-primary);
-  }
-
-  .preview-placeholder {
-    text-align: center;
-    max-width: 340px;
-  }
-  .ph-title {
-    margin: 0 0 var(--space-2);
-    font-size: var(--text-lg);
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-  .ph-note {
-    margin: 0;
-    font-size: var(--text-sm);
-    color: var(--text-muted);
-    line-height: var(--lh-label);
-  }
-
-  .blanked {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--text-faint);
-  }
-  .blanked p {
-    margin: 0;
-    font-size: var(--text-sm);
-    font-weight: 600;
-  }
-
-  /* --- diagnostics --- */
-  .diagnostics {
-    /* Shrinks before the preview does — see the note on `.outline`. */
-    flex: 0 1 auto;
-    min-width: 200px;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    padding: var(--space-3);
-    background: var(--bg-chrome);
-  }
-  .session-status {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-  }
-
-  .transcript-tail {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-  .tail-line {
-    margin: 0;
-    font-size: var(--text-sm);
-    line-height: var(--lh-label);
-    color: var(--text-muted);
-  }
-  .tail-line.latest {
-    color: var(--prose-text-warm);
-  }
-
-  .quick-controls {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-  }
-  .font-row {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-  }
-  .font-value {
-    min-width: 46px;
-    text-align: center;
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* --- transport --- */
-  .transport {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    padding: var(--space-3) var(--space-5);
-    background: var(--bg-chrome);
-    border-top: 1px solid var(--border);
-    box-shadow: var(--shadow-transport);
-  }
-  .transport-left,
-  .transport-center,
-  .transport-right {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-  .pause-split {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-  }
-
-  .voice-follow {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-
 </style>

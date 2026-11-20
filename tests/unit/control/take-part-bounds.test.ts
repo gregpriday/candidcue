@@ -70,7 +70,6 @@ vi.mock('../../../src/control/services/session', async (orig) => {
         pause: () => driverCalls.push('pause'),
         resume: () => driverCalls.push('resume'),
         moveSentences: () => {},
-        restartParagraph: () => {},
         moveToToken: () => {},
         dispose: () => driverCalls.push('dispose'),
       };
@@ -92,8 +91,8 @@ const {
   anchorManualScroll,
   autoScrollReachedEnd,
   clearSession,
+  goToToken,
   moveSentences,
-  restartParagraph,
   session,
   startLiveSession,
   stopSession,
@@ -511,12 +510,15 @@ describe('a take the auto-scroll transport carried to the end', () => {
     expect(stopSession().endTokenIndex).toBe(150);
   });
 
-  it('forgets the roll on a retake, which opens a new pass', () => {
+  it('gives the ending back to the operator when they move the take to a place', () => {
+    // An absolute move (a section step, an outline jump) is a deliberate
+    // reposition like a sentence step, and reclaims the ending the same way.
     present(PART_THREE, null);
     at(100, 'manualAnchor');
     rollToEnd();
-    restartParagraph();
-    expect(stopSession().endTokenIndex).toBe(100);
+    goToToken(120);
+    at(120, 'manualAnchor');
+    expect(stopSession().endTokenIndex).toBe(120);
   });
 
   it('forgets the roll when the transport is started again', () => {
@@ -688,30 +690,6 @@ describe('script followed, out of what the take was given', () => {
     expect(coverage()).toEqual({ wordsFollowed: 100, coverageWords: 200, coverageScope: 'script' });
   });
 
-  it('measures a retake from where it began, as the words followed are', () => {
-    present(PART_TWO, PART_THREE);
-    at(75);
-    restartParagraph();
-    at(99);
-    expect(coverage()).toEqual({
-      wordsFollowed: 24,
-      coverageWords: 25,
-      coverageScope: 'restOfPart',
-    });
-  });
-
-  it('has nothing of the part left for a retake begun past its end', () => {
-    present(PART_TWO, PART_THREE);
-    at(140);
-    restartParagraph();
-    at(160);
-    expect(coverage()).toEqual({
-      wordsFollowed: 0,
-      coverageWords: 0,
-      coverageScope: 'restOfPart',
-    });
-  });
-
   it('stops a part at the end of the document', () => {
     present({ ...PART_THREE, startTokenIndex: 50, endTokenIndex: 250 }, null);
     at(199);
@@ -724,10 +702,18 @@ describe('script followed, out of what the take was given', () => {
     expect(coverage()).toEqual({ wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' });
   });
 
-  it('does not credit the run-up to a part to a retake begun above it', () => {
+  it('does not credit the run-up to a part to a take opened above it', () => {
+    // `startTake` never opens a bounded take above its part, but the store
+    // measures from the part's start whatever it is handed.
+    present(PART_TWO, PART_THREE, { startTokenIndex: 30 });
+    at(60);
+    expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
+  });
+
+  it('does not credit the run-up to a part to a take moved back above it', () => {
     present(PART_TWO, PART_THREE);
     at(30, 'manualAnchor');
-    restartParagraph();
+    expect(get(session).snapshot?.confirmedToken, 'the move landed').toBe(30);
     at(60);
     expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
   });
@@ -737,7 +723,7 @@ describe('a hand report and the commands around it (#282)', () => {
   /*
    * The stage reports where a wheel or key gesture left the document once the
    * gesture settles, stamped with the gesture's LAST movement. A command the
-   * operator gives after that movement — a sentence step, a restart — has
+   * operator gives after that movement — a sentence step, a jump — has
    * overtaken the report, and the report must lose; one given before it has
    * not, and the report must win. Counted moves are what the summary sees, so
    * they are what these read.

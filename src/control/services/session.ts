@@ -49,7 +49,6 @@ export interface TrackingDriver {
   resume(): void;
   /** Move by whole sentences (negative = back). */
   moveSentences(delta: number): void;
-  restartParagraph(): void;
   dispose(): void;
   /** Explicit "I am here", in fractional token space. */
   moveToToken(tokenIndex: number): void;
@@ -210,12 +209,6 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
       const target = sentences[index];
       if (target) moveTo(target.startTokenIndex);
     },
-    restartParagraph() {
-      const sentence = sentences[currentSentenceIndex()];
-      if (!sentence) return;
-      const first = sentences.find((s) => s.blockId === sentence.blockId) ?? sentence;
-      moveTo(first.startTokenIndex);
-    },
     moveToToken(tokenIndex: number) {
       moveTo(tokenIndex);
     },
@@ -360,10 +353,6 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
     moveSentences(delta: number) {
       const limit = sentences.length > 0 ? sentences.length - 1 : 39;
       sentenceIndex = Math.max(0, Math.min(limit, sentenceIndex + delta));
-      emit('following', 'manualAnchor', 0.95);
-    },
-    restartParagraph() {
-      sentenceIndex = Math.max(0, sentenceIndex - 2);
       emit('following', 'manualAnchor', 0.95);
     },
     moveToToken(tokenIndex: number) {

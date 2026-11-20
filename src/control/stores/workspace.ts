@@ -62,8 +62,6 @@ export const PANE_LIMITS = {
   sidebar: { min: 180, max: 360, default: 224 },
   editorOutline: { min: 200, max: 420, default: 264 },
   editorSplit: { min: 0.25, max: 0.75, default: 0.5 },
-  liveOutline: { min: 160, max: 360, default: 220 },
-  liveDiagnostics: { min: 240, max: 480, default: 304 },
   librarySidebar: { min: 260, max: 520, default: 320 },
 } as const;
 
@@ -82,8 +80,6 @@ export interface WorkspaceState {
   /** The Library's selection inspector. Off by default. */
   inspectorVisible: boolean;
   inspectorWidth: number;
-  diagnosticsWidth: number;
-  liveOutlineWidth: number;
   editorLayout: EditorLayout;
   /** Editor/preview split position as a fraction of the available width. */
   editorSplitRatio: number;
@@ -117,8 +113,6 @@ export const DEFAULT_WORKSPACE: WorkspaceState = {
   outlineWidth: PANE_LIMITS.editorOutline.default,
   inspectorVisible: false,
   inspectorWidth: PANE_LIMITS.librarySidebar.default,
-  diagnosticsWidth: PANE_LIMITS.liveDiagnostics.default,
-  liveOutlineWidth: PANE_LIMITS.liveOutline.default,
   editorLayout: 'edit',
   editorSplitRatio: PANE_LIMITS.editorSplit.default,
   documentScale: 1,
@@ -187,18 +181,6 @@ export function parseWorkspace(raw: string | null): WorkspaceState {
       'inspectorWidth',
       PANE_LIMITS.librarySidebar,
       DEFAULT_WORKSPACE.inspectorWidth,
-    ),
-    diagnosticsWidth: readNumber(
-      source,
-      'diagnosticsWidth',
-      PANE_LIMITS.liveDiagnostics,
-      DEFAULT_WORKSPACE.diagnosticsWidth,
-    ),
-    liveOutlineWidth: readNumber(
-      source,
-      'liveOutlineWidth',
-      PANE_LIMITS.liveOutline,
-      DEFAULT_WORKSPACE.liveOutlineWidth,
     ),
     editorLayout: EDITOR_LAYOUTS.includes(layout as EditorLayout)
       ? (layout as EditorLayout)
@@ -387,12 +369,6 @@ export function setPaneWidth(pane: PaneName, width: number): void {
       break;
     case 'editorSplit':
       updateWorkspace({ editorSplitRatio: value });
-      break;
-    case 'liveOutline':
-      updateWorkspace({ liveOutlineWidth: value });
-      break;
-    case 'liveDiagnostics':
-      updateWorkspace({ diagnosticsWidth: value });
       break;
     case 'librarySidebar':
       updateWorkspace({ inspectorWidth: value });

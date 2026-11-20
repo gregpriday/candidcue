@@ -336,8 +336,6 @@
       <dd>{summary.manualJumps}</dd>
       <dt>Sections reached</dt>
       <dd>{summary.sectionsReached}</dd>
-      <dt>Retakes</dt>
-      <dd>{summary.retakes}</dd>
       <dt>Voice restarts</dt>
       <dd>{summary.reconnects}</dd>
     </dl>

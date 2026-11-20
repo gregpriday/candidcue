@@ -113,7 +113,6 @@ export type PauseKind = 'none' | 'listening' | 'hard';
 
 export interface SessionCounts {
   jumps: number;
-  retakes: number;
   reconnects: number;
 }
 
@@ -125,9 +124,9 @@ export interface SessionCounts {
  *   - `script` — the whole document, from its first word;
  *   - `part` — the whole part the take was bounded to;
  *   - `restOfPart` — from where the pass began to the end of that part ("From
- *     here" inside a part, or a retake);
+ *     here" inside a part);
  *   - `restOfScript` — from where the pass began to the end of the document
- *     ("From here", "From last ending", or a retake on an unbounded take).
+ *     ("From here" or "From last ending").
  *
  * Never simply the whole script: a part read to its last word would score a
  * quarter, and a take started near the end could never look complete.
@@ -148,14 +147,12 @@ export interface SessionSummary {
    * taken from one value in `stopSession`.
    */
   sectionsReached: number;
-  retakes: number;
   reconnects: number;
   endingLocation: string;
   /**
    * Times the operator moved the script by hand — `counts.jumps`: sentence
    * steps, outline moves, an accepted suggestion, and scrolling the stage by
-   * wheel or key (`anchorManualScroll`). Restarting a paragraph books a retake
-   * instead.
+   * wheel or key (`anchorManualScroll`).
    *
    * Also persisted onto the session record as `manualCorrectionCount`. It is
    * the plainest measure of how hard following worked — a take that needed no
@@ -495,7 +492,7 @@ export interface SessionState {
   /**
    * The sections this session has been in, by id, for `sectionsReached`.
    *
-   * Session-wide rather than per pass: a retake goes back over a section the
+   * Session-wide rather than per position: a re-read goes back over a section the
    * take has already been in, and that does not make it a section reached
    * twice — or not reached at all.
    */
@@ -590,7 +587,7 @@ const initial: SessionState = {
   stageEnvelope: null,
   outline: [],
   sentences: [],
-  counts: { jumps: 0, retakes: 0, reconnects: 0 },
+  counts: { jumps: 0, reconnects: 0 },
   summary: null,
   sectionsSeen: [],
   stageFontSizePx: DEFAULT_STAGE_APPEARANCE.fontSizePx,
@@ -755,9 +752,9 @@ let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
 /* ---------------------------------------------------------------------------
  * The pass being performed
  *
- * A take is one or more passes: a restarted paragraph closes the pass that was
- * running and opens the next. The end-of-take summary reports on the LAST pass,
- * so these measurements belong to it and start again with every restart.
+ * A take is one pass, opened by `startLiveSession` and closed with the take.
+ * The end-of-take summary reports on it, and a manual move repositions the take
+ * without starting these measurements again.
  * ------------------------------------------------------------------------- */
 
 /** The take currently being performed. Null outside a session. */
@@ -789,15 +786,6 @@ interface ActiveTake {
   /** Suspended time already closed, by reason. The open stretch is not in it. */
   suspendedMs: Record<Suspension, number>;
   /**
-   * Time the recogniser was being sent audio on every EARLIER pass (#287).
-   *
-   * Words heard are counted for the whole session, not the pass, so "did it
-   * hear anything" has to be asked of the whole session's listening too — a
-   * retake must neither forget a silent minute before it nor charge the
-   * session for a pause the earlier pass spent.
-   */
-  listenedBeforeMs: number;
-  /**
    * Where the auto-scroll transport left the document, when it ran it off the
    * end (#276). Null when it has not, or when something since has put the take
    * somewhere else.
@@ -813,7 +801,7 @@ interface ActiveTake {
    * document moved; when following is handed back, its idea of the reader is
    * wherever the roll began, and the next snapshot it publishes describes that
    * stale place. Only the operator moving the take on purpose supersedes it — a
-   * step, a jump, a hand scroll, a retake, or starting the transport again.
+   * step, a jump, a hand scroll, or starting the transport again.
    *
    * Superseded where the move is ASKED FOR, not where Rust's `manualAnchor`
    * answer arrives — see `releaseAutoScrollEnd`.
@@ -890,7 +878,7 @@ state.subscribe(noteSuspension);
 /**
  * Words the recogniser returned this take, for the summary.
  *
- * Duration, sections and retakes read the same whether the microphone was
+ * Duration and sections read the same whether the microphone was
  * working or the take was nine seconds of silence. This is what answers "did
  * it hear me", which is the first thing anyone wants to know and the only one
  * that distinguishes a working session from a broken one.
@@ -937,9 +925,7 @@ const DISPLAY_WATCH_INTERVAL_MS = 2000;
  * resume, a retry, a microphone switch — checks `isLiveTake` before writing
  * anything. A token is issued once per `startLiveSession` and revoked as the
  * first thing `stopInternals` does, before any teardown, so nothing that runs
- * during the stop counts as the live take either. A retake (`restartParagraph`)
- * is a new pass within the same take: the pipeline stays open across it, and
- * so does the token.
+ * during the stop counts as the live take either.
  *
  * Ordering WITHIN a take — a newer pause against a late resume — is a
  * different question, and `pauseCount` still answers it.
@@ -1305,26 +1291,6 @@ export function startLiveSession(input: StartSessionInput): string {
          * for this flag to be wrong in.
          */
         if (text.trim() !== '') {
-          /*
-           * A LATE PARTIAL FROM THE PREVIOUS PASS MAY CERTIFY THIS ONE, AND
-           * THAT IS THE RIGHT DIRECTION TO BE WRONG IN.
-           *
-           * `restartParagraph` clears the latch and the pipeline stays open, so
-           * a partial still in flight from before the restart can arrive after
-           * it. The take token guards the PIPELINE, but there is genuinely no
-           * signal on this callback that distinguishes "audio from a moment
-           * ago" from "audio from now" — and an epoch compared inside the
-           * synchronous update it was captured beside cannot differ, which is
-           * what the first attempt at this did.
-           *
-           * So it is left alone deliberately. What this flag answers is "can
-           * Speaking Glass hear you", and a partial that arrived one second ago is
-           * evidence that it can. The failure that matters is the other one: a
-           * take reporting "nothing heard yet — check the microphone" over a
-           * working microphone would send somebody to unplug hardware mid-take.
-           * Being briefly too optimistic costs nothing; being wrongly pessimistic
-           * costs a take.
-           */
           state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
         }
       },
@@ -1453,9 +1419,9 @@ export function startLiveSession(input: StartSessionInput): string {
          *
          * The picker belongs in the take-controls drawer, which is mounted for
          * the duration of the take, and the attention dot on its tab is what
-         * points at it. The Live status bar renders only when NO take is
-         * running, so a picker there cannot be reached in the one state it
-         * exists for — a microphone dying mid-take.
+         * points at it. A picker anywhere that only renders with no take
+         * running cannot be reached in the one state it exists for — a
+         * microphone dying mid-take.
          */
       },
       /*
@@ -2045,19 +2011,6 @@ function stopVoicePill(): void {
 }
 
 /**
- * Restart the evidence at a take boundary (a retake opens a new pass).
- *
- * Only when a pill is already running: a retake in manual mode has no capture
- * to report on, and starting one there would put a permanent "Listening" on a
- * stage that is not listening to anything.
- */
-function resetVoicePill(): void {
-  if (voicePill === null) return;
-  voicePillDeviceLost = false;
-  voicePill = initialVoicePillState(monotonicNowMs());
-}
-
-/**
  * Resolve the pill and hand it to the stage, which reads `voicePill` off this
  * store through its `voicePill` prop.
  *
@@ -2138,15 +2091,15 @@ interface TakeCoverage {
  * script could never look complete.
  *
  * From the PASS's start rather than the launch's, because that is where the
- * numerator is measured from — a retake opens a new pass, and a denominator
- * left at the launch point would score a pass that covered everything it could
- * as a fraction of words it never had the chance to read. `coverageScope` names
+ * numerator is measured from, and a denominator left anywhere else would score
+ * a pass that covered everything it could as a fraction of words it never had
+ * the chance to read. `coverageScope` names
  * the span so the summary can say what it is a fraction of.
  *
  * Both ends are bounded, not just the total. The part's bound is advisory and
  * the presenter can read straight past it, but what is past it is not part of
- * the part; and a pass begun before the part (the operator moved back above it
- * and retook) has not covered the part by covering the run-up to it.
+ * the part; and a pass begun before the part would not have covered the part
+ * by covering the run-up to it.
  *
  * Still a DISTANCE, as it always was: a span read from its first word to its
  * last is N-1 of N. Counting it inclusively would credit a take that never
@@ -2193,8 +2146,8 @@ function takeCoverage(s: SessionState): TakeCoverage {
  *
  * Separate from `takeCoverage`, because a take can open anywhere, not only at
  * zero, and then the two numbers differ. This one answers "where did it get
- * to", and the ending index on the session row and the section a retake
- * returns to are resolved from it; the other answers "how far did it travel"
+ * to", and the ending index on the session row and the section Retry last
+ * section returns to are resolved from it; the other answers "how far did it travel"
  * and is what the summary shows.
  */
 function takeEndToken(): number {
@@ -2207,22 +2160,17 @@ function takeEndToken(): number {
  * ------------------------------------------------------------------------- */
 
 /**
- * Open a pass. `startLiveSession` opens the first; a retake opens the next, and
- * this is the only place its measurements start again from nothing.
+ * Open the take's pass. `startLiveSession` is the only caller, and this is the
+ * only place the take's measurements start from nothing.
  *
- * The suspension is read from the take as it stands, not assumed clear: a
- * retake made while paused opens a pass that is paused from its first moment,
- * and nothing guarantees a later store write to tell `noteSuspension` so. Which
- * is also why `startLiveSession` opens the first pass only once the session's
- * own state is in place — read any earlier, this would be the LAST take's
- * pause, until the next write happened to correct it.
- *
- * Listening is the one measurement that carries over, for the reason on
- * `listenedBeforeMs`.
+ * The suspension is read from the take as it stands, not assumed clear —
+ * nothing guarantees a later store write to tell `noteSuspension` so. Which is
+ * why `startLiveSession` opens the pass only once the session's own state is in
+ * place: read any earlier, this would be the LAST take's pause, until the next
+ * write happened to correct it.
  */
 function beginTake(startTokenIndex: number): void {
   const nowMs = monotonicNowMs();
-  const previous = activeTake;
   activeTake = {
     startedAtMs: nowMs,
     startTokenIndex,
@@ -2233,11 +2181,6 @@ function beginTake(startTokenIndex: number): void {
     suspension: suspensionOf(get(state)),
     suspendedSinceMs: nowMs,
     suspendedMs: { paused: 0, autoScroll: 0, followingOff: 0 },
-    listenedBeforeMs:
-      previous === null
-        ? 0
-        : previous.listenedBeforeMs +
-          Math.max(0, nowMs - previous.startedAtMs - suspendedAt(previous, nowMs).paused),
     autoScrollEndToken: null,
   };
 }
@@ -2316,9 +2259,9 @@ const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
  * open at the stop is counted, but the pass is not touched, so asking twice
  * gives the same answer.
  *
- * `listenedSeconds` is the odd one out: the whole session's, not the pass's,
- * because it answers "did it hear anything" for words counted across the
- * session — see `listenedBeforeMs`.
+ * `listenedSeconds` is time the recogniser was being sent audio: the pass's
+ * length less its pauses, whatever following was doing meanwhile, because it
+ * answers "did it hear anything" (#287).
  */
 function takeFollowingTime(): {
   share: number | null;
@@ -2340,8 +2283,7 @@ function takeFollowingTime(): {
     offSeconds: suspended.followingOff / 1000,
     autoScrollSeconds: suspended.autoScroll / 1000,
   };
-  const listenedSeconds =
-    (take.listenedBeforeMs + Math.max(0, elapsedMs - suspended.paused)) / 1000;
+  const listenedSeconds = Math.max(0, elapsedMs - suspended.paused) / 1000;
   if (take.lastSnapshotAtMs === null || !(onMs > 0)) {
     return { share: null, time, listenedSeconds };
   }
@@ -2552,8 +2494,8 @@ const followActions = {
    *
    * Its caller is `smoothFollow.requestLayoutRebuild()`, raised from the
    * `rebuild_layout` action on the `invalid_line_map` notice. `FollowStatePanel`
-   * renders that notice both in Live's console arm and in the take-controls
-   * drawer, so a presenter can reach it mid-take.
+   * renders that notice in the take-controls drawer, so a presenter can reach
+   * it mid-take.
    */
   rebuildStageLayout(): void {
     state.update((s) =>
@@ -3138,36 +3080,6 @@ function noteReposition(): void {
 }
 
 /**
- * Retake. This is also the pass boundary: the pass that was being
- * performed is over, and the next one starts here. The summary reports on the
- * new pass, so its coverage and following time start again rather than being
- * merged into what came before.
- */
-export function restartParagraph(): void {
-  driver?.restartParagraph();
-  noteReposition();
-  const before = get(state);
-  // A new pass proves itself again. The evidence that the last one was
-  // heard says nothing about this one, and the pill coming back is how the
-  // presenter knows the retake is being picked up.
-  resetVoicePill();
-  /*
-   * And the follow panel's copy of the same fact, for the same reason.
-   *
-   * This function calls itself a take boundary and behaves like one — it closes
-   * a pass and opens another — so a retake that begins already "heard" would
-   * carry the previous pass's evidence into a pass that has produced none. The
-   * pill and this flag answer the same question on two surfaces and must not
-   * disagree about it.
-   */
-  state.update((s) => (s.heardAnything ? { ...s, heardAnything: false } : s));
-  if (before.sessionId !== null) {
-    beginTake(roundToken(before.snapshot?.confirmedToken) ?? 0);
-  }
-  state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
-}
-
-/**
  * "Blank the screen" — from Live's controls or its shortcut.
  *
  * WHAT THE USER DECIDES, AND WHAT THEY DO NOT.
@@ -3180,9 +3092,8 @@ export function toggleBlankStage(): void {
 }
 
 /**
- * The transport's "Voice follow" switch and the Live "Pause following" button
- * are the same decision, so both route through the follow store and stay
- * in sync.
+ * The stage dock's follow control and its key are the same decision, so both
+ * route through the follow store and stay in sync.
  */
 export function toggleVoiceFollow(): void {
   /*
@@ -4182,7 +4093,7 @@ export function stopSession(): SessionSummary {
   /*
    * Where the take ended, resolved ONCE and handed to every reader of it.
    *
-   * The summary, the retake section, the ending's name and the session row
+   * The summary, the section Retry last section returns to, the ending's name and the session row
    * all need it, and the snapshot is not the only source (#276): a transport
    * that ran the document off its end outranks it, and four readers each
    * deciding that for themselves is how three of them would end up agreeing
@@ -4195,7 +4106,6 @@ export function stopSession(): SessionSummary {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
     sectionsReached: s.sectionsSeen.length,
-    retakes: s.counts.retakes,
     reconnects: s.counts.reconnects,
     endingLocation: locateEnding(s, rolledTo ?? s.snapshot?.confirmedToken ?? null),
     endTokenIndex,
@@ -4243,7 +4153,6 @@ export function stopSession(): SessionSummary {
     void trackPersistence(endSessionRecord(s.sessionId, {
       ...(s.practice ? {} : { endTokenIndex }),
       commandCount: 0,
-      retakeCount: s.counts.retakes,
       reconnectCount: s.counts.reconnects,
       manualCorrectionCount: s.counts.jumps,
       metrics: {
@@ -4310,7 +4219,6 @@ function emptySummary(s: SessionState): SessionSummary {
     durationSeconds: 0,
     mode: s.mode,
     sectionsReached: 0,
-    retakes: 0,
     reconnects: 0,
     endingLocation: 'Beginning',
     manualJumps: 0,

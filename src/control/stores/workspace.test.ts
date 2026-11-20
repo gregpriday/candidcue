@@ -50,11 +50,23 @@ describe('parseWorkspace', () => {
     // Written by builds that had View › Show Diagnostics. The pane it toggled
     // never rendered during a take, so the flag went with the menu item.
     const parsed = parseWorkspace(
-      JSON.stringify({ diagnosticsVisible: false, outlineVisible: false, diagnosticsWidth: 320 }),
+      JSON.stringify({ diagnosticsVisible: false, outlineVisible: false, outlineWidth: 320 }),
     );
     expect(parsed).not.toHaveProperty('diagnosticsVisible');
     expect(parsed.outlineVisible).toBe(false);
-    expect(parsed.diagnosticsWidth).toBe(320);
+    expect(parsed.outlineWidth).toBe(320);
+  });
+
+  it('drops the retired Live console pane widths and keeps everything stored beside it', () => {
+    // Written by builds that had the operator console on the Live route, whose
+    // Sections and Tracking rails were dragged and remembered. The console is
+    // gone (#239), so a stored width is read past rather than carried.
+    const parsed = parseWorkspace(
+      JSON.stringify({ diagnosticsWidth: 320, liveOutlineWidth: 200, sidebarWidth: 300 }),
+    );
+    expect(parsed).not.toHaveProperty('diagnosticsWidth');
+    expect(parsed).not.toHaveProperty('liveOutlineWidth');
+    expect(parsed.sidebarWidth).toBe(300);
   });
 
   it('clamps a width past its pane maximum', () => {
