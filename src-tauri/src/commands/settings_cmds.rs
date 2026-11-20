@@ -285,9 +285,10 @@ pub async fn schedule_restore(
     let current = crate::backup::inspect_restore_export(&chosen.path)
         .await
         .map_err(|err| {
-            // The cause is kept for the log; what the user can do about any of
-            // them is the same — choose the export again and see.
-            tracing::warn!(error = %err, "the confirmed export no longer passes its checks");
+            // The code alone is logged: an inspection message can name the
+            // export's scripts, and the log goes into support bundles. What
+            // the user can do about any of them is the same — choose again.
+            tracing::warn!(code = err.code(), "the confirmed export no longer passes its checks");
             stale_restore_selection()
         })?;
     if !chosen.same_export_as(&current) {

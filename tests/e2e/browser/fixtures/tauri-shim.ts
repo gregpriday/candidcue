@@ -822,12 +822,12 @@ function shimBody(config: ShimConfig): void {
         return { selectionId, ...config.restoreExport };
       }
       case 'schedule_restore': {
-        // Taken once, as Rust's `RestoreSelection::take` does.
+        // Taken once, and only by its own id, as Rust's `RestoreSelection::take`.
         const chosen = sessionStorage.getItem('__E2E_RESTORE_CHOSEN__');
-        sessionStorage.removeItem('__E2E_RESTORE_CHOSEN__');
         if (!config.restoreExport || chosen === null || args?.['selectionId'] !== Number(chosen)) {
           throw { code: 'RESTORE_SELECTION_STALE', userMessage: 'That export is no longer the one chosen.' };
         }
+        sessionStorage.removeItem('__E2E_RESTORE_CHOSEN__');
         if (sessionStorage.getItem('__E2E_RESTORE_PENDING__') !== null) {
           throw { code: 'RESTORE_ALREADY_SCHEDULED', userMessage: 'A restore is already scheduled.' };
         }

@@ -308,11 +308,11 @@ export const mockSettings = {
     };
   },
   scheduleRestore(selectionId: number): PendingRestore {
-    const chosen = mockRestore.chosen;
-    mockRestore.chosen = null;
-    if (chosen === null || selectionId !== chosen) {
+    // A wrong id takes nothing and leaves the choice where it was.
+    if (mockRestore.chosen === null || selectionId !== mockRestore.chosen) {
       throw new Error('That export is no longer the one chosen. Choose it again.');
     }
+    mockRestore.chosen = null;
     if (mockRestore.pending) throw new Error('A restore is already scheduled.');
     mockRestore.pending = {
       exportPath: '/Users/example/Desktop/SpeakingGlass-export-20261101-091500',

@@ -866,9 +866,10 @@ pub fn schedule_inspected_restore(
 ) -> Result<PendingRestoreStatus, AppError> {
     let _guard = marker_lock();
     let marker = paths.root().join(PENDING_RESTORE);
-    // The entry itself, not what it points at: `exists()` follows a link and
-    // reads a dangling one — or one it cannot stat — as nothing there.
-    match std::fs::symlink_metadata(&marker) {
+    // By the rule the reader and the launch use — they follow a link, so a
+    // dangling one is no restore to them — but an entry that cannot be
+    // examined refuses rather than reading as absent, which `exists()` would.
+    match std::fs::metadata(&marker) {
         Ok(_) => {
             return Err(AppError::structured(
                 "RESTORE_ALREADY_SCHEDULED",
