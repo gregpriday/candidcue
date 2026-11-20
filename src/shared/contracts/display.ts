@@ -6,10 +6,13 @@ import type { Uuid } from './core';
 import type { CompiledBlock } from './compiler';
 import type { SmoothFollowProfile } from './smooth-follow';
 import type {
+  LensPlacement,
+  LensPosition,
   OpticalProfile,
   ReadingContext,
   ReadingCueStyle,
   ResolvedOptics,
+  SafeAreaInsets,
   StageMode,
   TextIntensity,
 } from './optical';
@@ -128,6 +131,30 @@ export interface StageSettings {
    * resolve rather than a result of it, and `ResolvedOptics` is the results.
    */
   readingContext?: ReadingContext;
+  /**
+   * Where the rig being edited puts the frame and the lens, drawn over the
+   * sample text so they can be judged on the glass.
+   *
+   * Only Settings › Prompter display sets it, on its preview; a take never
+   * does, and absent means nothing is drawn. It is the edited rig's own stored
+   * values rather than anything read back off `optics`, because `optics`
+   * places the reading BAND, which an override or a lens offset can move away
+   * from the lens — and the point of the mark is where the camera is.
+   */
+  rigMarks?: StageRigMarks;
+}
+
+/**
+ * A rig's safe area and lens, as the profile stores them.
+ *
+ * `safeArea` is inset from each edge of the whole panel; `lens` is a fraction
+ * of the SAFE rectangle that leaves (the same frames `OpticalProfile` uses), so
+ * the stage folds the insets back in before it draws the lens.
+ */
+export interface StageRigMarks {
+  safeArea: SafeAreaInsets;
+  lens: LensPosition;
+  lensPlacement: LensPlacement;
 }
 
 export interface StageSessionEnvelope {

@@ -529,6 +529,39 @@ export function stagePreviewSettingsFromSettings(
 }
 
 /**
+ * The preview Settings › Prompter display shows: the rig being edited, with
+ * its frame and camera marked over the sample (#489).
+ *
+ * Composed as a PROMPTER whatever the presentation mode says. Every control in
+ * that section edits the rig a prompter take on this panel runs with, and a
+ * reading window never uses it — it takes its own derived profile and is never
+ * mirrored — so in reader mode the ordinary composition would have somebody
+ * setting a hood's insets against a sample that ignored them.
+ *
+ * The marks are `rig`'s own stored values — the profile the controls show —
+ * rather than anything read back off the resolution, so they stay on the lens
+ * where a band override or a lens offset has moved the reading band off it.
+ */
+export function rigPreviewSettingsFromSettings(
+  s: AppSettings,
+  display: DisplayDescriptor | null | undefined,
+  rig: Pick<OpticalProfile, 'safeArea' | 'lens' | 'lensPlacement'>,
+): StageSettings {
+  const asPrompter: AppSettings = {
+    ...s,
+    stage: { ...s.stage, presentationMode: 'prompter' },
+  };
+  return {
+    ...stagePreviewSettingsFromSettings(asPrompter, display),
+    rigMarks: {
+      safeArea: { ...rig.safeArea },
+      lens: { ...rig.lens },
+      lensPlacement: rig.lensPlacement,
+    },
+  };
+}
+
+/**
  * The rig a prompter take runs with on this panel.
  *
  * ---------------------------------------------------------------------------

@@ -942,8 +942,8 @@ function readerPreferenceCarrier(preference: ReaderPreference): OpticalProfile {
     overrides,
     intensity: preference.intensity ?? base.intensity,
     readingCue: preference.readingCue ?? base.readingCue,
-    // In the declared order, which is the order `normalizeOpticalProfile`
-    // reads them back in, so a stored preference round-trips unchanged.
+    // In the declared order; `normalizeOpticalProfile` keeps stored order, so
+    // a stored preference round-trips unchanged.
     completedSteps: CALIBRATION_STEPS.filter((step) => chosen.includes(step)),
   };
 }
@@ -1169,8 +1169,15 @@ export function normalizeOpticalProfile(candidate: unknown): OpticalProfile | nu
     // Against the declared list, not merely "is a string": the wizard decides
     // what it still has to ask by what is missing from here, so a step name it
     // does not recognise is a step it can neither show as done nor offer.
+    // In STORED order, once each: the wizard records steps as they are
+    // answered, and a rig edited from Settings must write the list back as it
+    // found it rather than re-sorted (#489).
     completedSteps: Array.isArray(steps)
-      ? CALIBRATION_STEPS.filter((step) => steps.includes(step))
+      ? steps.filter(
+          (step, index): step is OpticalCalibrationStep =>
+            (CALIBRATION_STEPS as readonly unknown[]).includes(step) &&
+            steps.indexOf(step) === index,
+        )
       : [],
   };
 }

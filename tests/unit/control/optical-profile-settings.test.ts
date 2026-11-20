@@ -326,9 +326,12 @@ describe('a stored profile is validated before the resolver walks it', () => {
     const normalized = normalizeOpticalProfile({
       schemaVersion: 1,
       rigName: 'Odd steps',
-      completedSteps: ['distance', 'teleportation', 7, 'hardware'],
+      completedSteps: ['lens', 'teleportation', 7, 'hardware', 'lens', 'distance'],
     });
-    expect(normalized!.completedSteps).toEqual(['hardware', 'distance']);
+    // In the order they were stored, once each (#489): a rig the wizard saved
+    // in answer order must be written back in that order by a Settings edit.
+    // Neither declared nor alphabetical order.
+    expect(normalized!.completedSteps).toEqual(['lens', 'hardware', 'distance']);
   });
 
   /**

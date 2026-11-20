@@ -4,6 +4,8 @@ import {
   buildStageEnvelope,
   buildStageRenderDocument,
   buildStageSettings,
+  rigPreviewSettingsFromSettings,
+  stagePreviewSettingsFromSettings,
   stageSettingsFromSettings,
 } from '../../../src/control/services/stage-envelope';
 import {
@@ -566,5 +568,79 @@ describe('the take mode a saved profile composes', () => {
         'clean',
       );
     }
+  });
+});
+
+/*
+ * #489 — Settings › Prompter display's preview: the rig being edited, as a
+ * prompter, with its frame and camera marked.
+ */
+describe("the rig preview Prompter display shows", () => {
+  const GLASS: DisplayDescriptor = {
+    id: 'panel-glass',
+    name: 'Monitor',
+    primary: false,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 1920, height: 1080 },
+    logicalSize: { width: 1920, height: 1080 },
+    scaleFactor: 1,
+    fingerprint: 'panel-glass',
+    topologyHash: 'topology-1',
+    // A panel that reports its millimetres, so the automatic profile sizes it
+    // and the comparisons below are between resolved geometries, not two
+    // flat fallbacks.
+    physicalSizeMm: { width: 527, height: 296 },
+  };
+  const HOOD = {
+    safeArea: { top: 0.08, right: 0.03, bottom: 0.12, left: 0.05 },
+    lens: { x: 0.4, y: 0.3 },
+    lensPlacement: 'in-panel' as const,
+  };
+
+  function settingsIn(mode: 'prompter' | 'reader') {
+    const s = defaultAppSettings();
+    return {
+      ...s,
+      stage: { ...s.stage, presentationMode: mode },
+      optical: withPanelMirror(s.optical, GLASS.fingerprint, { horizontal: true, vertical: false }),
+    };
+  }
+
+  it("marks the rig's own insets, lens and placement", () => {
+    const preview = rigPreviewSettingsFromSettings(settingsIn('prompter'), GLASS, HOOD);
+    expect(preview.rigMarks).toEqual(HOOD);
+    const above = { ...HOOD, lensPlacement: 'above' as const };
+    expect(rigPreviewSettingsFromSettings(settingsIn('prompter'), GLASS, above).rigMarks).toEqual(
+      above,
+    );
+    // Copies, so a later edit to the rig object cannot reach a sent directive.
+    expect(preview.rigMarks!.safeArea).not.toBe(HOOD.safeArea);
+    expect(preview.rigMarks!.lens).not.toBe(HOOD.lens);
+  });
+
+  it('is otherwise the ordinary preview of a prompter take', () => {
+    const preview = rigPreviewSettingsFromSettings(settingsIn('prompter'), GLASS, HOOD);
+    expect(preview.optics).toBeDefined();
+    const { rigMarks: _marks, ...rest } = preview;
+    expect(rest).toEqual(stagePreviewSettingsFromSettings(settingsIn('prompter'), GLASS));
+  });
+
+  it('composes a prompter even when takes present in a reading window', () => {
+    // A reading window never runs this rig and is never mirrored, so the
+    // ordinary reader composition would show the insets being ignored.
+    const asked = settingsIn('reader');
+    const preview = rigPreviewSettingsFromSettings(asked, GLASS, HOOD);
+    // The caller's settings are not changed to get there.
+    expect(asked.stage.presentationMode).toBe('reader');
+    expect(preview.mirrorX).toBe(true);
+    expect(preview.readingContext).not.toBe('reader');
+    const { rigMarks: _marks, ...rest } = preview;
+    expect(rest).toEqual(stagePreviewSettingsFromSettings(settingsIn('prompter'), GLASS));
+  });
+
+  it('leaves the ordinary preview and every take unmarked', () => {
+    expect(stagePreviewSettingsFromSettings(settingsIn('prompter'), GLASS).rigMarks).toBeUndefined();
+    expect(stageSettingsFromSettings(settingsIn('prompter'), GLASS).rigMarks).toBeUndefined();
+    expect(stageSettingsFromSettings(settingsIn('reader'), GLASS).rigMarks).toBeUndefined();
   });
 });

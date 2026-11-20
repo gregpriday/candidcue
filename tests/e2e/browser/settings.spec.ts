@@ -1000,8 +1000,10 @@ test('rows that render after the search ran are filtered too', async ({ page }) 
   // the sizing line and the "Takes open on … Tests and calibration use" note
   // (Automatic here, so the test panel is not where takes open) arrived with
   // the list and name the teleprompter, and the "connect" hint went with the
-  // list's absence.
-  await expectRowFilterNote(page, 6);
+  // list's absence. So did the rig's camera rows (#489): "Show on
+  // teleprompter", and the camera choice, whose description names a
+  // teleprompter hood.
+  await expectRowFilterNote(page, 8);
 
   await page.getByRole('button', { name: 'Show all' }).click();
   await expect(framing).toBeVisible();
