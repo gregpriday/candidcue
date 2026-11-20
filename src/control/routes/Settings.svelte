@@ -999,15 +999,13 @@
     const fingerprint = effectiveDisplay?.fingerprint ?? null;
     untrack(() => {
       /*
-       * Only a DIFFERENT panel closes it. No panel at all is what a failed
-       * display read leaves (`displays` is emptied), and moving between the two
-       * sections re-reads the list — so treating that as a change would take a
-       * healthy preview down on a transient error. A panel genuinely unplugged
-       * shows up as a successful list choosing another one.
+       * No panel at all closes it too — a failed display read empties the
+       * list. Kept open, it would be sent a composition for no panel (the
+       * mirroring and the marks fall back to defaults) while Prompter display,
+       * with no panel to describe, no longer draws its Stop button. A preview
+       * that has to be reopened is the recoverable failure of the two.
        */
-      if (fingerprint !== null && previewTarget !== null && previewTarget !== fingerprint) {
-        abandonStagePreview();
-      }
+      if (previewTarget !== null && previewTarget !== fingerprint) abandonStagePreview();
     });
   });
 
@@ -3864,7 +3862,7 @@
               {#if rig.lensPlacement === 'in-panel'}
                 <Slider
                   label="Lens down"
-                  description="The reading band follows it — your eyeline for the whole take — unless the band is placed by hand under Advanced."
+                  description="The reading band follows it — your eyeline for the whole take — less any offset set under Advanced."
                   value={Math.round(rig.lens.y * 100)}
                   min={10}
                   max={90}
