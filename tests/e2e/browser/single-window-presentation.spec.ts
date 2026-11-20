@@ -744,6 +744,171 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
 });
 
 /*
+ * #239 — NO OPERATOR CONSOLE, EVER.
+ *
+ * Live used to carry a console for the old two-window rig as the `{:else}` arm
+ * of `{#if $session.active}`. Nothing could navigate to it, but it MOUNTED:
+ * End Take stops the session before it navigates, so for the whole covered
+ * interval the console was built behind the plate, and the quit handshake stops
+ * the session without navigating at all. The checks either side of a teardown
+ * cannot see that, so these watch every insertion for the whole of it.
+ */
+const CONSOLE_SELECTOR =
+  '.live, footer.transport, aside.outline[aria-label="Sections"], aside.diagnostics[aria-label="Tracking"]';
+
+/** Record every console element attached from now on, and any already there. */
+async function watchForConsole(page: Page): Promise<void> {
+  await page.evaluate((selector) => {
+    const seen: string[] = [];
+    const note = (el: Element): void => {
+      seen.push(el.outerHTML.slice(0, 120));
+    };
+    document.querySelectorAll(selector).forEach(note);
+    const record = (mutations: MutationRecord[]): void => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches(selector)) note(node);
+          node.querySelectorAll(selector).forEach(note);
+        }
+      }
+    };
+    const observer = new MutationObserver(record);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    (window as unknown as { __consoleWatch: { seen: string[]; read: () => string[] } }).__consoleWatch = {
+      seen,
+      // Drains what the observer has not delivered yet, so a node attached and
+      // detached inside one task is still counted.
+      read: () => {
+        record(observer.takeRecords());
+        return [...seen];
+      },
+    };
+  }, CONSOLE_SELECTOR);
+}
+
+function consoleSeen(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    (window as unknown as { __consoleWatch: { read: () => string[] } }).__consoleWatch.read(),
+  );
+}
+
+/** A sticky toast, raised through the app's own store. */
+async function raiseStickyToast(page: Page, message: string): Promise<void> {
+  await page.evaluate(`(async () => {
+    window.__toastHarness ??= await import('/src/control/stores/toasts.ts');
+  })()`);
+  await page.evaluate((text) => {
+    const store = (
+      window as unknown as {
+        __toastHarness: { showToast: (message: string, tone: string) => number };
+      }
+    ).__toastHarness;
+    store.showToast(text, 'danger');
+  }, message);
+}
+
+function toastRegionBottom(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const region = document.querySelector('[data-stage-chrome].region');
+    return region ? getComputedStyle(region).bottom : 'missing';
+  });
+}
+
+test('End Take never attaches the operator console, cover included, and toasts keep their place (#239)', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await present(page);
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
+  await expect(page.locator('.present-cover')).toHaveCount(0);
+
+  // During the take the tray lines up with the stage's dock: the stage
+  // chrome's bottom inset, and nothing a route publishes moves it.
+  await raiseStickyToast(page, 'Something needs a look');
+  await expect(page.getByText('Something needs a look')).toBeVisible();
+  expect(await toastRegionBottom(page)).toBe('16px');
+
+  await watchForConsole(page);
+  expect(await consoleSeen(page)).toEqual([]);
+
+  // Hold the un-present, so the covered interval lasts as long as this needs.
+  await page.evaluate(() => window.__E2E__.setHeld('set_control_presenting', true));
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.escape-hint')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__E2E__.calls.filter(
+            (call) =>
+              call.command === 'set_control_presenting' &&
+              (call.args as { enabled?: boolean } | null)?.enabled === false,
+          ).length,
+      ),
+    )
+    .toBe(1);
+  // Mid-teardown: the session is stopped, the stage is gone, the cover is up,
+  // and Live is still the route — the interval the console used to fill.
+  await expect(page.locator('.present-cover')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
+  await expect(page.locator(CONSOLE_SELECTOR)).toHaveCount(0);
+  expect(await consoleSeen(page)).toEqual([]);
+
+  await page.evaluate(() => window.__E2E__.setHeld('set_control_presenting', false));
+  await expect(page.getByRole('dialog', { name: 'Take complete' })).toBeVisible();
+  await expect(page.locator('.present-cover')).toHaveCount(0);
+  await expect(page.locator('aside.sidebar')).toBeVisible();
+  expect(await consoleSeen(page)).toEqual([]);
+
+  // Back on the desk the tray sits above the status band again, with the
+  // sticky toast still up: the band's height plus the page gutter.
+  await expect(page.getByText('Something needs a look')).toBeVisible();
+  expect(await toastRegionBottom(page)).toBe('44px');
+
+  errors.expectClean();
+});
+
+test('quitting mid-take never attaches the operator console (#239)', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await present(page);
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
+  await watchForConsole(page);
+
+  // Hold the session row's close, which the handshake's end-take step awaits:
+  // the session is stopped, nothing navigates, and no cover is up.
+  await page.evaluate(() => window.__E2E__.setHeld('end_session', true));
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.emit('app://shutdown-requested', null)))
+    .toBeGreaterThan(0);
+
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.calls.some((call) => call.command === 'end_session')))
+    .toBe(true);
+  await expect(page.locator(CONSOLE_SELECTOR)).toHaveCount(0);
+  expect(await consoleSeen(page)).toEqual([]);
+
+  await page.evaluate(() => window.__E2E__.setHeld('end_session', false));
+  const completed = () =>
+    page.evaluate(() => {
+      const call = window.__E2E__.calls.find((c) => {
+        const args = c.args as { event?: unknown } | null;
+        return c.command === 'plugin:event|emit' && args?.event === 'app://shutdown-complete';
+      });
+      if (!call) return null;
+      return (call.args as { payload?: { completed?: string[] } }).payload?.completed ?? [];
+    });
+  await expect.poll(completed).not.toBeNull();
+  expect(await completed()).toContain('end-take');
+  expect(await consoleSeen(page)).toEqual([]);
+
+  errors.expectClean();
+});
+
+/*
  * THE RETAKE LOOP, WHICH NOW HAS TO FIND ITS OWN SCRIPT.
  *
  * "Present again" used to be a button on the Live route and read the script id

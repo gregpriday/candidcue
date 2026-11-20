@@ -12,16 +12,11 @@
   to be read.
 
   BOTTOM INSET. The region floats over whatever is beneath it, and each toast
-  is `pointer-events: auto` because it owns a dismiss button. Anchored a flat
-  24px from the viewport bottom, that put every toast squarely on top of the
-  Live screen's always-visible transport bar and ate its clicks — and `danger`
-  toasts never auto-dismiss (deliberately: a failure must not scroll past
-  unseen), so the manual transport was unreachable in exactly the situations
-  that produce a danger toast. Rather than shortening the timeout or making the
-  toast non-interactive, the region reads `--toast-safe-bottom`: a route that
-  owns a fixed bottom bar publishes that bar's height plus the normal inset,
-  and the toasts stack above it. Everywhere else the floor is the status band
-  plus a gap, so a toast never sits on the band's top edge.
+  is `pointer-events: auto` because it owns a dismiss button. The floor is the
+  status band plus a gap, so a toast never sits on the band's top edge. (A
+  route with a fixed bottom bar of its own used to publish its height as
+  `--toast-safe-bottom`; the Live console's transport was the only one, and it
+  went with the console in #239.)
 
   ONE TRAY. Open notices share one floating surface, divided by hairlines,
   rather than each casting its own shadow. Separate cards filled every gap
@@ -436,11 +431,9 @@
 
 <style>
   .region {
-    /* Above the status band with a gap, or above whatever a route publishes
-       (Live's transport), whichever is higher. */
     /* As far above the status band as it is in from the window's side
        (`--page-x`), so the stack sits square in its corner. */
-    --toast-bottom: max(var(--toast-safe-bottom, 0px), calc(var(--statusbar-h) + var(--page-x)));
+    --toast-bottom: calc(var(--statusbar-h) + var(--page-x));
     position: fixed;
     right: var(--page-x);
     bottom: var(--toast-bottom);
@@ -456,13 +449,8 @@
   }
   /* On the glass there is no status band; the tray lines up with the stage's
      dock in the opposite corner instead. */
-  /* Live's published figure carries the workspace's 24px gap above its
-     transport (0px tall during a take); on the glass the gap is the dock's. */
   .region.presenting {
-    --toast-bottom: max(
-      calc(var(--toast-safe-bottom, 0px) - var(--space-6) + var(--stage-chrome-bottom-inset, 16px)),
-      var(--stage-chrome-bottom-inset, 16px)
-    );
+    --toast-bottom: var(--stage-chrome-bottom-inset, 16px);
     right: var(--stage-chrome-inset, 20px);
     min-width: min(320px, calc(100vw - 2 * var(--stage-chrome-inset, 20px)));
     max-width: min(480px, calc(100vw - 2 * var(--stage-chrome-inset, 20px)));

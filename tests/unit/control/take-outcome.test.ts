@@ -480,27 +480,27 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
     expect(outcome.headline).toBe('Nothing was transcribed');
   });
 
-  it('asks whether anything was heard of the listening the whole session did', () => {
+  it('asks whether anything was heard of the time the take was listening', () => {
     /*
-     * Words are counted across the session and the pass's pause is not, and
-     * `durationSeconds` is whole wall-clock seconds. Setting one against the
-     * other got both directions wrong.
+     * `listenedSeconds` is the take less its pauses, and `durationSeconds` is
+     * whole wall-clock seconds. Asking the duration instead got both
+     * directions wrong.
      */
     const silent = (listenedSeconds: number, pausedSeconds: number) =>
       resolveTakeOutcome(
         take({
           wordsHeard: 0,
           followingShare: null,
-          durationSeconds: 80,
+          durationSeconds: Math.floor(listenedSeconds + pausedSeconds),
           listenedSeconds,
-          followingTime: time({ onSeconds: 80 - pausedSeconds - 0.01, pausedSeconds }),
+          followingTime: time({ onSeconds: listenedSeconds, pausedSeconds }),
         }),
       ).headline;
-    // Paused from the start, retaken while paused: the session never listened,
-    // though the last pass's pause is only the last twenty seconds of it.
-    expect(silent(0, 20)).toBe('This take was paused');
-    // A silent first pass, then a retake paused to the end: the minute of
-    // silence before it is still a minute of silence.
+    // Paused from the start to the end: the take never listened, however long
+    // it ran.
+    expect(silent(0, 80)).toBe('This take was paused');
+    // A silent minute, then a pause to the end: the minute of silence before
+    // it is still a minute of silence.
     expect(silent(60, 20)).toBe('Nothing was transcribed');
     // Five and a half seconds listened is past the threshold, whatever the
     // floored clock says.

@@ -71,7 +71,6 @@ vi.mock('../../../src/control/services/session', async (orig) => {
         pause: () => driverCalls.push('pause'),
         resume: () => driverCalls.push('resume'),
         moveSentences: () => {},
-        restartParagraph: () => {},
         moveToToken: () => {},
         dispose: () => driverCalls.push('dispose'),
       };

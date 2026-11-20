@@ -176,24 +176,20 @@ export function partOutcomeLabel(
  * the span the last pass could have covered (`coverageScope`), and anything
  * short of the whole script from its first word says so, because "49 of 50
  * words" with no qualifier reads as a claim about the script.
- *
- * "From the retake" rather than "from the start point" once a retake has
- * happened: the summary reports on the last pass, and a retake is what opened
- * it, so naming where the take was launched would point at the wrong place.
  */
 export function scriptFollowedLabel(
   summary: Pick<
     SessionSummary,
-    'wordsFollowed' | 'coverageWords' | 'coverageScope' | 'part' | 'retakes'
+    'wordsFollowed' | 'coverageWords' | 'coverageScope' | 'part'
   >,
 ): string {
   const { wordsFollowed, coverageWords } = summary;
-  const from = summary.retakes > 0 ? 'the retake' : 'the start point';
+  const from = 'the start point';
   const partName = summary.part === null ? 'the part' : `part ${summary.part.ordinal}`;
   /*
-   * A retake begun past the end of the part has nothing of the part left to
-   * cover. "0 of 0 words from the retake to the end of part 2" would describe a
-   * span that runs backwards, so the row says what happened instead.
+   * A pass begun past the end of the part has nothing of the part left to
+   * cover. "0 of 0 words from the start point to the end of part 2" would
+   * describe a span that runs backwards, so the row says what happened instead.
    */
   if (summary.coverageScope === 'restOfPart' && coverageWords === 0) {
     return `None of ${partName} was left after ${from}`;

@@ -193,7 +193,7 @@ describe('partOutcomeLabel', () => {
  * and a "From here" take near the end could never look complete.
  */
 describe('scriptFollowedLabel', () => {
-  const base = { wordsFollowed: 49, coverageWords: 50, part: null, retakes: 0 } as const;
+  const base = { wordsFollowed: 49, coverageWords: 50, part: null } as const;
 
   it('says nothing more for the whole script from its first word', () => {
     expect(scriptFollowedLabel({ ...base, coverageWords: 200, coverageScope: 'script' })).toBe(
@@ -225,16 +225,7 @@ describe('scriptFollowedLabel', () => {
     );
   });
 
-  it('measures from the retake once one opened the pass being reported', () => {
-    expect(scriptFollowedLabel({ ...base, coverageScope: 'restOfScript', retakes: 2 })).toBe(
-      '49 of 50 words from the retake to the end of the script (98%)',
-    );
-    expect(
-      scriptFollowedLabel({ ...base, coverageScope: 'restOfPart', part: PART_THREE, retakes: 1 }),
-    ).toBe('49 of 50 words from the retake to the end of part 3 (98%)');
-  });
-
-  it('says when a retake began past the end of the part', () => {
+  it('says when a take began past the end of the part', () => {
     expect(
       scriptFollowedLabel({
         ...base,
@@ -242,9 +233,8 @@ describe('scriptFollowedLabel', () => {
         coverageWords: 0,
         coverageScope: 'restOfPart',
         part: PART_TWO,
-        retakes: 1,
       }),
-    ).toBe('None of part 2 was left after the retake');
+    ).toBe('None of part 2 was left after the start point');
   });
 
   it('still names a part it was not handed', () => {

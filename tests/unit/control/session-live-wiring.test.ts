@@ -113,7 +113,6 @@ const {
   hardPause,
   moveSentences,
   pauseListening,
-  restartParagraph,
   session,
   startLiveSession,
   startPrompting,
@@ -301,53 +300,45 @@ describe('#214 — a take keeps its summary and its session row without the hist
     seq = 0;
   });
 
-  it('measures a restarted paragraph from where the new pass began', async () => {
+  it('measures a take moved by hand from where it opened, not from the move', async () => {
     const compiled = startScript();
     await vi.advanceTimersByTimeAsync(0);
-    const restartAt = compiled.sentences[2]!.startTokenIndex;
+    const movedTo = compiled.sentences[2]!.startTokenIndex;
     alignmentFeed.push?.(heardAt(compiled.sentences[1]!.startTokenIndex));
     await vi.advanceTimersByTimeAsync(1000);
-    alignmentFeed.push?.(heardAt(restartAt));
 
-    restartParagraph();
+    // A move repositions the take; it does not open a new pass, so the words
+    // followed are still the distance from the take's opening token (0).
+    goToToken(movedTo);
+    alignmentFeed.push?.(heardAt(movedTo));
     const reached = compiled.sentences[3]!.startTokenIndex;
     alignmentFeed.push?.(heardAt(reached));
 
-    // The distance THIS pass travelled. Carrying the first pass's start (0)
-    // into the retake would report the whole document up to here.
-    expect(stopSession().wordsFollowed).toBe(reached - restartAt);
+    expect(stopSession().wordsFollowed).toBe(reached);
   });
 
-  it('gives a retake that has heard nothing yet no following share', async () => {
-    const compiled = startScript();
+  it('gives a take that has seen no snapshot no following share', async () => {
+    startScript();
     await vi.advanceTimersByTimeAsync(0);
-    alignmentFeed.push?.(heardAt(compiled.sentences[1]!.startTokenIndex));
-    await vi.advanceTimersByTimeAsync(1000);
-    alignmentFeed.push?.(heardAt(compiled.sentences[2]!.startTokenIndex));
-
-    restartParagraph();
-    // Time passes on the new pass, so a zero-length pass cannot be what makes
-    // the share null — only the reset of the snapshot history can.
+    // Time passes, so a zero-length take cannot be what makes the share null —
+    // only the absence of any snapshot can.
     await vi.advanceTimersByTimeAsync(500);
 
     const summary = stopSession();
-    expect(summary.followingShare, 'the first pass’s snapshots belong to the first pass').toBeNull();
+    expect(summary.followingShare).toBeNull();
     expect(summary.wordsFollowed).toBe(0);
   });
 
-  it('counts sections reached across the whole session, not per pass', async () => {
+  it('counts each section reached once, however often it is read', async () => {
     const compiled = startScript();
     await vi.advanceTimersByTimeAsync(0);
     const [opening, , middle, , close] = compiled.sentences;
     alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
     alignmentFeed.push?.(heardAt(middle!.startTokenIndex));
-
-    restartParagraph();
     alignmentFeed.push?.(heardAt(close!.startTokenIndex));
     alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
 
-    // Opening, Middle and Close — each once, though Opening was read twice and
-    // the retake opened a pass that had reached none of them yet.
+    // Opening, Middle and Close — each once, though Opening was read twice.
     const summary = stopSession();
     expect(summary.sectionsReached).toBe(3);
     const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
@@ -452,6 +443,8 @@ describe('#214 — a take keeps its summary and its session row without the hist
     ];
     expect(sessionId).toBe('session-uuid-1');
     expect(typeof summary.endTokenIndex).toBe('number');
+    // Nothing counts retakes any more (#239); the column stays, unwritten.
+    expect(summary).not.toHaveProperty('retakeCount');
     // No outline at all: the whole script is the one section the take was in.
     expect(summary.metrics?.sectionsReached).toBe(1);
   });
@@ -1650,22 +1643,6 @@ describe('#287 — time the presenter set following aside is not charged to foll
     expect(summary.followingShare).toBeCloseTo(1, 2);
   });
 
-  it('opens a retake made while paused as paused', async () => {
-    // Nothing promises a store write after the retake to announce the pause,
-    // so the new pass reads the pause it starts under.
-    await startScript();
-    await follow(5);
-    togglePlayPause();
-    await vi.advanceTimersByTimeAsync(10_000);
-    restartParagraph();
-    await vi.advanceTimersByTimeAsync(20_000);
-
-    const summary = stopSession();
-    expect(summary.followingTime.pausedSeconds).toBeCloseTo(20, 1);
-    expect(summary.followingTime.onSeconds).toBeCloseTo(0, 1);
-    expect(resolveTakeOutcome(summary).headline).toBe('This take was paused');
-  });
-
   it('starts the next take with nothing set aside after one stopped paused', async () => {
     // Straight from the stop to the next take, as "Present again" does: the
     // store still says paused when the next one begins. Ten seconds listened
@@ -1733,13 +1710,11 @@ describe('#287 — time the presenter set following aside is not charged to foll
     expect(outcome.suggestion).toBeNull();
   });
 
-  it('still reports a silent minute that a paused retake came after', async () => {
-    // Words are counted across the session, so the listening is too: the
-    // retake's pause does not excuse the minute of silence before it.
+  it('still reports a silent minute that a pause came after', async () => {
+    // The pause at the end does not excuse the minute of silence before it.
     await startScript({ speak: false });
     await vi.advanceTimersByTimeAsync(60_000);
     togglePlayPause();
-    restartParagraph();
     await vi.advanceTimersByTimeAsync(20_000);
 
     const summary = stopSession();

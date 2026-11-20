@@ -56,7 +56,6 @@ const BASE = {
   durationSeconds: 223,
   mode: 'voice',
   sectionsReached: 3,
-  retakes: 1,
   reconnects: 0,
   endingLocation: 'Start a sentence over',
   manualJumps: 2,

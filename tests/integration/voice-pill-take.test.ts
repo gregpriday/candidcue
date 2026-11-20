@@ -233,7 +233,7 @@ vi.mock('../../src/control/services/alignment', async (orig) => {
 });
 
 const { setInvokeForTesting } = await import('../../src/control/services/ipc');
-const { clearSession, startLiveSession, restartParagraph, session, stopSession } = await import(
+const { clearSession, goToToken, startLiveSession, session, stopSession } = await import(
   '../../src/control/stores/session'
 );
 const { get } = await import('svelte/store');
@@ -643,7 +643,7 @@ describe('the device going away', () => {
 });
 
 describe('take boundaries', () => {
-  it('makes a retake prove itself again', async () => {
+  it('keeps a proven take proven across a move by hand', async () => {
     start();
     await untilCaptureOpen();
     await speak(1000);
@@ -653,11 +653,12 @@ describe('take boundaries', () => {
     expect(latest().reading, 'a proven take stays proven').toBe('steady');
     expect(latest().visible, 'and stays on screen — the audio is still arriving').toBe(true);
 
-    restartParagraph();
+    // A move repositions the take; it is not a take boundary, so the evidence
+    // that the microphone is heard still stands.
+    goToToken(5);
     await run(150);
-    // §36.3: a new pass. The last pass being heard says nothing about this one.
-    expect(latest().reading).toBe('listening');
-    expect(latest().visible).toBe(true);
+    expect(latest().reading).toBe('steady');
+    expect(get(session).heardAnything).toBe(true);
   });
 
   it('stops talking to the stage, and releases the device, when the take ends', async () => {

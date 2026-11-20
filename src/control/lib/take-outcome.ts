@@ -6,7 +6,7 @@
  * ---------------------------------------------------------------------------
  * The end-of-take dialog listed nineteen measurements: duration, mode, words
  * heard, words followed, stage updates, pixel travel, transcript bridge counts,
- * followed share, manual jumps, sections, retakes, reconnects, ending location,
+ * followed share, manual jumps, sections, reconnects, ending location,
  * transcript state. Every one of them earns its place — several were added
  * because a specific failure had been invisible without them — and together
  * they answer a question the presenter did not ask.

@@ -155,7 +155,6 @@ const { setInvokeForTesting } = await import('../../../src/control/services/ipc'
 const {
   clearSession,
   hardPause,
-  restartParagraph,
   resumeSession,
   retryMicrophone,
   session,
@@ -560,21 +559,5 @@ describe('late callbacks from an ended take (#244)', () => {
     expect(await switching).toBe(false);
     expect(takeState()).toEqual(before);
     expect(get(toasts)).toEqual([]);
-  });
-});
-
-describe('a retake keeps its pipeline (#244)', () => {
-  it('callbacks keep working across restartParagraph', () => {
-    const a = start();
-    restartParagraph();
-    cb<[string, boolean]>(a, 'onTranscriptText')('hello there friend', true);
-    cb<[string]>(a, 'onTranscriptLine')('hello there friend');
-    cb<[boolean, string]>(a, 'onFollowingHold')(true, 'held');
-    expect(get(session).heardAnything).toBe(true);
-    expect(get(session).transcriptTail).toEqual(['hello there friend']);
-    expect(get(smoothFollow).followingPaused).toBe(true);
-    cb<[boolean, string]>(a, 'onFollowingHold')(false, 'released');
-    expect(get(smoothFollow).followingPaused).toBe(false);
-    expect(stopSession().wordsHeard).toBe(3);
   });
 });

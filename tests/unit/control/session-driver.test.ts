@@ -314,22 +314,6 @@ Fifth sentence in another paragraph.
     driver.dispose();
   });
 
-  it('restarts the paragraph the presenter stepped into while paused', async () => {
-    const { compiled, driver, moves } = makeAnsweringDriver();
-    driver.start();
-    driver.pause();
-
-    const fifth = compiled.sentences[4]!;
-    driver.moveToToken(fifth.startTokenIndex + 1);
-    await vi.waitFor(() => expect(moves).toHaveLength(1));
-    driver.restartParagraph();
-    await vi.waitFor(() => expect(moves).toHaveLength(2));
-
-    const first = compiled.sentences.find((s) => s.blockId === fifth.blockId)!;
-    expect(moves[1]).toBe(first.startTokenIndex);
-    driver.dispose();
-  });
-
   it('still drops the voice while paused', () => {
     const { driver, snapshots } = makeAnsweringDriver();
     driver.start();
