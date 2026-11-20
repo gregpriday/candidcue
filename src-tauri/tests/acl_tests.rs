@@ -169,6 +169,9 @@ fn stage_window_cannot_reach_secrets_deletion_or_export() {
         "import_script",
         "export_script",
         "export_all_data",
+        "choose_restore_export",
+        "schedule_restore",
+        "cancel_pending_restore",
         "export_support_bundle",
         "update_settings",
     ] {

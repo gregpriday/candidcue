@@ -73,6 +73,16 @@ function responseFor(command: string): unknown {
       return '0.1.0';
     case 'clear_cache':
       return { kind: 'logs', removedFiles: 0, removedBytes: 0 };
+    case 'schedule_restore':
+      return {
+        exportPath: '/tmp/SpeakingGlass-export',
+        exportCreatedAt: '2026-11-01T09:15:00Z',
+        requestedAt: '2026-11-20T08:00:00Z',
+        attempts: 0,
+        cancellable: true,
+      };
+    case 'cancel_pending_restore':
+      return true;
     case 'start_session':
       return { id: PLACEHOLDER_SESSION_ID, sessionGeneration: 1 };
     case 'list_sessions':
@@ -240,6 +250,11 @@ describe('captured IPC payloads (production services → wire)', () => {
       speechModels.selectSpeechLanguage(3, 'en-US'),
     );
     await capture('clear_cache_logs', () => settings.clearCache('logs'));
+    // Restore from export (#488): the confirmed choice goes back as its id,
+    // never as a path; reading and cancelling take nothing.
+    await capture('schedule_restore', () => settings.scheduleRestore(1));
+    await capture('get_pending_restore', () => settings.getPendingRestore());
+    await capture('cancel_pending_restore', () => settings.cancelPendingRestore());
     await capture('app_version', () => settings.getAppVersion());
   });
 

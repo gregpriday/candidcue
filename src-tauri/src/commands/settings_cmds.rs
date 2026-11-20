@@ -133,25 +133,114 @@ pub async fn export_all_data<R: tauri::Runtime>(
         .map(Some)
 }
 
-/// Restore from an export written by [`export_all_data`].
+/// An export chosen for restore, shown in Settings' confirmation (#488).
 ///
-/// Refuses before it changes anything: unknown export format, missing
-/// manifest, an export marked incomplete, a checksum mismatch, a path pointing
-/// outside the export, or a symlink. Only then does it move the current state
-/// into quarantine — where it stays, whatever happens next — and commit.
+/// Nothing is scheduled yet. `selection_id` is what the confirmation sends back
+/// to [`schedule_restore`]; the folder itself never crosses IPC in that
+/// direction, because JavaScript has no picker to obtain one from and must not
+/// be able to name an arbitrary directory for the next launch to restore.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestorePreview {
+    pub selection_id: u64,
+    pub path: String,
+    /// When the export was taken.
+    pub created_at: String,
+    /// The Speaking Glass version that wrote it.
+    pub app_version: String,
+    /// How many scripts the export contains — what WOULD be restored.
+    pub scripts_in_export: u32,
+}
+
+struct ChosenExport {
+    id: u64,
+    inspected: crate::backup::InspectedExport,
+}
+
+#[derive(Default)]
+struct RestoreSelectionSlot {
+    /// The id the most recent choice was given — reserved before its picker
+    /// opens, so an older choice that finishes later cannot take the slot.
+    latest: u64,
+    chosen: Option<ChosenExport>,
+}
+
+/// The export the last [`choose_restore_export`] validated, waiting for an
+/// answer.
 ///
-/// The restored database is NOT adopted by the running process. The pool is
-/// open on the file that was just replaced underneath it, and reconnecting a
-/// live application to a different database mid-session is a far larger change
-/// than this needs to be. The result says to restart, and the frontend says so.
+/// One slot, keyed by an id. A newer choice supersedes an older one even if
+/// its picker is cancelled or its export refused, so a confirmation still on
+/// screen for the older one can no longer schedule anything: answering yes to
+/// export A must never schedule export B. The slot is emptied by the schedule
+/// that consumes it; a declined confirmation leaves it for the next choice to
+/// replace, and it lives no longer than the process.
+#[derive(Default)]
+pub struct RestoreSelection(std::sync::Mutex<RestoreSelectionSlot>);
+
+impl RestoreSelection {
+    fn lock(&self) -> std::sync::MutexGuard<'_, RestoreSelectionSlot> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn reserve(&self) -> u64 {
+        let mut slot = self.lock();
+        slot.latest += 1;
+        slot.chosen = None;
+        slot.latest
+    }
+
+    /// Keep `inspected` under `id`, unless a newer choice has started since.
+    fn publish(&self, id: u64, inspected: crate::backup::InspectedExport) -> bool {
+        let mut slot = self.lock();
+        if slot.latest != id {
+            return false;
+        }
+        slot.chosen = Some(ChosenExport { id, inspected });
+        true
+    }
+
+    /// The export chosen under `id`, removed from the slot. Once only.
+    fn take(&self, id: u64) -> Option<crate::backup::InspectedExport> {
+        let mut slot = self.lock();
+        match slot.chosen.take() {
+            Some(chosen) if chosen.id == id => Some(chosen.inspected),
+            other => {
+                slot.chosen = other;
+                None
+            }
+        }
+    }
+}
+
+fn stale_restore_selection() -> AppError {
+    AppError::structured(
+        "RESTORE_SELECTION_STALE",
+        crate::errors::ErrorCategory::Validation,
+        "That export is no longer the one chosen, or it has changed since. Choose it again.",
+        true,
+    )
+}
+
+/// Choose an export to restore from, and check it. Schedules NOTHING.
+///
+/// Runs the folder picker in Rust (the dialog plugin is not granted to
+/// JavaScript, §50.7) and every check the restore makes: unknown export format,
+/// missing manifest, an export marked incomplete, a checksum mismatch, a path
+/// pointing outside the export, or a symlink. `Ok(None)` means the operator
+/// cancelled the picker.
+///
+/// Choosing used to schedule the restore in the same step, with no
+/// confirmation (#488). Now Settings shows what the preview describes and
+/// asks, and only [`schedule_restore`] writes the marker.
 #[tauri::command]
-pub async fn restore_all_data<R: tauri::Runtime>(
+pub async fn choose_restore_export<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
-    paths: State<'_, DataPaths>,
-) -> Result<Option<crate::backup::RestoreResult>, AppError> {
+    selection: State<'_, RestoreSelection>,
+) -> Result<Option<RestorePreview>, AppError> {
     // Recovery mode owns no writable database (database::BootStatus).
     boot.require_ready()?;
+    let id = selection.reserve();
     let Some(export_root) = crate::dialogs::pick_destination_folder(
         &app,
         "Choose the Speaking Glass export folder to restore from",
@@ -163,9 +252,73 @@ pub async fn restore_all_data<R: tauri::Runtime>(
     if !export_root.is_absolute() || !export_root.is_dir() {
         return Err(AppError::unsafe_path("Choose an existing export folder."));
     }
-    crate::backup::restore_all_data(&paths, &export_root)
+    let inspected = crate::backup::inspect_restore_export(&export_root).await?;
+    let result = inspected.result();
+    if !selection.publish(id, inspected) {
+        return Err(stale_restore_selection());
+    }
+    Ok(Some(RestorePreview {
+        selection_id: id,
+        path: result.path,
+        created_at: result.created_at,
+        app_version: result.app_version,
+        scripts_in_export: result.scripts_in_export,
+    }))
+}
+
+/// Schedule the restore the operator confirmed, for the next launch.
+///
+/// The export is validated again from scratch: the confirmation may have sat
+/// on screen while the folder was edited, and it must still be the export the
+/// confirmation described — a different, equally valid export dropped at the
+/// same path is refused rather than restored. The swap itself happens at the
+/// next launch, before any pool is opened (`backup::apply_pending_restore`).
+#[tauri::command]
+pub async fn schedule_restore(
+    boot: State<'_, crate::database::BootStatus>,
+    paths: State<'_, DataPaths>,
+    selection: State<'_, RestoreSelection>,
+    selection_id: u64,
+) -> Result<crate::backup::PendingRestoreStatus, AppError> {
+    boot.require_ready()?;
+    let chosen = selection.take(selection_id).ok_or_else(stale_restore_selection)?;
+    let current = crate::backup::inspect_restore_export(&chosen.path)
         .await
-        .map(Some)
+        .map_err(|err| {
+            // The code alone is logged: an inspection message can name the
+            // export's scripts, and the log goes into support bundles. What
+            // the user can do about any of them is the same — choose again.
+            tracing::warn!(code = err.code(), "the confirmed export no longer passes its checks");
+            stale_restore_selection()
+        })?;
+    if !chosen.same_export_as(&current) {
+        return Err(stale_restore_selection());
+    }
+    crate::backup::schedule_inspected_restore(&paths, &current)
+}
+
+/// The restore waiting for the next launch, if any.
+///
+/// Read-only, and from the marker alone, so Settings can show it however long
+/// ago it was scheduled and wherever the export folder has gone since.
+#[tauri::command]
+pub async fn get_pending_restore(
+    paths: State<'_, DataPaths>,
+) -> Result<Option<crate::backup::PendingRestoreStatus>, AppError> {
+    crate::backup::read_pending_restore(&paths)
+}
+
+/// Call off a scheduled restore no launch has started on.
+///
+/// `false` when there was nothing to cancel. A restore a launch has begun is
+/// refused, never removed (see `backup::cancel_pending_restore`).
+#[tauri::command]
+pub async fn cancel_pending_restore(
+    boot: State<'_, crate::database::BootStatus>,
+    paths: State<'_, DataPaths>,
+) -> Result<bool, AppError> {
+    boot.require_ready()?;
+    crate::backup::cancel_pending_restore(&paths)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -467,4 +620,81 @@ pub async fn log_client_diagnostic(
     // point is to observe a broken path, not to add a way to break it.
     let _ = crate::diagnostics::logging::append_client_trace(&paths.logs_dir(), &entry);
     Ok(())
+}
+
+#[cfg(test)]
+mod restore_selection_tests {
+    use super::RestoreSelection;
+    use crate::backup::{ExportManifest, InspectedExport};
+
+    fn export(name: &str) -> InspectedExport {
+        InspectedExport {
+            path: std::path::PathBuf::from(format!("/exports/{name}")),
+            manifest: ExportManifest {
+                export_schema_version: 1,
+                app_version: "1.0.0".into(),
+                created_at: format!("taken-{name}"),
+                database_schema_version: 1,
+                platform: "test".into(),
+                sections: Vec::new(),
+                files: Vec::new(),
+                warnings: Vec::new(),
+                excluded: Vec::new(),
+                complete: true,
+            },
+            scripts_in_export: 1,
+        }
+    }
+
+    #[test]
+    fn a_choice_is_taken_once_and_only_by_its_own_id() {
+        let selection = RestoreSelection::default();
+        let a = selection.reserve();
+        assert!(selection.publish(a, export("a")));
+        assert!(selection.take(a + 1).is_none(), "a wrong id takes nothing");
+        assert_eq!(
+            selection.take(a).expect("its own id takes it").path,
+            std::path::PathBuf::from("/exports/a"),
+            "and a wrong id left it where it was"
+        );
+        assert!(selection.take(a).is_none(), "a replayed id finds nothing");
+    }
+
+    #[test]
+    fn a_newer_choice_supersedes_an_older_one_still_in_its_picker() {
+        /*
+         * A's picker is still open when B's starts. Whatever A's picker
+         * answers later, a yes to A must never schedule anything — and B's own
+         * choice must survive A's late arrival.
+         */
+        let selection = RestoreSelection::default();
+        let a = selection.reserve();
+        let b = selection.reserve();
+        assert!(selection.publish(b, export("b")));
+        assert!(!selection.publish(a, export("a")), "A arrived late and is refused");
+        assert!(selection.take(a).is_none());
+        assert_eq!(
+            selection.take(b).expect("B is still chosen").path,
+            std::path::PathBuf::from("/exports/b")
+        );
+    }
+
+    #[test]
+    fn starting_a_new_choice_withdraws_the_last_one_even_if_it_is_cancelled() {
+        let selection = RestoreSelection::default();
+        let a = selection.reserve();
+        assert!(selection.publish(a, export("a")));
+        // B's picker opens and is cancelled: nothing is published for it.
+        let _b = selection.reserve();
+        assert!(selection.take(a).is_none(), "A's confirmation can no longer schedule it");
+    }
+
+    #[test]
+    fn a_different_export_at_the_same_path_is_not_the_same_export() {
+        let first = export("a");
+        let mut second = export("a");
+        assert!(first.same_export_as(&second));
+        second.manifest.created_at = "taken-later".into();
+        assert!(!first.same_export_as(&second));
+    }
 }

@@ -172,6 +172,12 @@ export const APP_ERROR_CODES = [
   'DATABASE_BACKUP_REQUIRED',
   'DATABASE_UNAVAILABLE',
   'RESTORE_FAILED',
+  // Scheduling and cancelling a restore from Settings (#488). Not
+  // RESTORE_FAILED, whose copy says data was put back: none of these has
+  // touched anything.
+  'RESTORE_ALREADY_SCHEDULED',
+  'RESTORE_SELECTION_STALE',
+  'RESTORE_IN_PROGRESS',
   // `STT_ENGINE_ERROR`, `STT_WORKER_FAILED`, `STT_MODEL_LOAD_FAILED`,
   // `STT_MODEL_MISSING` and `STT_MODEL_NOT_INSTALLED` are already declared
   // above with the rest of the recogniser codes; the drift was in the OTHER

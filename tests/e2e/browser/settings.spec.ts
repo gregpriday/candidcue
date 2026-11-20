@@ -1194,3 +1194,82 @@ test('Reveal data folder asks Rust to show the data folder', async ({ page }) =>
     )
     .toBe(1);
 });
+
+/*
+ * #488. Choosing an export used to schedule a full replacement of the library
+ * in the same click, and once the toast went nothing said a restore was
+ * waiting. Now: choose, read what restoring does, and schedule only on a yes;
+ * the scheduled restore is shown in the Data section from Rust's answer, after
+ * Settings is reloaded too, and Cancel restore calls it off.
+ */
+test('Restore from export asks first, shows the scheduled restore, and cancels it', async ({ page }) => {
+  const exportPath = '/Users/sam/Desktop/SpeakingGlass-export-20261101-091500';
+  await installTauriShim(page, {
+    welcomed: true,
+    restoreExport: {
+      path: exportPath,
+      createdAt: '2026-11-01T09:15:00Z',
+      appVersion: '1.0.0',
+      scriptsInExport: 7,
+    },
+  });
+  await openPreferences(page);
+  await gotoSection(page, 'Data, privacy & updates');
+
+  const calls = (command: string) =>
+    page.evaluate((name) => window.__E2E__.calls.filter((c) => c.command === name).length, command);
+  const restore = page.getByRole('button', { name: 'Restore from export…' });
+  const row = page.getByTestId('pending-restore');
+  // The row is drawn from Rust's answer, not from memory of a click.
+  await expect.poll(() => calls('get_pending_restore')).toBeGreaterThan(0);
+  await expect(row).toHaveCount(0);
+
+  // Declined: nothing is scheduled.
+  await restore.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText(exportPath);
+  await expect(dialog).toContainText('7 scripts');
+  await expect(dialog).toContainText(/replaces your current scripts, settings \(calibrated rigs included\) and take history/);
+  await expect(dialog).toContainText('quarantine folder');
+  await expect(dialog).toContainText('anything you change in them before you quit goes there too');
+  await dialog.getByRole('button', { name: 'Don’t restore' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await calls('schedule_restore')).toBe(0);
+  await expect(row).toHaveCount(0);
+
+  // Accepted: scheduled once, and shown with the export and when it was taken.
+  await restore.click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Schedule restore' }).click();
+  await expect(row).toContainText('Restore scheduled for the next launch');
+  await expect(row).toContainText(exportPath);
+  const taken = await page.evaluate(() =>
+    new Date('2026-11-01T09:15:00Z').toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' }),
+  );
+  await expect(row).toContainText(`taken on ${taken}`);
+  expect(await calls('schedule_restore')).toBe(1);
+  await expect(restore).toBeDisabled();
+
+  // A search that finds the action keeps the scheduled restore with it.
+  const search = page.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('restore from export');
+  await expect(row).toBeVisible();
+  await expect(row.getByRole('button', { name: 'Cancel restore' })).toBeVisible();
+  await search.fill('');
+
+  // Settings closed and reopened: the row comes back from a fresh read.
+  await openPreferences(page);
+  await gotoSection(page, 'Data, privacy & updates');
+  await expect(row).toContainText(exportPath);
+  await expect(restore).toBeDisabled();
+
+  // Cancelled, and still gone after another reopen.
+  await row.getByRole('button', { name: 'Cancel restore' }).click();
+  await expect(row).toHaveCount(0);
+  expect(await calls('cancel_pending_restore')).toBe(1);
+  await expect(restore).toBeEnabled();
+  await openPreferences(page);
+  await gotoSection(page, 'Data, privacy & updates');
+  await expect.poll(() => calls('get_pending_restore')).toBeGreaterThan(0);
+  await expect(row).toHaveCount(0);
+  await expect(restore).toBeEnabled();
+});

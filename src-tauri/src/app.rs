@@ -170,7 +170,13 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::export_all_data,
-            commands::restore_all_data,
+            // Restore from export (#488): choose and check, then schedule only
+            // once Settings has asked; the pending restore is shown and can be
+            // called off until a launch starts on it.
+            commands::choose_restore_export,
+            commands::schedule_restore,
+            commands::get_pending_restore,
+            commands::cancel_pending_restore,
             commands::clear_cache,
             commands::get_system_diagnostics,
             commands::log_client_diagnostic,
@@ -325,6 +331,9 @@ pub fn run() {
             // Where the last support bundle went, so Finder can be pointed at
             // it without a path crossing IPC (commands::LastSupportBundle).
             handle.manage(commands::LastSupportBundle::default());
+            // The export a restore's confirmation is about; see
+            // `commands::RestoreSelection`.
+            handle.manage(commands::RestoreSelection::default());
 
             // Cross-window authority (spec §43.4).
             handle.manage(AppCoordinator::default());

@@ -77,7 +77,12 @@ commands.allow = [
   "get_settings",
   "update_settings",
   "export_all_data",
-  "restore_all_data",
+  # Restore from export (#488). Choosing runs the picker in Rust and schedules
+  # nothing; scheduling takes the id of that choice, never a path.
+  "choose_restore_export",
+  "schedule_restore",
+  "get_pending_restore",
+  "cancel_pending_restore",
   # Recovery (§48.5). Reachable because a failed `database::init` no longer
   # aborts Tauri's setup hook before a webview exists.
   "get_boot_status",

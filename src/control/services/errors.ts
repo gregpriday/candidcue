@@ -381,6 +381,12 @@ const ERROR_COPY: Record<string, string> = {
     'Speaking Glass is in recovery mode because its database did not open, so this action is unavailable. Recover the database and reopen Speaking Glass.',
   RESTORE_FAILED:
     'The restore did not finish, and Speaking Glass put your previous data back. A copy of it was also kept.',
+  RESTORE_ALREADY_SCHEDULED:
+    'A restore is already scheduled; Settings › Data, privacy & updates shows it. Nothing new was scheduled.',
+  RESTORE_SELECTION_STALE:
+    'That export changed, or another was chosen, after you confirmed. Nothing was scheduled. Choose the export again.',
+  RESTORE_IN_PROGRESS:
+    'A launch of Speaking Glass has already started this restore, so it can no longer be cancelled.',
 
   /* -- installing a language ---------------------------------------------- */
   //
