@@ -166,6 +166,25 @@ describe('what is shown before anything downloads', () => {
     expect(shown).toContain('github.com');
   });
 
+  // The shipped catalogue names a mirror (#198): both hosts are disclosed
+  // before the download starts, in the order they are asked.
+  it('names the mirror before the publisher it falls back to', async () => {
+    const { view } = await mount(
+      optionsFixture({
+        languages: [
+          optionFixture({
+            status: statusFixture({ installed: false, phase: 'notInstalled', source: null }),
+            origins: [
+              { kind: 'mirror', host: 'updates.speakingglass.com' },
+              { kind: 'upstream', host: 'github.com' },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(text(view)).toContain('updates.speakingglass.com, then github.com');
+  });
+
   it('says "on disk" only once the model really is', async () => {
     const { view } = await mount(optionsFixture());
     expect(text(view)).toContain('162 MB on disk');

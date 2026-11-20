@@ -512,15 +512,34 @@ describe('the model catalogue', () => {
     if (catalogue.mirrorBaseUrl) hosts.add(new URL(catalogue.mirrorBaseUrl).hostname);
     for (const model of catalogue.models) hosts.add(new URL(model.archive.upstreamUrl).hostname);
 
-    const unnamed = [...hosts].filter((host) => !inventory.includes(host));
-    expect(
-      unnamed,
-      `The speech-model catalogue points at hosts ${INVENTORY} does not name:\n` +
-        unnamed.map((host) => `  ${host}`).join('\n') +
-        `\n\nThe host a download contacts is a privacy fact, and the policy ` +
-        `names it. Add the host to the inventory and to legal/PRIVACY_POLICY.md ` +
-        `together.`,
-    ).toEqual([]);
+    /*
+     * The download's own row and the policy's own paragraph, not the whole
+     * documents: the mirror shares its host with the update feed, so a
+     * whole-document search would pass on the updater's rows while the
+     * speech-model row still said "github.com" alone.
+     */
+    const row = inventory.split('\n').find((line) => line.startsWith('| Speech-model download |'));
+    expect(row, `${INVENTORY} has no "Speech-model download" row`).toBeDefined();
+    const policy = read('legal/PRIVACY_POLICY.md')
+      .split(/\n\s*\n/)
+      .find((paragraph) => paragraph.startsWith('The speech model is downloaded'));
+    expect(policy, 'legal/PRIVACY_POLICY.md has no speech-model download paragraph').toBeDefined();
+
+    for (const [where, text] of [
+      [INVENTORY, row ?? ''],
+      ['legal/PRIVACY_POLICY.md', policy ?? ''],
+    ] as const) {
+      const unnamed = [...hosts].filter((host) => !text.includes(host));
+      expect(
+        unnamed,
+        `The speech-model catalogue points at hosts ${where} does not name where it ` +
+          `describes the model download:\n` +
+          unnamed.map((host) => `  ${host}`).join('\n') +
+          `\n\nThe host a download contacts is a privacy fact, and the policy ` +
+          `names it. Add the host to the inventory and to legal/PRIVACY_POLICY.md ` +
+          `together.`,
+      ).toEqual([]);
+    }
   });
 });
 

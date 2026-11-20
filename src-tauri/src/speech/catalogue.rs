@@ -514,6 +514,19 @@ mod tests {
         }
     }
 
+    /// Upstream's `asr-models` tag can be re-tagged or lose an asset, and the
+    /// pinned digest then refuses the only source a new install has (#198).
+    /// The mirror is the bucket the update feed is served from, filled by
+    /// `.github/workflows/mirror-models.yml`, whose script derives the bucket
+    /// key from this same base — so moving it means moving the mirror too.
+    #[test]
+    fn the_catalogue_names_the_mirror_the_release_pipeline_fills() {
+        assert_eq!(
+            catalogue().mirror_base_url.as_deref(),
+            Some("https://updates.speakingglass.com/models")
+        );
+    }
+
     /// The bundled model's id is what Settings reports and what the log line
     /// carries; the fetch catalogue's `modelName` is what gets downloaded.
     /// Before the catalogue existed this was a second hardcoded string that had

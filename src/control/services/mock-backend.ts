@@ -385,7 +385,10 @@ function mockLanguageOptions(): SpeechLanguageOptions {
         recognizerId: BUNDLED_MODEL_NAME,
         active: true,
         status: mockModelStatus(),
-        origins: [{ kind: 'upstream', host: 'github.com' }],
+        origins: [
+          { kind: 'mirror', host: 'updates.speakingglass.com' },
+          { kind: 'upstream', host: 'github.com' },
+        ],
         attribution: {
           title: 'X-ASR streaming Zipformer transducer (mock)',
           author: 'Jun Guo, with the X-LANCE Lab, Shanghai Jiao Tong University',

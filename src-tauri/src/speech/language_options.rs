@@ -533,18 +533,20 @@ mod tests {
         }
     }
 
-    /// The picker names where the bytes come from. With no mirror configured
-    /// that is upstream alone, and upstream is always last.
+    /// The picker names where the bytes come from: the mirror first, then
+    /// upstream, which is always last.
     #[test]
     fn origins_name_the_hosts_the_downloader_actually_uses() {
         let entry = catalogue().get("x-asr-480ms").expect("bundled entry");
         let origins = origins_for(entry);
-        assert!(!origins.is_empty());
+        let named: Vec<_> = origins.iter().map(|o| (o.kind, o.host.as_str())).collect();
         assert_eq!(
-            origins.last().map(|o| o.kind),
-            Some(SpeechDownloadOriginKind::Upstream)
+            named,
+            vec![
+                (SpeechDownloadOriginKind::Mirror, "updates.speakingglass.com"),
+                (SpeechDownloadOriginKind::Upstream, "github.com"),
+            ]
         );
-        assert_eq!(origins.last().map(|o| o.host.as_str()), Some("github.com"));
         assert_eq!(
             origins.len(),
             model_download::archive_urls(catalogue(), entry).len()
