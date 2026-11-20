@@ -712,14 +712,28 @@ fn scheduling_a_restore_takes_a_choice_id_never_a_path() {
             .to_string()
     };
 
+    // The arguments a webview supplies: every parameter (one to a line, as
+    // the file is written) that is not something Tauri injects.
+    let webview_args = |signature: &str| -> Vec<String> {
+        signature
+            .lines()
+            .map(|line| line.trim().trim_end_matches(','))
+            .filter(|param| {
+                param.split_once(": ").is_some_and(|(name, _)| {
+                    !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                })
+            })
+            .filter(|param| !param.contains("State<") && !param.contains("AppHandle"))
+            .map(str::to_string)
+            .collect()
+    };
+
     let schedule = signature("schedule_restore");
-    assert!(schedule.contains("selection_id: u64"), "schedule_restore takes the choice id");
-    for smuggled in ["path", "export", "destination", "String"] {
-        assert!(
-            !schedule.contains(smuggled),
-            "schedule_restore must not take anything a path could ride in on (`{smuggled}`)"
-        );
-    }
+    assert_eq!(
+        webview_args(&schedule),
+        vec!["selection_id: u64".to_string()],
+        "schedule_restore takes the choice id and nothing a path could ride in on"
+    );
     assert_eq!(
         f["schedule_restore"].as_object().expect("payload").keys().collect::<Vec<_>>(),
         vec!["selectionId"]
@@ -730,9 +744,8 @@ fn scheduling_a_restore_takes_a_choice_id_never_a_path() {
             f[command].as_object().expect("payload").is_empty(),
             "{command} must take no arguments from the webview"
         );
-        let signature = signature(command);
         assert!(
-            !signature.contains(": String") && !signature.contains(": u64"),
+            webview_args(&signature(command)).is_empty(),
             "{command} takes an argument the fixture does not send"
         );
     }
