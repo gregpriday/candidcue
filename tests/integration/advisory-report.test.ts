@@ -16,7 +16,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, join, relative as relativeTo, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { fakeTool } from '../helpers/fake-tool';
 
@@ -313,7 +313,6 @@ describe('the advisory report', () => {
           GITHUB_ACTIONS: '',
           SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
           CARGO_HOME: scratch(),
-        CARGO_HOME: scratch(),
           PATH: `${bin}${delimiter}${process.env.PATH}`,
         },
       },
@@ -710,7 +709,13 @@ console.log(${JSON.stringify(JSON.stringify(pnpmReport()))});
     ]);
   });
 
-  it('fails the Cargo scans when a cargo-audit configuration could hide findings', () => {
+  it('fails the Cargo scans when a cargo-audit configuration could hide findings, wherever CARGO_HOME is given from', () => {
+    // Relative, as cargo reads it: from the repository the scan runs in.
+    const relative = scratch();
+    writeFileSync(join(relative, 'audit.toml'), '[advisories]\nignore = []\n');
+    const fromRepo = live(cleanScanners(), [], { CARGO_HOME: relativeTo(REPO_ROOT, relative) });
+    expect(section(fromRepo.output, 'SCAN FAILED').join('\n')).toContain('audit.toml configures cargo audit');
+
     const cargoHome = scratch();
     writeFileSync(join(cargoHome, 'audit.toml'), '[advisories]\nignore = ["RUSTSEC-2026-0548"]\n');
     const result = live(cleanScanners(), [], { CARGO_HOME: cargoHome });

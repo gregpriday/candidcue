@@ -293,7 +293,8 @@ const SCANS = [
  * .npmrc; GitHub advisories have no severity below low.)
  */
 function cargoConfigSuppression() {
-  const cargoHome = process.env.CARGO_HOME || join(homedir(), '.cargo');
+  // Relative to the repository, which is where cargo runs and resolves it.
+  const cargoHome = process.env.CARGO_HOME ? resolve(ROOT, process.env.CARGO_HOME) : join(homedir(), '.cargo');
   for (const path of [join(ROOT, '.cargo', 'audit.toml'), join(cargoHome, 'audit.toml')]) {
     if (existsSync(path)) return `${path} configures cargo audit, and could hide findings: record exceptions in the register instead`;
   }
@@ -311,7 +312,8 @@ function pnpmConfigSuppression() {
     return 'package.json sets pnpm.auditConfig, which could hide findings: record exceptions in the register instead';
   }
   const workspace = join(ROOT, 'pnpm-workspace.yaml');
-  if (existsSync(workspace) && /^auditConfig\s*:/m.test(readFileSync(workspace, 'utf8'))) {
+  // Any spelling of the key YAML accepts at the top level, quoted or not.
+  if (existsSync(workspace) && /^\s*['"]?auditConfig['"]?\s*:/m.test(readFileSync(workspace, 'utf8'))) {
     return 'pnpm-workspace.yaml sets auditConfig, which could hide findings: record exceptions in the register instead';
   }
   return null;

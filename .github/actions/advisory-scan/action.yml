@@ -19,7 +19,7 @@ description: >
 
 inputs:
   enforce:
-    description: "'true' fails the step when the scan would refuse a tag; anything else reports it and carries on"
+    description: "'true' fails the step when the scan would refuse a tag; 'false' reports it and carries on; anything else fails the step"
     required: true
   save:
     description: A directory for each scanner's raw output and the report as advisories.txt; empty for neither
