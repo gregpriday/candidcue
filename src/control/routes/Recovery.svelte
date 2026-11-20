@@ -501,14 +501,22 @@
             <code class="path">{status.dataDirectory}</code>
           {/if}
           <div class="actions">
-            <Button
-              variant="default"
-              bind:element={rescueButton}
-              disabled={busy !== null}
-              onclick={() => void rescueScripts()}
-            >
-              {busy === 'rescue' ? 'Saving…' : 'Save a copy of my scripts…'}
-            </Button>
+            <!--
+              Not after a restore that did not finish: it copies the live
+              scripts tree, which may be the export's partial output while the
+              user's own scripts are in quarantine — a "saved a copy of your
+              scripts" that left theirs out.
+            -->
+            {#if status.code !== 'RESTORE_FAILED'}
+              <Button
+                variant="default"
+                bind:element={rescueButton}
+                disabled={busy !== null}
+                onclick={() => void rescueScripts()}
+              >
+                {busy === 'rescue' ? 'Saving…' : 'Save a copy of my scripts…'}
+              </Button>
+            {/if}
             <Button
               variant="ghost"
               bind:element={revealButton}

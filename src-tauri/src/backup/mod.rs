@@ -1037,8 +1037,16 @@ pub fn cancel_pending_restore(paths: &DataPaths) -> Result<bool, AppError> {
 /// Returns where the replaced state went, if a restore ran.
 pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>, AppError> {
     let marker = paths.root().join(PENDING_RESTORE);
-    if !marker.exists() {
-        return Ok(None);
+    /*
+     * Only a marker KNOWN to be absent means "nothing pending". A probe that
+     * fails for any other reason (permissions, an I/O error) is not that:
+     * `exists()` used to fold it into "no marker", and startup then opened a
+     * library a restore might have left half-replaced.
+     */
+    match std::fs::symlink_metadata(&marker) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(unreadable_marker(paths, &marker, &e.to_string())),
     }
 
     /*
@@ -1059,14 +1067,20 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
      */
     const MAX_RESTORE_ATTEMPTS: u32 = 3;
 
-    let raw = std::fs::read(&marker)?;
-    let mut pending: PendingRestore = serde_json::from_slice(&raw)
-        .map_err(|e| {
-            // An unreadable marker cannot be counted or retried; remove it so
-            // the next launch is not stuck on it.
-            let _ = std::fs::remove_file(&marker);
-            AppError::invalid_input(format!("The pending restore was unreadable: {e}"))
-        })?;
+    /*
+     * An unreadable marker is KEPT, and the launch stops here.
+     *
+     * It used to be removed on a parse error so the next launch would not be
+     * stuck on it. But it is the only record of whether a restore is part way
+     * through, and this code writes it whole (`write_json_durably`), so one
+     * that does not parse has been changed by something else — after which
+     * nothing says what is out of place. Opening on that guess is the failure
+     * this function exists to prevent. The message names the file and the
+     * quarantine folder; the user decides.
+     */
+    let raw = std::fs::read(&marker).map_err(|e| unreadable_marker(paths, &marker, &e.to_string()))?;
+    let mut pending: PendingRestore =
+        serde_json::from_slice(&raw).map_err(|e| unreadable_marker(paths, &marker, &e.to_string()))?;
 
     /*
      * A restore that finished but could not delete its own marker — or crashed
@@ -1200,10 +1214,6 @@ async fn swap(
         .quarantine_generation
         .clone()
         .unwrap_or_else(|| format!("pre-restore-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")));
-    if pending.quarantine_generation.is_none() {
-        pending.quarantine_generation = Some(generation.clone());
-        write_marker(marker, pending)?;
-    }
     let previous = paths.quarantine_dir().join(&generation);
     std::fs::create_dir_all(&previous)?;
     /*
@@ -1219,6 +1229,16 @@ async fn swap(
     let quarantine_root = paths.quarantine_dir();
     sync_dir(&quarantine_root)?;
     sync_dir(parent_of(&quarantine_root))?;
+    /*
+     * Named in the marker only once it exists, durably. So a recorded
+     * generation always had a directory, and one that has since vanished
+     * behind a `quarantine/` link that no longer resolves is a question
+     * `displaced` refuses to guess at.
+     */
+    if pending.quarantine_generation.is_none() {
+        pending.quarantine_generation = Some(generation.clone());
+        write_marker(marker, pending)?;
+    }
 
     let live_scripts = paths.scripts_dir();
     let live_database = paths.root().join(DATABASE_NAME);
@@ -1338,6 +1358,18 @@ fn displaced(paths: &DataPaths, pending: &PendingRestore) -> Vec<String> {
         .cloned()
         .collect();
     if let Some(previous) = generation_dir(paths, pending) {
+        /*
+         * `quarantine/` is there as an entry but does not resolve — a link to
+         * a volume that is not mounted. Every probe below would answer "not
+         * found" for originals that are simply out of reach. (A `quarantine/`
+         * that is genuinely gone, or a generation deleted inside a reachable
+         * one, is the user removing it: nothing is left to put back, and
+         * holding the library shut over it would strand them.)
+         */
+        let root = paths.quarantine_dir();
+        if std::fs::symlink_metadata(&root).is_ok() && std::fs::metadata(&root).is_err() {
+            names.push("quarantine".to_string());
+        }
         for (_, quarantined, name, _) in restore_components(paths, &previous) {
             // A probe that cannot answer counts as occupied: uncertainty is
             // not a reason to open the library.
@@ -1511,11 +1543,29 @@ fn give_up(paths: &DataPaths, marker: &Path, pending: &mut PendingRestore, cap: 
 /// could not be moved. The marker is kept, so it is said on every launch.
 fn not_put_back_message(lead: &str, paths: &DataPaths, pending: &PendingRestore) -> String {
     let folder = generation_dir(paths, pending).unwrap_or_else(|| paths.quarantine_dir());
+    /*
+     * Where the restore set the data aside, not a claim that every part of it
+     * is still there: a journalled original can be missing from it (that is
+     * one of the ways a rollback cannot finish), and a move-back can land
+     * and then fail its directory sync.
+     */
     format!(
-        "{lead} What it could not move is still at {} — nothing was deleted. Speaking Glass \
-         will not open your library until that is back where it was.",
+        "{lead} Speaking Glass set your previous data aside in {} and deleted nothing, and it \
+         will not open your library until all of it is back in place.",
         folder.display()
     )
+}
+
+/// The marker exists and cannot be read or parsed. See its call sites.
+fn unreadable_marker(paths: &DataPaths, marker: &Path, reason: &str) -> AppError {
+    restore_failed(format!(
+        "Speaking Glass could not read its record of a scheduled restore at {}, so it cannot \
+         tell whether that restore finished, and it will not open your library over one that \
+         may not have. Anything a restore set aside is in {}; nothing was deleted.",
+        marker.display(),
+        paths.quarantine_dir().display()
+    ))
+    .with_log(format!("restore marker unreadable: {reason}"))
 }
 
 fn restore_failed(message: String) -> AppError {
@@ -1787,14 +1837,22 @@ fn evacuate_component(
      * the export. Falling through to the move below would set that aside AS
      * the original, and a later rollback would put it back as the user's data.
      */
-    if journalled && std::fs::symlink_metadata(&to).is_err() {
+    let occupied = std::fs::symlink_metadata(&to).is_ok();
+    if journalled && !occupied {
         return Err(restore_failed(format!(
             "Speaking Glass could not find the copy of your previous data it set aside at {}, \
              so it did not go on with the restore.",
             to.display()
         )));
     }
-    if to.exists() {
+    /*
+     * Occupied by ANY entry, a dangling link included. `exists()` follows
+     * links, so a link whose target is gone read as empty, and the move
+     * below would rename the live path over it and journal that as the
+     * original. The kind check that follows does follow links, so a dangling
+     * one is the wrong kind and refused.
+     */
+    if occupied {
         let right_kind = match kind {
             ComponentKind::Tree => to.is_dir(),
             ComponentKind::File => to.is_file(),

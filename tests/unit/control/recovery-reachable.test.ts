@@ -312,8 +312,9 @@ describe('a restore from an export that did not finish (#233)', () => {
   });
   const NOT_PUT_BACK =
     'The restore did not finish, and Speaking Glass could not fully put your previous data back ' +
-    'either. What it could not move is still at /data/quarantine/pre-restore-20261120T000000Z — ' +
-    'nothing was deleted.';
+    'either. Speaking Glass set your previous data aside in ' +
+    '/data/quarantine/pre-restore-20261120T000000Z and deleted nothing, and it will not open your ' +
+    'library until all of it is back in place.';
 
   it('recommends nothing — least of all reopening — even with a backup ready', async () => {
     /*
@@ -338,11 +339,17 @@ describe('a restore from an export that did not finish (#233)', () => {
     );
     expect(arm).toContain('{@render afterRestore()}');
     expect(arm).not.toMatch(/reopen\(\)|restoreOption|rebuildOption/);
+    // Reached only by its own value: the reopen arm is exactly 'reopen'.
+    expect(recoverySource).toContain("{#if advice === 'reopen'}");
     const snippet = recoverySource.slice(
       recoverySource.indexOf('{#snippet afterRestore()}'),
       recoverySource.indexOf('{/snippet}', recoverySource.indexOf('{#snippet afterRestore()}')),
     );
-    expect(snippet).not.toContain('Recommended');
+    expect(snippet).not.toMatch(/Recommended|restoreOption|rebuildOption|rescueScripts/);
+    // Nor the script rescue, which copies a live tree that may be the export's.
+    expect(recoverySource).toMatch(
+      /\{#if status\.code !== 'RESTORE_FAILED'\}\s*<Button[\s\S]*?rescueScripts[\s\S]*?\{\/if\}/,
+    );
 
     // And the screen does not promise the scripts are safe in place: they may
     // be the export's, with the user's own in quarantine.
@@ -376,12 +383,13 @@ describe('a restore from an export that did not finish (#233)', () => {
       correlationId: 'x',
     });
     expect(describeError(payload(NOT_PUT_BACK))).toBe(NOT_PUT_BACK);
-    const odd = 'What it could not move is still at /Users/me/MY_LIBRARY/quarantine.';
+    const odd = 'Speaking Glass set your previous data aside in /Users/me/MY_LIBRARY/quarantine.';
     expect(describeError(payload(odd))).toBe(odd);
 
-    // With only the code, the copy claims neither outcome.
+    // With only the code, or an empty message, the copy claims neither outcome.
     const bare = describeError('RESTORE_FAILED');
-    expect(bare).not.toMatch(/put your previous data back|copy of it was also kept/i);
+    expect(bare).not.toMatch(/put your previous data back|copy of it was also kept|restored/i);
     expect(bare).toMatch(/quarantine/);
+    expect(describeError(payload('  '))).toBe(bare);
   });
 });

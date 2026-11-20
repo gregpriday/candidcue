@@ -3140,6 +3140,14 @@ async fn recovery_mode_refuses_commands_that_would_write() {
         "a destructive repair must be refused while a restore is unfinished"
     );
     assert!(restore_failed.require_ready().is_err());
+    // By its code, not its category: other storage failures still repair.
+    let corrupt = BootStatus::Failed(speaking_glass_lib::AppError::structured(
+        "DATABASE_CORRUPT",
+        speaking_glass_lib::errors::ErrorCategory::Storage,
+        "corrupt",
+        true,
+    ));
+    assert!(corrupt.require_recovery().is_ok());
 }
 
 #[test]
@@ -3878,6 +3886,7 @@ async fn an_unjournalled_obstruction_is_refused_on_every_attempt() {
      * output, so the marker stays and every launch names the folder.
      */
     let marker = h.dir.path().join("restore-pending.json");
+    set_attempts(h.dir.path(), 3);
     for launch in 4..=5 {
         let err = backup::apply_pending_restore(&h.paths)
             .await
@@ -4429,6 +4438,18 @@ async fn interrupted_swap() -> InterruptedSwap {
         h.dir.path(),
         &journalled.iter().map(String::as_str).collect::<Vec<_>>(),
     );
+    // A sidecar SQLite had already removed was recorded absent, as a real
+    // attempt records it — and the commit may have left one live since.
+    let absent: Vec<String> = ["speaking-glass.sqlite3-wal", "speaking-glass.sqlite3-shm"]
+        .iter()
+        .filter(|name| !journalled.iter().any(|j| j == *name))
+        .map(|name| name.to_string())
+        .collect();
+    journal_absent(h.dir.path(), &absent.iter().map(String::as_str).collect::<Vec<_>>());
+    for name in &absent {
+        fs::write(h.dir.path().join(name), b"left by the dead attempt").expect("partial sidecar");
+    }
+    set_attempts(h.dir.path(), 1);
     let partial = h.paths.scripts_dir().join("half-written");
     fs::create_dir_all(&partial).expect("partial");
     fs::write(partial.join("script.md"), "# Truncated").expect("partial body");
@@ -4501,6 +4522,20 @@ async fn assert_originals_back(s: &InterruptedSwap) {
             "{name} was left in quarantine after the rollback"
         );
     }
+    // What was absent before the restore is absent again.
+    if dir.join("restore-pending.json").exists() {
+        let journal = marker_json(dir);
+        if let Some(absent) = journal["absent"].as_array() {
+            assert!(absent.is_empty(), "the journal still records absences: {absent:?}");
+        }
+    }
+    for name in ["speaking-glass.sqlite3-wal", "speaking-glass.sqlite3-shm"] {
+        assert_ne!(
+            fs::read(dir.join(name)).unwrap_or_default(),
+            b"left by the dead attempt".to_vec(),
+            "the dead attempt's {name} was left live"
+        );
+    }
 }
 
 #[tokio::test]
@@ -4557,6 +4592,11 @@ async fn past_the_retry_cap_a_displaced_restore_is_rolled_back_before_its_marker
         .await
         .expect_err("an exhausted restore reports failure");
     assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert!(
+        err.user_message().contains("put your previous data back where it was"),
+        "it rolled back, and must say so: {}",
+        err.user_message()
+    );
     assert_originals_back(&s).await;
     assert!(
         !s.h.dir.path().join("restore-pending.json").exists(),
@@ -4730,7 +4770,22 @@ async fn a_rollback_over_a_library_someone_has_used_keeps_their_work() {
     fs::create_dir_all(&work).expect("work");
     fs::write(work.join("script.md"), "# New work").expect("new work");
 
-    let _ = backup::apply_pending_restore(&h.paths).await;
+    let err = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect_err("past the cap, the restore is abandoned");
+    assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
+    assert!(
+        !marker.exists(),
+        "everything went back, so the marker is retired: {}",
+        err.user_message()
+    );
+    let live: Vec<String> = fs::read_dir(h.paths.scripts_dir())
+        .expect("scripts")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(live.iter().any(|b| b.contains("# Mine")), "the original scripts are back: {live:?}");
+    assert!(!live.iter().any(|b| b.contains("New work")), "{live:?}");
 
     let kept = previous
         .join("rolled-back-attempt-4")
@@ -4743,4 +4798,27 @@ async fn a_rollback_over_a_library_someone_has_used_keeps_their_work() {
         "the rollback must set the live work aside at {}, not delete it",
         kept.display()
     );
+}
+
+#[tokio::test]
+async fn an_unreadable_restore_marker_keeps_the_library_shut() {
+    /*
+     * A marker that does not parse used to be deleted, so the next launch
+     * opened whatever was live — after an interrupted restore, half the
+     * export beside an empty database. It is the only record of what is out
+     * of place, so it is kept, and every launch stops in recovery.
+     */
+    let s = interrupted_swap().await;
+    let dir = s.h.dir.path();
+    let marker = dir.join("restore-pending.json");
+    fs::write(&marker, b"{ not json").expect("damage the marker");
+
+    for launch in 1..=2 {
+        let err = speaking_glass_lib::database::init(dir)
+            .await
+            .expect_err("a launch must not open over an unreadable restore record");
+        assert_eq!(err.code(), "RESTORE_FAILED", "launch {launch}: {err}");
+        assert!(marker.exists(), "launch {launch} deleted the marker");
+        assert!(!dir.join("speaking-glass.sqlite3").exists(), "launch {launch} created a database");
+    }
 }
