@@ -246,6 +246,58 @@ test('the one-screen script follows the control alignment position', async ({ pa
 });
 
 /*
+ * THE VIEWPORT PRIOR STILL LEAVES THE EMBEDDED STAGE.
+ *
+ * `stage://viewport-hint` is how the engine learns which tokens are on the
+ * glass, and it is the leash that refuses a jump to somewhere off screen
+ * (`viewport_confines_jumps`). It is emitted by the script layer from inside
+ * the take's embedded stage, and nothing fails visibly when it stops: the leash
+ * goes slack and the engine ranks without a viewport. So the frontend half of
+ * the wire is asserted at the IPC boundary — the shim records the webview's
+ * `plugin:event|emit` — with the take's own session generation, which is what
+ * Rust checks it against.
+ */
+test('the embedded stage reports the tokens on the glass to Rust', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await present(page);
+  await expect(page.locator('.script-layer')).toBeVisible();
+
+  const hint = () =>
+    page.evaluate(() => {
+      const generation = window.__E2E__.lastSession?.sessionGeneration ?? null;
+      const hints = window.__E2E__.calls
+        .filter((call) => {
+          const args = call.args as { event?: unknown } | null;
+          return call.command === 'plugin:event|emit' && args?.event === 'stage://viewport-hint';
+        })
+        .map(
+          (call) =>
+            (call.args as {
+              payload: {
+                sessionGeneration: number;
+                firstToken: number;
+                lastToken: number;
+                cleared: boolean;
+              };
+            }).payload,
+        )
+        .filter((payload) => !payload.cleared);
+      const last = hints.at(-1);
+      return last ? { ...last, expectedGeneration: generation } : null;
+    });
+
+  await expect.poll(hint, { timeout: 10_000 }).not.toBeNull();
+  const reported = await hint();
+  expect(reported?.sessionGeneration).toBe(reported?.expectedGeneration);
+  expect(reported?.sessionGeneration).toBeGreaterThan(0);
+  // The opening of the script is what is on the glass when a take starts.
+  expect(reported?.firstToken).toBe(0);
+  expect(reported?.lastToken).toBeGreaterThan(reported?.firstToken ?? 0);
+
+  errors.expectClean();
+});
+
+/*
  * WHERE THE SCRIPT IS SITTING THE MOMENT THE GLASS LIGHTS UP.
  *
  * The document's top padding puts the first LINE on the reading mark at scroll

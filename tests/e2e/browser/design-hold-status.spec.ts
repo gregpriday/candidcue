@@ -11,8 +11,7 @@ import { openScript } from './fixtures/library';
  * normal suite and CI skip every test here. Each test drives one rung or
  * reason of the hold ladder through the seams a real take uses — the shim's
  * `align://snapshot` deliveries, a microphone that opens and carries nothing,
- * the follow switch, the A key, and for control loss a separate stage window
- * whose heartbeat is allowed to lapse. A state is checked on screen BEFORE its
+ * the follow switch and the A key. A state is checked on screen BEFORE its
  * file is written, so a capture that did not reach its state fails instead of
  * saving a plausible wrong frame.
  *
@@ -386,73 +385,5 @@ test.describe('hold status in a reading window', () => {
     await expect(chip(page)).toHaveAttribute('data-tone', 'fault', { timeout: 25_000 });
     await expect(chip(page)).toHaveAttribute('data-visible', 'true');
     await shot(page, '14-fault-reader-paper', READER);
-  });
-});
-
-test.describe('hold status on a separate stage window', () => {
-  /*
-   * Control loss only exists where control and the stage are two windows: the
-   * watchdog freezes the stage when control's heartbeat stops, and a
-   * single-window take has no second window to lose. So the stage window is
-   * opened on its own and handed a take's envelope — built by the real
-   * compiler and the real envelope builder, at the automatic profile this
-   * panel resolves to — and then control goes quiet.
-   */
-  test('control stops responding', async ({ page }) => {
-    test.setTimeout(60_000);
-    await boot(page, PROMPTER);
-    await page.goto('/stage.html');
-    await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'handshake');
-    const stageGeneration = await page.evaluate(
-      async ({ source, scriptId, width, height }) => {
-        // Through variables: these are the dev server's paths, not ones the
-        // typechecker can resolve from this file.
-        const compileUrl = '/src/shared/markdown/compile.ts';
-        const envelopeUrl = '/src/control/services/stage-envelope.ts';
-        const discoveryUrl = '/src/shared/optical-discovery.ts';
-        const { compile } = (await import(/* @vite-ignore */ compileUrl)) as {
-          compile(source: string, options: { scriptId: string }): unknown;
-        };
-        const { buildStageSettings, buildStageEnvelope } = (await import(
-          /* @vite-ignore */ envelopeUrl
-        )) as {
-          buildStageSettings(overrides: unknown): unknown;
-          buildStageEnvelope(input: unknown): { stageGeneration: number };
-        };
-        const { automaticProfile } = (await import(/* @vite-ignore */ discoveryUrl)) as {
-          automaticProfile(display: unknown): unknown;
-        };
-        const profile = automaticProfile({
-          name: 'Monitor #1',
-          physicalSize: { width, height },
-          scaleFactor: 1,
-        });
-        const stageSettings = buildStageSettings(
-          profile ? { optical: { profile, viewport: { widthPx: width, heightPx: height } } } : {},
-        );
-        const envelope = buildStageEnvelope({
-          script: compile(source, { scriptId }),
-          sessionId: '00000000-0000-4000-8000-0000000000aa',
-          sessionGeneration: 1,
-          stageGeneration: 1,
-          stageSettings,
-        });
-        window.__E2E__.emit('stage://load-session', envelope);
-        return envelope.stageGeneration;
-      },
-      { source: SCRIPT.source, scriptId: SCRIPT.id, width: PROMPTER.width, height: PROMPTER.height },
-    );
-    await page.waitForTimeout(500);
-    await page.evaluate((generation) => {
-      window.__E2E__.emit('stage://heartbeat', {
-        stageGeneration: generation,
-        revision: 1,
-        sentAtMs: 1000,
-      });
-    }, stageGeneration);
-    await expect(page.locator('.script-layer span.w[data-t]').first()).toBeVisible();
-    await expect(chip(page)).toHaveAttribute('data-visible', 'true', { timeout: 15_000 });
-    await expect(chip(page)).toContainText('Control stopped responding');
-    await shot(page, '15-control-lost', PROMPTER);
   });
 });

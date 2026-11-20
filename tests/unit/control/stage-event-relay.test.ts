@@ -17,6 +17,11 @@
  * degradation logic), and once from the relay.
  *
  * This test fails if either emit site goes back to the relayed name.
+ *
+ * Escape is the one stage-side report that still matters: since #235 the
+ * separate stage window no longer sends the motion report, the §62 layout error
+ * or intents, none of which anything on the control side read. Their names stay
+ * in the contract only until the Rust half (#491) retires the relays.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -103,15 +108,18 @@ describe('stage → control event relay (S1)', () => {
   it('the scan finds the emit, listen and relay sites it is meant to guard', () => {
     // A guard on the guard: if these go empty the assertions below are vacuous.
     expect(keysEmittedByStage()).toContain('escapePressed');
-    expect(keysEmittedByStage()).toContain('motionReport');
-    // S6: the §62 stage-layout error is the third pair to follow this rule.
-    expect(keysEmittedByStage()).toContain('layoutError');
+    expect(keysEmittedByStage()).toContain('viewportHint');
     // Settings and Calibrate still listen for the relayed Escape from the
     // separate stage window they open.
     expect(keysListenedByControl()).toContain('escapeRequested');
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.escapeRequested);
-    expect(namesRelayedToControl()).toContain(STAGE_EVENT.motionAck);
-    expect(namesRelayedToControl()).toContain(STAGE_EVENT.layoutFailed);
+  });
+
+  it('the stage window no longer sends the reports nothing on the control side reads', () => {
+    const emitted = keysEmittedByStage();
+    for (const retired of ['motionReport', 'layoutError', 'intent', 'heartbeatAck', 'syncRequest']) {
+      expect(emitted, `the stage still emits ${retired}`).not.toContain(retired);
+    }
   });
 
   it('nothing Rust relays to control is also broadcast by the stage', () => {
@@ -140,12 +148,8 @@ describe('stage → control event relay (S1)', () => {
 
   it('the relayed names are distinct from the names the stage emits', () => {
     expect(STAGE_EVENT.escapePressed).not.toBe(STAGE_EVENT.escapeRequested);
-    expect(STAGE_EVENT.motionReport).not.toBe(STAGE_EVENT.motionAck);
-    expect(STAGE_EVENT.layoutError).not.toBe(STAGE_EVENT.layoutFailed);
-    // Only src-tauri/src/app.rs may produce the control-facing names.
+    // Only src-tauri/src/app.rs may produce the control-facing name.
     const appRs = readFileSync(join(ROOT, 'src-tauri/src/app.rs'), 'utf8');
     expect(appRs).toContain('events::STAGE_ESCAPE_REQUESTED');
-    expect(appRs).toContain('events::STAGE_MOTION_ACK');
-    expect(appRs).toContain('events::STAGE_LAYOUT_FAILED');
   });
 });
