@@ -3123,6 +3123,23 @@ async fn recovery_mode_refuses_commands_that_would_write() {
         "a destructive recovery action must be refused while the database works"
     );
     assert!(failed.require_recovery().is_ok());
+
+    /*
+     * But not over a restore that did not finish (#233): the live data may be
+     * half the export's, and a rebuild or a backup restore would work on the
+     * mixture. The next launch finishes or undoes the restore instead.
+     */
+    let restore_failed = BootStatus::Failed(speaking_glass_lib::AppError::structured(
+        "RESTORE_FAILED",
+        speaking_glass_lib::errors::ErrorCategory::Storage,
+        "The restore did not finish.",
+        true,
+    ));
+    assert!(
+        restore_failed.require_recovery().is_err(),
+        "a destructive repair must be refused while a restore is unfinished"
+    );
+    assert!(restore_failed.require_ready().is_err());
 }
 
 #[test]
@@ -4656,4 +4673,74 @@ async fn a_journalled_original_missing_from_quarantine_is_never_replaced_by_live
     assert_eq!(err.code(), "RESTORE_FAILED", "{err}");
     assert!(dir.join("restore-pending.json").exists(), "the cap retired the marker");
     assert_eq!(fs::read(&live_db).expect("live"), b"partial export");
+}
+
+#[tokio::test]
+async fn a_rollback_over_a_library_someone_has_used_keeps_their_work() {
+    /*
+     * A restore that finished but could neither flag nor remove its marker
+     * opens the restored library — and the user works in it. A later launch
+     * past the attempt cap then rolls back over that work. The rollback used
+     * to DELETE what it found at the live paths; it now sets it aside, so the
+     * work made in between is in quarantine rather than gone.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Mine", "# Mine"))
+        .await
+        .expect("create");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    let marker = h.dir.path().join("restore-pending.json");
+    let stale = fs::read(&marker).expect("marker");
+    close_fully(&h.pool, h.dir.path()).await;
+
+    let previous = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect("the restore finishes")
+        .expect("a restore ran");
+
+    // The marker, back as the failed flag-and-remove would have left it.
+    let mut pending: serde_json::Value = serde_json::from_slice(&stale).expect("parses");
+    pending["attempts"] = serde_json::json!(3);
+    pending["quarantineGeneration"] = serde_json::json!(previous
+        .file_name()
+        .expect("generation")
+        .to_string_lossy());
+    // The journal that restore kept: what it moved, and what was not there.
+    let (moved, absent): (Vec<&str>, Vec<&str>) = [
+        "scripts",
+        "speaking-glass.sqlite3",
+        "speaking-glass.sqlite3-wal",
+        "speaking-glass.sqlite3-shm",
+    ]
+    .into_iter()
+    .partition(|name| previous.join(name).exists());
+    assert!(moved.contains(&"scripts"), "the library had scripts before the restore");
+    pending["evacuated"] = serde_json::json!(moved);
+    pending["absent"] = serde_json::json!(absent);
+    fs::write(&marker, serde_json::to_vec_pretty(&pending).expect("json")).expect("write");
+
+    // Work done in the restored library.
+    let work = h.paths.scripts_dir().join("written-after-the-restore");
+    fs::create_dir_all(&work).expect("work");
+    fs::write(work.join("script.md"), "# New work").expect("new work");
+
+    let _ = backup::apply_pending_restore(&h.paths).await;
+
+    let kept = previous
+        .join("rolled-back-attempt-4")
+        .join("scripts")
+        .join("written-after-the-restore")
+        .join("script.md");
+    assert_eq!(
+        fs::read_to_string(&kept).unwrap_or_default(),
+        "# New work",
+        "the rollback must set the live work aside at {}, not delete it",
+        kept.display()
+    );
 }

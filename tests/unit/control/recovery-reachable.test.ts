@@ -343,6 +343,12 @@ describe('a restore from an export that did not finish (#233)', () => {
       recoverySource.indexOf('{/snippet}', recoverySource.indexOf('{#snippet afterRestore()}')),
     );
     expect(snippet).not.toContain('Recommended');
+
+    // And the screen does not promise the scripts are safe in place: they may
+    // be the export's, with the user's own in quarantine.
+    expect(recoverySource).toMatch(
+      /status\.code === 'RESTORE_FAILED'\}[\s\S]*?Nothing was deleted[\s\S]*?\{:else\}[\s\S]*?Your scripts are safe/,
+    );
   });
 
   it('heads the screen with the restore and explains it in Rust’s words', async () => {

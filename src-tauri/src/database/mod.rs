@@ -93,8 +93,18 @@ impl BootStatus {
     /// `rebuild_database_index` moves the live database into quarantine. That
     /// is the right answer to a database that will not open and the wrong
     /// answer to one that is open and being written to.
+    ///
+    /// And the wrong answer to a restore from an export that did not finish:
+    /// the live data may be half the export's, with the user's own in
+    /// quarantine. Rebuilding from that, or putting a pre-migration backup
+    /// beside it, works on the mixture, and can move a live `-wal` the
+    /// rollback still needs. The next launch finishes or undoes the restore.
     pub fn require_recovery(&self) -> Result<(), AppError> {
         match self {
+            BootStatus::Failed(err) if err.code() == "RESTORE_FAILED" => Err(AppError::invalid_input(
+                "A restore from an export did not finish, so Speaking Glass won't rebuild or \
+                 replace its database now. Reopen Speaking Glass to carry on with the restore.",
+            )),
             BootStatus::Failed(_) => Ok(()),
             BootStatus::Ready => Err(AppError::invalid_input(
                 "Speaking Glass's database is working, so there is nothing to recover. This action \

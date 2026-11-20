@@ -478,11 +478,24 @@
       <div class="callout safety">
         <span class="callout-mark" aria-hidden="true"><Icon name="check" size={18} /></span>
         <div class="callout-body">
-          <p class="safety-title">Your scripts are safe</p>
-          <p class="safety-text">
-            Each one is a Markdown file in Speaking Glass’s data folder, kept apart from the database,
-            and nothing on this screen changes them.
-          </p>
+          {#if status.code === 'RESTORE_FAILED'}
+            <!--
+              Not "safe" in place: after a restore that did not finish, the
+              scripts here may be part of the export, with the user's own in
+              quarantine. What is true either way is that nothing was deleted.
+            -->
+            <p class="safety-title">Nothing was deleted</p>
+            <p class="safety-text">
+              Your previous scripts are either back in Speaking Glass’s data folder or in the
+              “quarantine” folder inside it, and nothing on this screen changes them.
+            </p>
+          {:else}
+            <p class="safety-title">Your scripts are safe</p>
+            <p class="safety-text">
+              Each one is a Markdown file in Speaking Glass’s data folder, kept apart from the database,
+              and nothing on this screen changes them.
+            </p>
+          {/if}
           {#if status.dataDirectory}
             <!-- Selectable: the one thing somebody does with a path is copy it. -->
             <code class="path">{status.dataDirectory}</code>

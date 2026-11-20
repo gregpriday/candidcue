@@ -1418,7 +1418,7 @@ fn fail_attempt(
     if entries.is_empty() && displaced(paths, pending).is_empty() {
         return err;
     }
-    let rollback_failures = roll_back(&entries, pending, marker);
+    let rollback_failures = roll_back(&entries, pending, marker, generation_dir(paths, pending).as_deref());
     let still_displaced = displaced(paths, pending);
 
     /*
@@ -1461,7 +1461,7 @@ fn give_up(paths: &DataPaths, marker: &Path, pending: &mut PendingRestore, cap: 
     let mut entries = Vec::new();
     add_journalled(paths, pending, &mut entries);
     let rolled_back = !entries.is_empty();
-    let rollback_failures = roll_back(&entries, pending, marker);
+    let rollback_failures = roll_back(&entries, pending, marker, generation_dir(paths, pending).as_deref());
     let still_displaced = displaced(paths, pending);
     /*
      * And durably so, before the marker that records the restore goes: a
@@ -1531,9 +1531,26 @@ fn restore_failed(message: String) -> AppError {
 /// Put back what a failed attempt displaced, newest first. Returns what it
 /// could not put back; the caller asks `displaced` what that leaves.
 ///
+/// What it finds at a live path is SET ASIDE under `rolled-back-attempt-N/`,
+/// never deleted. Usually that is only a dead attempt's output, but not
+/// always: a restore that finished and could neither flag nor remove its
+/// marker opens the restored library, the user works in it, and a later
+/// launch past the attempt cap rolls back over that work. Deleting it, as the
+/// rollback once did, would lose it.
+///
 /// The quarantine copy is on disk either way, so the honest answer is either
 /// "put back" or "not put back, and here is where it is".
-fn roll_back(entries: &[Evacuated], pending: &mut PendingRestore, marker: &Path) -> Vec<String> {
+fn roll_back(
+    entries: &[Evacuated],
+    pending: &mut PendingRestore,
+    marker: &Path,
+    previous: Option<&Path>,
+) -> Vec<String> {
+    let Some(previous) = previous else {
+        // No generation was ever minted, so nothing can have moved.
+        return Vec::new();
+    };
+    let attempt = pending.attempts;
     /*
      * Put it back, and say whether that WORKED.
      *
@@ -1559,6 +1576,17 @@ fn roll_back(entries: &[Evacuated], pending: &mut PendingRestore, marker: &Path)
         match entry {
             Evacuated::Moved { quarantined, live } => {
                 /*
+                 * Clear the live path FIRST, by setting it aside: it touches
+                 * nothing the journal vouches for. One that fails leaves the
+                 * original complete in quarantine and still journalled, so a
+                 * later launch can try again — where failing after the
+                 * un-journal would strand it with nothing naming it.
+                 */
+                if let Err(e) = clear_live(live, previous, attempt) {
+                    rollback_failures.push(format!("{}: could not set aside: {e}", live.display()));
+                    continue;
+                }
+                /*
                  * Un-journal BEFORE the move, not after.
                  *
                  * The journal's claim is "the complete original is in
@@ -1576,25 +1604,6 @@ fn roll_back(entries: &[Evacuated], pending: &mut PendingRestore, marker: &Path)
                  * folder. Stuck and honest beats proceeding from something
                  * that might be half a copy.
                  */
-                /*
-                 * Clear the live path FIRST: it holds the commit's output, and
-                 * removing it touches nothing the journal vouches for. A
-                 * removal that fails leaves the original complete in
-                 * quarantine and still journalled, so a later launch can try
-                 * again — where failing after the un-journal would strand it
-                 * with nothing naming it.
-                 */
-                let cleared = if live.is_dir() {
-                    std::fs::remove_dir_all(live)
-                } else {
-                    std::fs::remove_file(live)
-                };
-                if let Err(e) = cleared {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        rollback_failures.push(format!("{}: could not clear: {e}", live.display()));
-                        continue;
-                    }
-                }
                 let mut journal_cleared = true;
                 if let Some(name) = quarantined.file_name().map(|n| n.to_string_lossy().to_string()) {
                     if pending.evacuated.iter().any(|n| n == &name) {
@@ -1631,17 +1640,12 @@ fn roll_back(entries: &[Evacuated], pending: &mut PendingRestore, marker: &Path)
                  * rollback, because a journal of moves alone had nothing to say
                  * about them.
                  */
-                let removed = if live.is_dir() {
-                    std::fs::remove_dir_all(live)
-                } else if live.exists() {
-                    std::fs::remove_file(live)
-                } else {
-                    Ok(())
-                };
+                // Set aside, like every live path a rollback clears.
+                let removed = clear_live(live, previous, attempt);
                 // The removal has to be durable before the marker stops
                 // recording the absence: an entry that comes back after a power
                 // loss would be read as the original.
-                let removed = removed.and_then(|()| sync_dir(parent_of(live)));
+                let removed = removed.and_then(|()| sync_dir(parent_of(live)).map_err(AppError::from));
                 if let Err(e) = removed {
                     rollback_failures.push(format!("{}: {e}", live.display()));
                 } else if let Some(name) = live.file_name().map(|n| n.to_string_lossy().to_string()) {
@@ -1881,6 +1885,35 @@ fn set_aside(from: &Path, previous: &Path, attempt: u32) -> Result<(), AppError>
         .file_name()
         .ok_or_else(|| AppError::Internal("component has no file name".into()))?;
     move_or_copy(from, &aside.join(file_name))
+}
+
+/// Move whatever is at a live path under `rolled-back-attempt-N/` in the
+/// generation, keeping every byte. Nothing there is not an error.
+///
+/// A name already taken there — a past-the-cap launch whose attempt count was
+/// never written back runs as the same attempt again — gets a numbered
+/// sibling rather than a rename over the earlier one.
+fn clear_live(live: &Path, previous: &Path, attempt: u32) -> Result<(), AppError> {
+    match std::fs::symlink_metadata(live) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    }
+    let aside = previous.join(format!("rolled-back-attempt-{attempt}"));
+    std::fs::create_dir_all(&aside)?;
+    sync_dir(previous)?;
+    let file_name = live
+        .file_name()
+        .ok_or_else(|| AppError::Internal("component has no file name".into()))?
+        .to_string_lossy()
+        .to_string();
+    let mut target = aside.join(&file_name);
+    let mut n = 2;
+    while std::fs::symlink_metadata(&target).is_ok() {
+        target = aside.join(format!("{file_name}-{n}"));
+        n += 1;
+    }
+    move_or_copy(live, &target)
 }
 
 /// fsync a directory, so an entry created or removed inside it is durable.
