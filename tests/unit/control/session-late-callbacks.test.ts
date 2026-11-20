@@ -13,10 +13,19 @@
  * counters, its toasts and its following — is exactly as it was.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CompiledScript } from '../../../src/shared/contracts';
+import type { CompiledScript, DisplayDescriptor } from '../../../src/shared/contracts';
+
+/** Display probes still in flight, oldest first; a test answers them. */
+const probes = vi.hoisted(() => [] as Array<(display: { fingerprint: string; name: string }) => void>);
 
 const stage = vi.hoisted(() => ({
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
+  currentWindowDisplay: vi.fn(
+    () =>
+      new Promise<{ fingerprint: string; name: string }>((resolve) => {
+        probes.push(resolve);
+      }),
+  ),
 }));
 
 const records = vi.hoisted(() => ({
@@ -140,9 +149,12 @@ function compiledStub(): CompiledScript {
 let takes = 0;
 
 /** Start a voice take and hand back its pipeline's callbacks. */
-function start(): Deps {
+function start(
+  options: { sessionId?: string; stageDisplay?: DisplayDescriptor } = {},
+): Deps {
   takes += 1;
   startLiveSession({
+    ...options,
     scriptId: 'script-1',
     scriptTitle: 'Launch video',
     mode: 'voice',
@@ -150,7 +162,7 @@ function start(): Deps {
     outline: [],
     sentences: [],
     totalTokens: 200,
-    sessionId: `session-${takes}`,
+    sessionId: options.sessionId ?? `session-${takes}`,
     compiled: compiledStub(),
     sessionGeneration: takes,
   });
@@ -207,6 +219,7 @@ beforeEach(() => {
   pipeline.captured.resumeDelayMs = 0;
   pipeline.captured.resumeError = null;
   pipeline.captured.onStop = null;
+  probes.length = 0;
   setInvokeForTesting(async () => undefined as never);
   clearToasts();
 });
@@ -241,7 +254,11 @@ describe('late callbacks from an ended take (#244)', () => {
   it('a quick stop and restart leaves the new take untouched by the old pipeline', () => {
     const a = start();
     stopSession();
-    start();
+    const b = start();
+    // The new take is mid-utterance when the old one's final lands, so a late
+    // final that zeroed the open utterance would show as well as one that
+    // added to the total.
+    cb<[string, boolean]>(b, 'onTranscriptText')('two words', false);
     const before = takeState();
     const followingBefore = get(smoothFollow).followingPaused;
     clearToasts();
@@ -256,7 +273,7 @@ describe('late callbacks from an ended take (#244)', () => {
 
     const summary = stopSession();
     expect(summary.wordsHeard).toBe(0);
-    expect(summary.wordsInFlight).toBe(0);
+    expect(summary.wordsInFlight).toBe(2);
   });
 
   it('a following hold delivered after a quick stop and restart does not pause the new take', () => {
@@ -354,6 +371,23 @@ describe('late callbacks from an ended take (#244)', () => {
     await resuming;
     expect(takeState()).toEqual(before);
     expect(get(toasts)).toEqual([]);
+  });
+
+  it('a display probe that answers after its take was replaced under the same id says nothing', async () => {
+    const display = { fingerprint: 'panel-a', name: 'Panel A' } as unknown as DisplayDescriptor;
+    start({ sessionId: 'same-id', stageDisplay: display });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(probes).toHaveLength(1);
+    const answerA = probes.shift()!;
+    start({ sessionId: 'same-id', stageDisplay: display });
+    answerA({ fingerprint: 'panel-b', name: 'Panel B' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).displayChangedTo).toBeNull();
+    // The new take's own probe still reports.
+    await vi.advanceTimersByTimeAsync(2000);
+    probes.shift()!({ fingerprint: 'panel-b', name: 'Panel B' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).displayChangedTo).toBe('Panel B');
   });
 
   it('a retry and a microphone switch that answer after the take ended report nothing', async () => {

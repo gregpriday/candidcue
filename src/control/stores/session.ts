@@ -1160,9 +1160,13 @@ export function startLiveSession(input: StartSessionInput): string {
     totalTokens: input.totalTokens,
     compiled: useRealDriver ? (input.compiled ?? null) : null,
     sessionGeneration,
-    onSnapshot: handleSnapshot,
+    // The driver drops its own feed once disposed; the token says the same
+    // thing in the one vocabulary every per-take callback shares (#244).
+    onSnapshot(snapshot) {
+      if (isLiveTake(take)) handleSnapshot(snapshot);
+    },
     onTranscript(line) {
-      pushTranscriptLine(line);
+      if (isLiveTake(take)) pushTranscriptLine(line);
     },
   });
 
@@ -1671,7 +1675,6 @@ export function startLiveSession(input: StartSessionInput): string {
    * starting point would be a guess dressed as a fact.
    */
   if (stageDisplay !== null) {
-    const watchedSession = sessionId;
     displayWatchTimer = setInterval(() => {
       /*
        * The baseline is read EACH TICK, not captured.
@@ -1687,15 +1690,15 @@ export function startLiveSession(input: StartSessionInput): string {
       if (baseline === null) return;
       void stageService.currentWindowDisplay()
         .then((now) => {
-          if (now === null) return;
+          /*
+           * Identity, not just liveness. `clearInterval` cannot cancel a
+           * probe that is already in flight, and the next take can begin
+           * before it resolves — so without this an old take's answer could
+           * write a display-change notice onto a new one. The take token, not
+           * the session id: a caller may open the next take under the same id.
+           */
+          if (now === null || !isLiveTake(take)) return;
           state.update((st) => {
-            /*
-             * Identity, not just liveness. `clearInterval` cannot cancel a
-             * probe that is already in flight, and the next take can begin
-             * before it resolves — so without this an old take's answer could
-             * write a display-change notice onto a new one.
-             */
-            if (!st.active || st.sessionId !== watchedSession) return st;
             const changed =
               now.fingerprint === baseline ? null : (now.name ?? '').trim() || 'another display';
             return st.displayChangedTo === changed ? st : { ...st, displayChangedTo: changed };

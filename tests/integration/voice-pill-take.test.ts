@@ -233,9 +233,10 @@ vi.mock('../../src/control/services/alignment', async (orig) => {
 });
 
 const { setInvokeForTesting } = await import('../../src/control/services/ipc');
-const { clearSession, startLiveSession, restartParagraph, session } = await import(
+const { clearSession, startLiveSession, restartParagraph, session, stopSession } = await import(
   '../../src/control/stores/session'
 );
+const { get } = await import('svelte/store');
 
 /* ---------------------------------------------------------------------------
  * Harness
@@ -669,5 +670,55 @@ describe('take boundaries', () => {
     const count = pills().length;
     await run(2000);
     expect(pills(), 'a finished take must stop talking to the stage').toHaveLength(count);
+  });
+
+  it('turns away the last take’s final when it lands on the next one (#244)', async () => {
+    /*
+     * The real pipeline, end to end. Take A's recogniser takes its time to
+     * close — Rust finalises the last utterance first — and the pipeline
+     * deliberately keeps applying its frames meanwhile. Take B is already
+     * running when A's final arrives, so without the take token that final
+     * lands on B's word count and transcript.
+     */
+    let generation = 0;
+    const closing: { release: (() => void) | null } = { release: null };
+    setInvokeForTesting(async (command) => {
+      if (command === 'start_transcription') {
+        generation += 1;
+        return generation as never;
+      }
+      if (command === 'stop_transcription' && closing.release === null) {
+        await new Promise<void>((resolve) => {
+          closing.release = resolve;
+        });
+      }
+      return undefined as never;
+    });
+
+    start();
+    await untilCaptureOpen();
+    await emitStt({ kind: 'partial', generation: 1, itemId: 'a-1', text: 'the first take' });
+    stopSession();
+    await until(() => closing.release !== null, 'take A to ask Rust to close its recogniser');
+
+    start();
+    await until(() => generation === 2, 'take B to open its own recogniser');
+    await emitStt({ kind: 'partial', generation: 2, itemId: 'b-1', text: 'two words' });
+    await until(() => get(session).heardAnything, 'take B to hear its own words');
+
+    await emitStt({
+      kind: 'final',
+      generation: 1,
+      itemId: 'a-1',
+      text: 'the first take ends here',
+      audioEndMs: 1_800,
+    });
+    closing.release?.();
+    await run(500);
+
+    expect(get(session).transcriptTail, 'take A’s line is not take B’s').toEqual([]);
+    const summary = stopSession();
+    expect(summary.wordsHeard, 'take A’s words are not on take B’s summary').toBe(0);
+    expect(summary.wordsInFlight, 'and B’s open utterance is still open').toBe(2);
   });
 });
