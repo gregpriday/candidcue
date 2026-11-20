@@ -1,0 +1,110 @@
+name: Dependency advisory scan
+description: >
+  Scan both Cargo lockfiles and the production JavaScript tree for advisories,
+  sort what they report against docs/advisory-exceptions.json, and refuse when
+  an unreviewed vulnerability would ship.
+
+# One definition of the scan, used by the gates job of every release workflow
+# and by the daily scan of develop (advisories.yml), so the four cannot
+# disagree about what refuses. `scripts/report-advisories.mjs` holds the
+# policy and its exit status is the verdict: 0 when nothing would refuse a
+# tag, anything else when something would. Its header lists what refuses.
+#
+# `enforce` decides only what the verdict does here. 'true' fails the step, so
+# a refused tag stops in its gates job before anything is built. Anything else
+# (a dry run, a dispatch against a branch) prints the same verdict as an error
+# annotation and in the job summary, and carries on. Any other value fails the
+# step, so a mistyped caller is never quietly report-only. There is no other input:
+# docs/advisory-exceptions.json is the only override.
+
+inputs:
+  enforce:
+    description: "'true' fails the step when the scan would refuse a tag; 'false' reports it and carries on; anything else fails the step"
+    required: true
+  save:
+    description: A directory for each scanner's raw output and the report as advisories.txt; empty for neither
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # The version package.json pins; `pnpm audit` reads the lockfile and needs
+    # no install.
+    - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      with:
+        run_install: false
+
+    # Pinned, and into a directory of its own that goes first on PATH, so the
+    # scan runs the cargo-audit installed here and no other. An install that
+    # fails is a failed scan: the verdict below refuses on it even if some
+    # other cargo-audit answers.
+    - name: Install cargo-audit
+      id: install
+      shell: bash
+      env:
+        CARGO_AUDIT_VERSION: '0.23.0'
+      run: |
+        root="$RUNNER_TEMP/cargo-audit"
+        if cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION" --root "$root" &&
+          test -x "$root/bin/cargo-audit"; then
+          echo "$root/bin" >> "$GITHUB_PATH"
+          echo "installed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::could not install cargo-audit $CARGO_AUDIT_VERSION, so the Cargo lockfiles were not scanned"
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # The report and its exit status are captured before anything prints
+    # them, so neither a pipe nor errexit can lose the verdict, and errexit
+    # stays on for everything else: a summary or a copy that cannot be
+    # written fails the step rather than passing it.
+    - name: Scan, and say whether a tag would be refused
+      shell: bash
+      env:
+        ENFORCE: ${{ inputs.enforce }}
+        SAVE: ${{ inputs.save }}
+        INSTALLED: ${{ steps.install.outputs.installed }}
+      run: |
+        case "$ENFORCE" in
+          true | false) ;;
+          *) echo "::error::enforce must be 'true' or 'false', not '$ENFORCE'"; exit 1 ;;
+        esac
+        report="$RUNNER_TEMP/advisories.txt"
+        set --
+        if [ -n "$SAVE" ]; then
+          mkdir -p "$SAVE"
+          set -- --save "$SAVE"
+        fi
+        status=0
+        node scripts/report-advisories.mjs "$@" > "$report" 2>&1 || status=$?
+        if [ "$INSTALLED" != 'true' ]; then
+          printf '\nSCAN FAILED: cargo-audit could not be installed, so the Cargo lockfiles were not scanned.\n' >> "$report"
+          if [ "$status" -eq 0 ]; then status=1; fi
+        fi
+        cat "$report"
+        if [ -n "$SAVE" ]; then cp "$report" "$SAVE/advisories.txt"; fi
+
+        if [ "$status" -eq 0 ]; then
+          verdict='Nothing here refuses a release tag.'
+        elif [ "$ENFORCE" = 'true' ]; then
+          verdict="This tag is REFUSED (exit $status). Fix the finding or record an exception in docs/advisory-exceptions.json, then cut a new patch tag (docs/release-runbook.md)."
+        else
+          verdict="A release tag would have been REFUSED here (exit $status). This run is not a tag release, so it carries on."
+        fi
+        {
+          echo '## Dependency advisories'
+          echo
+          echo "$verdict"
+          echo
+          echo '```'
+          cat "$report"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$status" -eq 0 ]; then
+          echo "$verdict"
+          exit 0
+        fi
+        echo "::error::$verdict"
+        if [ "$ENFORCE" = 'true' ]; then exit 1; fi

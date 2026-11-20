@@ -22,10 +22,32 @@
  * advisory id, so a version bump or a second copy of a crate arrives as NEW
  * rather than inheriting a decision made about something else.
  *
- * This is not a gate, for the reason `scripts/verify-supply-chain.mjs` gives:
- * the release workflow runs it with `continue-on-error`. It exits 1 when
- * anything is new, overdue or failed, so the step is marked, and the release
- * carries on.
+ * It is also the gate a tagged release has to pass. A finding refuses a tag
+ * when nobody has reviewed it and it is a flaw rather than a maintenance notice:
+ *
+ *   - a cargo-audit vulnerability, or an `unsound` warning (safe code can reach
+ *     undefined behaviour) or any other warning that is not a maintenance
+ *     notice (a `notice`, or a kind newer than this script), that no exception
+ *     covers, or that a `no-vulnerability` exception covers;
+ *   - a `pnpm audit` advisory that no exception covers, at any severity;
+ *   - either of those whose exception is past its `reviewBy` and still matches;
+ *   - a scan that failed, after bounded retries. A pnpm report that counts no
+ *     dependencies is a failed scan, not a clean one.
+ *
+ * `unmaintained` and `yanked` warnings, and overdue exceptions for them, are
+ * reported and never refuse. The exit status carries the verdict: 0 when
+ * nothing would refuse a tag, 1 when something would, 2 for a malformed
+ * register or a bad argument (before any scan runs). A live scan also fails
+ * when a cargo-audit or pnpm configuration file could hide findings: the
+ * register is the only override. The release workflows' `gates` jobs and the daily
+ * scan of `develop` (`.github/actions/advisory-scan`) run it; a non-dry-run `v*`
+ * tag stops there, and a dry run says it would have and carries on.
+ *
+ * The advisory database changes without the repository changing, which is why
+ * this was once report-only (`scripts/verify-supply-chain.mjs`). That argues
+ * against re-running an old tag, not against refusing a new one: a tag refused
+ * for an advisory published that morning costs a fix or an exception in
+ * `docs/advisory-exceptions.json`, then a new patch tag (docs/release-runbook.md).
  *
  * Usage:
  *   node scripts/report-advisories.mjs               both Cargo lockfiles, production JavaScript
@@ -34,11 +56,13 @@
  *   node scripts/report-advisories.mjs --from <dir>  sort output saved by --save instead of scanning
  *
  * `--register <file>` and `--today <YYYY-MM-DD>` exist so the tests can pin
- * both.
+ * both. `SPEAKING_GLASS_ADVISORY_RETRY_MS` sets the pause before a failed scan's
+ * next attempt (the tests set it to 0).
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -55,7 +79,48 @@ const REACH = new Set([
   'dev-only', // development or test tooling, never in the app bundle
   'unused-api', // ships, but the affected code is never called
   'no-vulnerability', // ships; the advisory reports a maintenance status, not a flaw
+  'accepted-risk', // ships, is reachable, and has no fix that can be taken yet
 ]);
+
+/**
+ * An `accepted-risk` exception is a vulnerability that ships, so it is held
+ * short: a follow-up issue that owns the fix, and another look within this many
+ * days. The register refuses to load one that asks for longer.
+ */
+const ACCEPTED_RISK_MAX_DAYS = 30;
+
+/** A follow-up is an issue somebody can be asked about, not free text. */
+const FOLLOW_UP = /^https:\/\/github\.com\/[\w-][\w.-]*\/[\w-][\w.-]*\/issues\/\d+$/;
+
+/**
+ * cargo-audit warnings that report how a crate is maintained, not a flaw in
+ * it. They are listed like everything else, and never refuse a tag: nine in ten have no fix
+ * on this side. Every other kind refuses, an unknown one included, so a new
+ * kind of warning arrives as a refusal rather than as a pass.
+ */
+const REPORT_ONLY_KINDS = new Set(['unmaintained', 'yanked']);
+
+/**
+ * Whether a finding would refuse a tag were it unreviewed. pnpm findings carry
+ * a severity where cargo's carry a kind, so every pnpm finding refuses.
+ */
+function refuses(finding) {
+  return !(finding.lockfile.endsWith('Cargo.lock') && REPORT_ONLY_KINDS.has(finding.kind));
+}
+
+/** Attempts per live scan before it counts as failed, and how long each may take. */
+const SCAN_ATTEMPTS = 3;
+const SCAN_TIMEOUT_MS = 5 * 60 * 1000;
+/** The pause before a failed scan's next attempt, times the attempt number. */
+const RETRY_PAUSE_MS = retryPause(process.env.SPEAKING_GLASS_ADVISORY_RETRY_MS);
+
+function retryPause(value) {
+  if (value === undefined || value === '') return 10_000;
+  const pause = Number(value);
+  // Anything but a sane number of milliseconds is a typo, and a retry that
+  // waits forever is a gate that never answers.
+  return Number.isFinite(pause) && pause >= 0 ? Math.min(pause, 60_000) : 10_000;
+}
 
 /* ---------------------------------------------------------------- arguments */
 
@@ -73,8 +138,9 @@ for (let i = 0; i < argv.length; i++) {
     options.dev = true;
     continue;
   }
-  const key = { '--save': 'save', '--from': 'from', '--register': 'register', '--today': 'today' }[arg];
-  if (key === undefined) usage(`Unknown argument: ${arg}`);
+  const flags = { '--save': 'save', '--from': 'from', '--register': 'register', '--today': 'today' };
+  if (!Object.hasOwn(flags, arg)) usage(`Unknown argument: ${arg}`);
+  const key = flags[arg];
   const value = argv[++i];
   if (value === undefined || value.startsWith('--')) usage(`${arg} needs a value`);
   options[key] = value;
@@ -89,6 +155,13 @@ function isDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/** `date` plus `days`, as YYYY-MM-DD. */
+function addDays(date, days) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
 }
 
 /* ----------------------------------------------------------------- register */
@@ -124,6 +197,21 @@ function loadRegister(path) {
     if (!REACH.has(exception?.reach)) problems.push(`${at} has reach ${JSON.stringify(exception?.reach)}`);
     if (typeof exception?.why !== 'string' || exception.why.trim() === '') problems.push(`${at} gives no reason`);
     if (!isDate(exception?.reviewBy)) problems.push(`${at} has no YYYY-MM-DD reviewBy`);
+    if (
+      exception?.followUp !== undefined &&
+      (typeof exception.followUp !== 'string' || !FOLLOW_UP.test(exception.followUp))
+    ) {
+      problems.push(`${at} has a followUp that is not a GitHub issue URL`);
+    }
+    if (exception?.reach === 'accepted-risk') {
+      if (exception.followUp === undefined) problems.push(`${at} is accepted-risk and links no follow-up issue`);
+      const latest = addDays(today, ACCEPTED_RISK_MAX_DAYS);
+      if (isDate(exception.reviewBy) && exception.reviewBy > latest) {
+        problems.push(
+          `${at} is accepted-risk with reviewBy ${exception.reviewBy}, more than ${ACCEPTED_RISK_MAX_DAYS} days ahead (at most ${latest})`,
+        );
+      }
+    }
     if (!Array.isArray(exception?.findings) || exception.findings.length === 0) {
       problems.push(`${at} lists no findings`);
       return;
@@ -167,30 +255,69 @@ const SCANS = [
     saved: 'advisories-cargo-app.json',
     command: ['cargo', 'audit', '--json', '--file', 'src-tauri/Cargo.lock'],
     parse: parseCargoAudit,
+    suppressedBy: cargoConfigSuppression,
   },
   {
     lockfile: 'crates/Cargo.lock',
     saved: 'advisories-cargo-crates.json',
     command: ['cargo', 'audit', '--json', '--file', 'crates/Cargo.lock'],
     parse: parseCargoAudit,
+    suppressedBy: cargoConfigSuppression,
   },
   options.dev
     ? {
         lockfile: 'pnpm-lock.yaml',
         label: 'pnpm-lock.yaml (all dependencies)',
         saved: 'advisories-pnpm-all.json',
-        command: ['pnpm', 'audit', '--json'],
+        command: ['pnpm', 'audit', '--json', '--audit-level', 'low'],
         parse: parsePnpmAudit,
+        suppressedBy: pnpmConfigSuppression,
       }
     : {
         lockfile: 'pnpm-lock.yaml',
         label: 'pnpm-lock.yaml (production)',
         saved: 'advisories-pnpm-prod.json',
-        command: ['pnpm', 'audit', '--json', '--prod'],
+        command: ['pnpm', 'audit', '--json', '--prod', '--audit-level', 'low'],
         parse: parsePnpmAudit,
+        suppressedBy: pnpmConfigSuppression,
         production: true,
       },
 ];
+
+/*
+ * The register is the only override. Both scanners can also be told to ignore
+ * advisories in their own configuration, before the report ever sees them, so
+ * a live scan that would read such a file fails instead of running: an ignore
+ * list belongs in the register, where it has a reason and a review date.
+ * (`--audit-level low` on pnpm's command line outranks an `audit-level` in any
+ * .npmrc; GitHub advisories have no severity below low.)
+ */
+function cargoConfigSuppression() {
+  // Relative to the repository, which is where cargo runs and resolves it.
+  const cargoHome = process.env.CARGO_HOME ? resolve(ROOT, process.env.CARGO_HOME) : join(homedir(), '.cargo');
+  for (const path of [join(ROOT, '.cargo', 'audit.toml'), join(cargoHome, 'audit.toml')]) {
+    if (existsSync(path)) return `${path} configures cargo audit, and could hide findings: record exceptions in the register instead`;
+  }
+  return null;
+}
+
+function pnpmConfigSuppression() {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  } catch (error) {
+    return `could not read package.json: ${error.message}`;
+  }
+  if (manifest?.pnpm?.auditConfig !== undefined) {
+    return 'package.json sets pnpm.auditConfig, which could hide findings: record exceptions in the register instead';
+  }
+  const workspace = join(ROOT, 'pnpm-workspace.yaml');
+  // Any spelling of the key YAML accepts at the top level, quoted or not.
+  if (existsSync(workspace) && /^\s*['"]?auditConfig['"]?\s*:/m.test(readFileSync(workspace, 'utf8'))) {
+    return 'pnpm-workspace.yaml sets auditConfig, which could hide findings: record exceptions in the register instead';
+  }
+  return null;
+}
 
 /**
  * The raw output of one scan, from the scanner or from `--from`. Both tools
@@ -204,14 +331,36 @@ function collect(scan) {
     return { stdout: readFileSync(path, 'utf8'), stderr: '' };
   }
 
+  const suppressed = scan.suppressedBy();
+  if (suppressed !== null) return { stdout: '', stderr: suppressed };
+
   const [command, ...args] = scan.command;
-  const settings = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+  // A scanner that hangs is a scan that failed, not one to wait on forever,
+  // and one that ignores a polite signal is killed outright.
+  const settings = {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: SCAN_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  };
   const result =
     process.platform === 'win32'
       ? spawnSync(throughCmd(command, args), { ...settings, shell: true })
       : spawnSync(command, args, settings);
   const stdout = result.stdout ?? '';
   const stderr = result.error ? `could not run ${command}: ${result.error.message}` : (result.stderr ?? '');
+  // Killed partway (the timeout, or a signal) is a failure even if what it
+  // printed before dying happens to parse.
+  if (result.error !== undefined || result.signal !== null) {
+    return { stdout: '', stderr: result.error ? stderr : `${command} was killed by ${result.signal}` };
+  }
+  // Both scanners exit 0 on a clean report and 1 on one with findings. Any
+  // other status is a crash (on Windows, cmd.exe hands one on as a number
+  // rather than a signal), whatever it printed first.
+  if (result.status !== 0 && result.status !== 1) {
+    return { stdout: '', stderr: `${command} exited with status ${result.status}` };
+  }
   // Never an empty file: the publish job attaches every file in provenance/ to
   // the GitHub release, and GitHub refuses a zero-byte asset, so a scanner that
   // printed nothing would turn a reported failure into a failed publish.
@@ -240,6 +389,28 @@ function throughCmd(command, args) {
     throw new Error(`${JSON.stringify(unsafe)} cannot be passed through cmd.exe unquoted`);
   }
   return tokens.join(' ');
+}
+
+/**
+ * One scan, retried while it fails. A live scanner fails for reasons that pass
+ * (a registry timeout, a database fetch cut short), and a failed scan refuses a
+ * tag, so it gets a few attempts before it counts. Saved output is read once:
+ * it will not change on a second look.
+ */
+function scan(scanDef) {
+  const attempts = options.from === null ? SCAN_ATTEMPTS : 1;
+  const pause = RETRY_PAUSE_MS;
+  let result;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    result = scanOne(scanDef);
+    if (result.error === undefined) return result;
+    if (attempt < attempts) {
+      console.error(`${scanDef.label ?? scanDef.lockfile}: attempt ${attempt} of ${attempts} failed (${result.error}); retrying`);
+      if (pause > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pause * attempt);
+    }
+  }
+  if (attempts > 1) result.error = `${result.error} (after ${attempts} attempts)`;
+  return result;
 }
 
 function scanOne(scan) {
@@ -293,11 +464,16 @@ function firstLine(text) {
 function parseCargoAudit(report, lockfile) {
   const vulnerabilities = report?.vulnerabilities;
   if (!Array.isArray(vulnerabilities?.list)) throw new Error('not a cargo-audit JSON report');
-  if (typeof vulnerabilities.count === 'number' && vulnerabilities.count !== vulnerabilities.list.length) {
+  if (vulnerabilities.count !== vulnerabilities.list.length) {
     throw new Error(`cargo-audit counted ${vulnerabilities.count} vulnerabilities and listed ${vulnerabilities.list.length}`);
   }
-  const warnings = report.warnings ?? {};
-  if (typeof warnings !== 'object' || Array.isArray(warnings)) throw new Error('cargo-audit warnings are not a map');
+  if (vulnerabilities.found !== vulnerabilities.list.length > 0) {
+    throw new Error(`cargo-audit says found: ${vulnerabilities.found} and listed ${vulnerabilities.list.length}`);
+  }
+  const warnings = report.warnings;
+  if (warnings === null || typeof warnings !== 'object' || Array.isArray(warnings)) {
+    throw new Error('cargo-audit warnings are not a map');
+  }
 
   const findings = vulnerabilities.list.map((entry) =>
     identified({
@@ -342,6 +518,14 @@ function parsePnpmAudit(report, lockfile) {
   if (report === null || typeof report?.advisories !== 'object' || Array.isArray(report.advisories)) {
     throw new Error('not a pnpm audit JSON report');
   }
+  // A report that looked at nothing has nothing to say. pnpm counts what it
+  // audited under `metadata.totalDependencies` (production with --prod,
+  // optional-only packages included, or everything without it); a scanner
+  // that quietly resolved no tree must not read as clean.
+  const audited = report.metadata?.totalDependencies;
+  if (!Number.isInteger(audited) || audited <= 0) {
+    throw new Error('pnpm audit counted no dependencies, so it audited nothing');
+  }
   const findings = [];
   for (const advisory of Object.values(report.advisories)) {
     // An advisory with no installed version it matched names nothing to look
@@ -369,7 +553,12 @@ function parsePnpmAudit(report, lockfile) {
 /* ----------------------------------------------------------------- classify */
 
 const register = loadRegister(options.register);
-const results = SCANS.map(scanOne);
+// A file left in --save by an earlier run would otherwise be read back by
+// --from as this run's, when this run's scan printed nothing.
+if (options.save !== null) {
+  for (const { saved } of SCANS) rmSync(resolve(options.save, saved), { force: true });
+}
+const results = SCANS.map(scan);
 
 const sections = { new: [], overdue: [], accepted: [], gone: [], failed: [] };
 const matched = new Set();
@@ -390,6 +579,9 @@ for (const result of results) {
     if (exception.reach === 'dev-only' && result.scan.production) {
       // Accepted because it never ships, and the production scan says it does.
       sections.new.push({ finding, note: 'accepted as dev-only, but the production scan reports it' });
+    } else if (exception.reach === 'no-vulnerability' && refuses(finding)) {
+      // Accepted as a maintenance notice, and now reported as a flaw.
+      sections.new.push({ finding, note: `accepted as no-vulnerability, but reported as ${finding.kind}` });
     } else if (exception.reviewBy < today) {
       sections.overdue.push({ finding, exception });
     } else {
@@ -417,6 +609,18 @@ for (const exception of register.exceptions) {
   }
 }
 
+/*
+ * What would refuse a tag: an unreviewed or overdue finding that is a flaw
+ * rather than a maintenance notice, and every scan that failed.
+ */
+const refusals = [
+  ...sections.new.filter(({ finding }) => refuses(finding)).map(({ finding }) => `new: ${line(finding)}`),
+  ...sections.overdue
+    .filter(({ finding }) => refuses(finding))
+    .map(({ finding }) => `review overdue: ${line(finding)}`),
+  ...sections.failed.map(({ scan: s, error }) => `scan failed: ${s.label ?? s.lockfile}: ${error}`),
+];
+
 /* -------------------------------------------------------------------- print */
 
 const annotate = process.env.GITHUB_ACTIONS === 'true';
@@ -433,7 +637,10 @@ heading('NEW', sections.new.length);
 for (const { finding, note } of sections.new) {
   console.log(`  ${line(finding)}`);
   if (note !== undefined) console.log(`      ${note}`);
-  if (annotate) console.log(`::warning::new advisory: ${finding.lockfile} ${describe(finding)}`);
+  if (annotate) {
+    const level = refuses(finding) ? 'error' : 'warning';
+    console.log(`::${level}::new advisory: ${finding.lockfile} ${describe(finding)} [${finding.kind}]`);
+  }
 }
 
 heading('REVIEW OVERDUE', sections.overdue.length);
@@ -451,7 +658,7 @@ printByException(sections.gone);
 heading('SCAN FAILED', sections.failed.length);
 for (const { scan, error } of sections.failed) {
   console.log(`  ${scan.label ?? scan.lockfile}: ${error}`);
-  if (annotate) console.log(`::warning::advisory scan failed: ${scan.label ?? scan.lockfile}`);
+  if (annotate) console.log(`::error::advisory scan failed: ${scan.label ?? scan.lockfile}`);
 }
 
 if (notCovered.length > 0) {
@@ -461,13 +668,20 @@ if (notCovered.length > 0) {
   );
 }
 
-const attention = sections.new.length + sections.overdue.length + sections.failed.length;
+heading('REFUSES A TAG', refusals.length);
+for (const refusal of refusals) console.log(`  ${refusal}`);
+
 console.log(
   `\nResult: ${sections.new.length} new, ${sections.overdue.length} overdue, ` +
     `${sections.accepted.length} accepted, ${sections.gone.length} no longer reported, ` +
     `${sections.failed.length} failed.`,
 );
-process.exit(attention > 0 ? 1 : 0);
+console.log(
+  refusals.length > 0
+    ? `Verdict: a release tag would be REFUSED (${refusals.length}). Fix it, or record an exception in ${options.register}.`
+    : 'Verdict: nothing here refuses a release tag.',
+);
+process.exit(refusals.length > 0 ? 1 : 0);
 
 function heading(title, count) {
   console.log(`\n${title} (${count})`);

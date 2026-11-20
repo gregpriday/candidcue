@@ -3025,9 +3025,11 @@ describe('third-party actions are pinned to immutable commits', () => {
   const WORKFLOWS = [
     '.github/workflows/ci.yml',
     '.github/workflows/mirror-models.yml',
+    '.github/workflows/advisories.yml',
     ...Object.values(RELEASE_WORKFLOWS),
     PUBLISH_ACTION,
     RECEIVE_ACTION,
+    '.github/actions/advisory-scan/action.yml',
   ];
 
   it('has workflows to check', () => {
