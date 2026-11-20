@@ -752,9 +752,9 @@ let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
 /* ---------------------------------------------------------------------------
  * The pass being performed
  *
- * A take is one or more passes: a restarted paragraph closes the pass that was
- * running and opens the next. The end-of-take summary reports on the LAST pass,
- * so these measurements belong to it and start again with every restart.
+ * A take is one pass, opened by `startLiveSession` and closed with the take.
+ * The end-of-take summary reports on it, and a manual move repositions the take
+ * without starting these measurements again.
  * ------------------------------------------------------------------------- */
 
 /** The take currently being performed. Null outside a session. */
