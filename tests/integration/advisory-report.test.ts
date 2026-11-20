@@ -62,23 +62,32 @@ function cargoReport(vulnerabilities: Crate[] = [], warnings: Record<string, Cra
 }
 
 /** The parts of `pnpm audit --json` the report reads. */
-function pnpmReport(advisories: Array<[name: string, versions: string[], id: string]> = []) {
+function pnpmReport(
+  advisories: Array<[name: string, versions: string[], id: string, severity?: string]> = [],
+  dependencies = 134,
+) {
   return {
     actions: [],
     advisories: Object.fromEntries(
-      advisories.map(([name, versions, id], index) => [
+      advisories.map(([name, versions, id, severity = 'high'], index) => [
         String(index + 1),
         {
           module_name: name,
           github_advisory_id: id,
-          severity: 'high',
+          severity,
           title: `${name} advisory`,
           findings: versions.map((version) => ({ version, paths: [`.>${name}`] })),
         },
       ]),
     ),
     muted: [],
-    metadata: {},
+    metadata: {
+      vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 },
+      dependencies,
+      devDependencies: 0,
+      optionalDependencies: 0,
+      totalDependencies: dependencies,
+    },
   };
 }
 
@@ -133,10 +142,10 @@ function registerOf(exceptions: Exception[]): string {
   return path;
 }
 
-function report(from: string, register: string, extra: string[] = []) {
+function report(from: string, register: string, extra: string[] = [], today: string | null = TODAY) {
   const result = spawnSync(
     process.execPath,
-    [SCRIPT, '--from', from, '--register', register, '--today', TODAY, ...extra],
+    [SCRIPT, '--from', from, '--register', register, ...(today === null ? [] : ['--today', today]), ...extra],
     { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } },
   );
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
@@ -293,7 +302,12 @@ describe('the advisory report', () => {
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: { ...process.env, GITHUB_ACTIONS: '', PATH: `${bin}${delimiter}${process.env.PATH}` },
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: '',
+          SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+          PATH: `${bin}${delimiter}${process.env.PATH}`,
+        },
       },
     );
     const output = `${result.stdout}${result.stderr}`;
@@ -304,7 +318,11 @@ describe('the advisory report', () => {
     expect(JSON.parse(readFileSync(join(out, 'advisories-pnpm-prod.json'), 'utf8'))).toEqual(pnpmReport());
   });
 
-  it('reports every kind of cargo warning, including a yank with no advisory id', () => {
+  it('reports unmaintained and yanked warnings, a yank with no advisory id included, and lets a tag through', () => {
+    /*
+     * A maintenance notice is news, not a flaw: it is listed as NEW like any
+     * other finding, and on its own it never refuses a tag.
+     */
     const result = report(
       saved({
         app: cargoReport([], {
@@ -315,10 +333,12 @@ describe('the advisory report', () => {
       registerOf([]),
     );
 
-    expect(result.status, result.output).toBe(1);
+    expect(result.status, result.output).toBe(0);
     const fresh = section(result.output, 'NEW').join('\n');
     expect(fresh).toContain('proc-macro-error 1.0.4 RUSTSEC-2024-0370  [unmaintained]');
     expect(fresh).toContain('chacha20 0.10.1 yanked  [yanked]');
+    expect(section(result.output, 'REFUSES A TAG')).toEqual([]);
+    expect(result.output).toContain('Verdict: nothing here refuses a release tag.');
   });
 
   it('stops covering a dev-only finding once the production scan reports it', () => {
@@ -394,6 +414,200 @@ describe('the advisory report', () => {
   });
 });
 
+/* ---------------------------------------------------------- the policy */
+
+describe('what refuses a release tag', () => {
+  const refused = (output: string) => section(output, 'REFUSES A TAG').join('\n');
+
+  it('refuses an uncovered vulnerability', () => {
+    const result = report(saved({ app: cargoReport([['zip', '9.0.4', 'RUSTSEC-2026-0548']]) }), registerOf([]));
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('new: src-tauri/Cargo.lock  zip 9.0.4 RUSTSEC-2026-0548  [vulnerability]');
+    expect(result.output).toContain('Verdict: a release tag would be REFUSED (1).');
+  });
+
+  it('refuses an uncovered unsound warning', () => {
+    const result = report(
+      saved({ crates: cargoReport([], { unsound: [['tokio', '1.47.1', 'RUSTSEC-2026-0001']] }) }),
+      registerOf([]),
+    );
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('crates/Cargo.lock  tokio 1.47.1 RUSTSEC-2026-0001  [unsound]');
+  });
+
+  it('refuses a cargo warning of a kind it does not know, rather than letting it through', () => {
+    const result = report(
+      saved({ app: cargoReport([], { notice: [['serde', '1.0.0', 'RUSTSEC-2099-0002']] }) }),
+      registerOf([]),
+    );
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('serde 1.0.0 RUSTSEC-2099-0002  [notice]');
+  });
+
+  it('refuses an uncovered pnpm advisory of low severity', () => {
+    const result = report(
+      saved({ prod: pnpmReport([['dompurify', ['3.2.6'], 'GHSA-low0-0000-0000', 'low']]) }),
+      registerOf([]),
+    );
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('pnpm-lock.yaml  dompurify 3.2.6 GHSA-low0-0000-0000  [low]');
+  });
+
+  it('refuses a vulnerability whose exception is past its review date', () => {
+    const result = report(saved({ app: cargoReport([RSA]) }), registerOf([exception({ reviewBy: '2026-10-16' })]));
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('review overdue: src-tauri/Cargo.lock  rsa 0.9.10 RUSTSEC-2023-0071');
+  });
+
+  it('reports an overdue exception for an unmaintained crate, and lets the tag through', () => {
+    const unic: Crate = ['unic-common', '0.9.0', 'RUSTSEC-2025-0080'];
+    const result = report(
+      saved({ app: cargoReport([], { unmaintained: [unic] }) }),
+      registerOf([
+        exception({
+          findings: [{ package: 'unic-common', version: '0.9.0', id: 'RUSTSEC-2025-0080' }],
+          reach: 'no-vulnerability',
+          reviewBy: '2026-10-16',
+        }),
+      ]),
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(section(result.output, 'REVIEW OVERDUE').join('\n')).toContain('unic-common 0.9.0');
+    expect(refused(result.output)).toBe('');
+  });
+
+  it('refuses a failed scan', () => {
+    const result = report(saved({ crates: null }), registerOf([]));
+
+    expect(result.status, result.output).toBe(1);
+    expect(refused(result.output)).toContain('scan failed: crates/Cargo.lock');
+  });
+
+  it('treats a pnpm report that counts no dependencies as a failed scan, not a clean one', () => {
+    for (const prod of [pnpmReport([], 0), { ...pnpmReport(), metadata: {} }]) {
+      const result = report(saved({ prod }), registerOf([]));
+
+      expect(result.status, result.output).toBe(1);
+      expect(section(result.output, 'SCAN FAILED').join('\n')).toContain('counted no dependencies');
+      expect(refused(result.output)).toContain('scan failed: pnpm-lock.yaml (production)');
+    }
+  });
+
+  it('passes a scan with nothing unreviewed in it', () => {
+    const result = report(saved({}), registerOf([]));
+
+    expect(result.status, result.output).toBe(0);
+    expect(refused(result.output)).toBe('');
+  });
+
+  it('annotates what refuses as an error and what does not as a warning, on GitHub', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        SCRIPT,
+        '--from',
+        saved({
+          app: cargoReport([['zip', '9.0.4', 'RUSTSEC-2026-0548']], { yanked: [['chacha20', '0.10.1', null]] }),
+        }),
+        '--register',
+        registerOf([]),
+        '--today',
+        TODAY,
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' } },
+    );
+
+    expect(result.stdout).toContain('::error::new advisory: src-tauri/Cargo.lock zip 9.0.4 RUSTSEC-2026-0548 [vulnerability]');
+    expect(result.stdout).toContain('::warning::new advisory: src-tauri/Cargo.lock chacha20 0.10.1 yanked [yanked]');
+  });
+
+  it('retries a live scan that fails, and fails it only after the last attempt', () => {
+    /*
+     * A registry timeout passes; a failed scan refuses a tag. The stand-in
+     * cargo fails its first call on each lockfile and answers the second, and
+     * the stand-in pnpm never answers at all.
+     */
+    const bin = scratch();
+    const state = scratch();
+    fakeTool(
+      bin,
+      'cargo',
+      `import fs from 'node:fs';
+import path from 'node:path';
+const file = path.join(${JSON.stringify(state)}, process.argv[process.argv.length - 1].replace(/\\W/g, '_'));
+if (!fs.existsSync(file)) {
+  fs.writeFileSync(file, '1');
+  console.error('error: could not fetch advisory database');
+  process.exit(1);
+}
+console.log(${JSON.stringify(JSON.stringify(cargoReport()))});
+`,
+    );
+    fakeTool(bin, 'pnpm', "import fs from 'node:fs';\nfs.appendFileSync(process.env.PNPM_CALLS, 'x');\nprocess.exit(1);\n");
+    const calls = join(state, 'pnpm-calls');
+
+    const result = spawnSync(process.execPath, [SCRIPT, '--register', registerOf([]), '--today', TODAY], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_ACTIONS: '',
+        SPEAKING_GLASS_ADVISORY_RETRY_MS: '0',
+        PNPM_CALLS: calls,
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(1);
+    expect(output).toContain('src-tauri/Cargo.lock: 0 reported');
+    expect(output).toContain('crates/Cargo.lock: 0 reported');
+    expect(readFileSync(calls, 'utf8')).toBe('xxx');
+    expect(section(output, 'SCAN FAILED').join('\n')).toContain('(after 3 attempts)');
+  });
+});
+
+describe('the accepted-risk reach', () => {
+  const zip = (overrides: Partial<Exception> = {}) =>
+    exception({
+      findings: [{ package: 'zip', version: '4.6.1', id: 'RUSTSEC-2026-0548' }],
+      reach: 'accepted-risk',
+      why: 'The updater extracts its own signed payload with it; the fix needs an updater release.',
+      followUp: 'https://github.com/gregpriday/candidcue/issues/487',
+      reviewBy: '2026-11-16',
+      ...overrides,
+    });
+
+  it('covers a shipped finding with a follow-up and a review inside 30 days', () => {
+    const result = report(saved({ app: cargoReport([['zip', '4.6.1', 'RUSTSEC-2026-0548']]) }), registerOf([zip()]));
+
+    expect(result.status, result.output).toBe(0);
+    const accepted = section(result.output, 'ACCEPTED').join('\n');
+    expect(accepted).toContain('accepted-risk, review by 2026-11-16');
+    expect(accepted).toContain('Follow-up: https://github.com/gregpriday/candidcue/issues/487');
+  });
+
+  it('refuses an entry with no follow-up issue, or one reviewed more than 30 days out', () => {
+    const { followUp: _omitted, ...noFollowUp } = zip();
+    for (const [label, broken, problem] of [
+      ['no follow-up', noFollowUp as Exception, 'links no follow-up issue'],
+      ['a follow-up that is not an issue', zip({ followUp: 'see the tracker' }), 'not a GitHub issue URL'],
+      ['31 days out', zip({ reviewBy: '2026-11-17' }), 'more than 30 days ahead'],
+    ] as const) {
+      const result = report(saved({}), registerOf([broken]));
+      expect(result.status, `${label}\n${result.output}`).toBe(2);
+      expect(result.output, label).toContain('is malformed');
+      expect(result.output, label).toContain(problem);
+    }
+  });
+});
+
 /* ------------------------------------------------------ the real register */
 
 /** `name@version` for every package a lockfile resolves. */
@@ -413,7 +627,9 @@ describe('docs/advisory-exceptions.json', () => {
   const register = JSON.parse(readFileSync(join(REPO_ROOT, REGISTER), 'utf8')) as { exceptions: Exception[] };
 
   it('is a register the report accepts', () => {
-    const result = report(saved({}), join(REPO_ROOT, REGISTER), ['--dev']);
+    // Today's date, not the pinned one: an accepted-risk entry is held to 30
+    // days from when the scan runs.
+    const result = report(saved({}), join(REPO_ROOT, REGISTER), ['--dev'], null);
     expect(result.output).not.toContain('is malformed');
     expect(result.status, result.output).toBe(0);
   });
