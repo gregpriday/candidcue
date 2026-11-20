@@ -30,6 +30,7 @@ import {
   type DisplayShape,
 } from '../../shared/optical-discovery';
 import { RIG_PRESETS, opticalProfileFieldsForPreset } from '../../shared/optical-rig-presets';
+import { mmPerCssPixel } from '../../shared/optics';
 import {
   activeOpticalProfile,
   normalizeOpticalProfile,
@@ -159,14 +160,29 @@ export function withCameraAboveRig(
    * and on a panel discovery cannot size it is the only size there is. A
    * ruler reading is not carried: it measured the optical path through glass
    * this arrangement does not have.
+   *
+   * The DIAGONAL is carried, not the stored pixel scale: that was worked out
+   * over the panel's logical size when it was typed, and a change of display
+   * scaling since would carry a scale off by the same factor.
    */
   const typedScale = activeOpticalProfile(optical, fingerprint)?.scale;
+  const typedDiagonalMm =
+    typedScale?.source === 'diagonal' ? (typedScale.diagonalMm ?? null) : null;
   let name = CAMERA_ABOVE_RIG_NAME;
   for (let suffix = 2; ; suffix += 1) {
     const stored = storedAt(name);
     if (stored === null) {
       const fresh = cameraAboveProfile(display, seed, name);
-      if (typedScale?.source === 'diagonal') fresh.scale = { ...typedScale };
+      if (typedDiagonalMm !== null) {
+        const mmPerCssPx = mmPerCssPixel({
+          diagonalMm: typedDiagonalMm,
+          widthPx: display.physicalSize.width / display.scaleFactor,
+          heightPx: display.physicalSize.height / display.scaleFactor,
+        });
+        if (mmPerCssPx !== null) {
+          fresh.scale = { mmPerCssPx, source: 'diagonal', diagonalMm: typedDiagonalMm };
+        }
+      }
       return withPanelMirror(withOpticalProfile(optical, fingerprint, fresh), fingerprint, unmirrored);
     }
     if (stored.lensPlacement === 'above') {

@@ -238,7 +238,11 @@ describe('a prompter take on the panel afterwards', () => {
     );
     const stage = stageSettingsFromSettings(s, unsized);
     expect(stage.opticalProfile?.lensPlacement).toBe('above');
-    expect(stage.opticalProfile?.scale).toEqual(typed.scale);
+    // The typed diagonal, over the panel as it is now (1512 x 982 CSS px) —
+    // not the stored 0.21, which was worked out at another display scaling.
+    expect(stage.opticalProfile?.scale?.source).toBe('diagonal');
+    expect(stage.opticalProfile?.scale?.diagonalMm).toBe(381);
+    expect(stage.opticalProfile?.scale?.mmPerCssPx).toBeCloseTo(381 / Math.hypot(1512, 982), 9);
     // The camera preset's own distance, not the hood's.
     expect(stage.opticalProfile?.viewingDistanceMm).not.toBe(1700);
     expect(stage.optics?.calibrated).toBe(true);
