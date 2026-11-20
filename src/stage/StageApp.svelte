@@ -1,5 +1,5 @@
 <!--
-  Stage shell (spec §16.1 layer model, §43.5 heartbeat, §45.6). A take embeds
+  Stage shell (spec §16.1 layer model, §45.6). A take embeds
   it in the control window; it is also the page of the separate stage window
   that Settings' preview, "Show test" and Calibrate open.
 
@@ -36,39 +36,30 @@
   operator instruments and dock.
 
   In a take the envelope and the live state arrive through the `embedded`
-  bridge prop. The separate window gets them as Tauri events — it may listen
-  and emit, never invoke. Outbound traffic is intents/acks that control is
-  free to ignore.
+  bridge prop, and intents go back through it. The separate window (a Settings
+  preview, Calibrate) gets its document and directives as Tauri events — it may
+  listen and emit, never invoke — and says only what the handshake, Escape and
+  the viewport prior need.
 -->
 <script lang="ts">
   import { onMount, untrack, type Snippet } from 'svelte';
   import {
     ESCAPE_DOUBLE_PRESS_MS,
     STAGE_EVENT,
-    STAGE_HEARTBEAT_GRACE_MS,
     type PresentationMode,
     type StageAutoScrollEndReason,
     type StageAutoScrollPayload,
     type StageEscapePayload,
-    type StageHeartbeatAckPayload,
-    type StageHeartbeatPayload,
-    type StageTranscriptTapPayload,
     type StageHydratedPayload,
     type StageIntent,
-    type StageIntentPayload,
-    type StageLayoutErrorPayload,
-    type StageLiveSyncPayload,
     type StageListeningPayload,
     STAGE_VOICE_PILL_TRACE_SAMPLES,
     type StageVoicePillPayload,
     type StageVoicePillReading,
-    type StageMotionAck,
-    type StageMotionAckPayload,
     type StageReadyPayload,
     type StageSnapshotPayload,
     type StageSessionEnvelope,
     type StageStatePayload,
-    type StageSyncRequestPayload,
     type StageAlignmentPayload,
     ALIGNMENT_RELOCATIONS,
   } from '../shared/contracts';
@@ -355,7 +346,6 @@
   const vw = $derived(measuredVw || windowVw);
   const vh = $derived(measuredVh || windowVh);
   let scriptLayer: ScriptLayer | undefined = $state();
-  let liveSyncRevision = 0;
   let previewDriver: PreviewDriver | null = null;
 
   const phase = $derived(displayPhase(app));
@@ -457,8 +447,6 @@
    * with it are two different faults with one symptom.
    */
   let alignmentArrived = $state(0);
-  /** Transcript taps this window was handed. See the subscription. */
-  let transcriptTapsArrived = $state(0);
   /**
    * The take these counters describe.
    *
@@ -477,7 +465,7 @@
   const feedSessionGeneration = $derived(app.envelope?.sessionGeneration ?? null);
 
   /**
-   * Both counters start again with each SESSION.
+   * The counters start again with each SESSION.
    *
    * A mounted stage can be handed a new one, and `alignmentArrived` is counted
    * here rather than by the receiver, so nothing else would ever clear it. The
@@ -493,7 +481,6 @@
     void feedSessionGeneration;
     untrack(() => {
       alignmentArrived = 0;
-      transcriptTapsArrived = 0;
       alignmentFeed = null;
     });
   });
@@ -836,8 +823,8 @@
   let holdStatusHeightPx = $state(0);
   /*
    * The last snapshot this has judged. `app` is replaced whole on every
-   * dispatch, so the effect below re-runs on a blank, a settings push, a
-   * heartbeat — and re-reading the same refusal then would bring back an offer
+   * dispatch, so the effect below re-runs on a blank, a settings push, an
+   * acknowledgement — and re-reading the same refusal then would bring back an offer
    * that had expired or that the reader's own hand had withdrawn.
    */
   let lastJudgedSnapshot: { sessionGeneration: number; seq: number } | null = null;
@@ -1037,39 +1024,6 @@
     dropSuggestion();
   }
   /**
-   * Reported on every heartbeat ack and read by the coordinator (§40.5).
-   *
-   * It has had no producer since the Listener was removed: the layer
-   * that decoded video was the only thing on the stage that could report a
-   * media failure, so this is constant `true` today. The channel is kept
-   * because the health field is part of the `StageStatus` contract rather than
-   * anything Listener-shaped — but nothing sets it false, and a reader should
-   * not mistake "healthy" here for a measurement.
-   */
-  let mediaHealthy = $state(true);
-  /**
-   * When control last proved it was alive, and NOTHING ELSE.
-   *
-   * -------------------------------------------------------------------------
-   * THIS USED TO BE `lastInboundAt`, AND THAT MEASURED THE WRONG THING
-   * -------------------------------------------------------------------------
-   * Every inbound event refreshed it — directives, the transcript tap, the
-   * voice pill, live sync, and alignment. Alignment is the one that breaks it:
-   * Rust published snapshots DIRECTLY to the separate stage window, with
-   * control out of that path entirely. So a control
-   * window that had crashed or wedged went on being reported as alive for as
-   * long as the aligner kept publishing — which, mid-take with the recogniser
-   * running, is indefinitely. The watchdog could not fire in precisely the
-   * situation it exists for, and the freeze that this file's whole control-loss
-   * disclosure hangs off never happened.
-   *
-   * The heartbeat is the only inbound event that control alone can produce, so
-   * it is the only one that can answer "is control alive". Generation-checked
-   * on the same rule the reducer uses, so a heartbeat from a superseded start
-   * attempt cannot hold the watchdog off a take it does not belong to.
-   */
-  let lastHeartbeatAt = 0;
-  /**
    * The last words the recogniser returned, shown along the bottom.
    *
    * Three faults look identical from the stage — a script that has stopped
@@ -1096,11 +1050,36 @@
    */
   let voicePill = $state<StageVoicePillPayload | null>(null);
 
+  /*
+   * The audio readout, drawn the same way in both modes.
+   *
+   * The TRACE is the half that keeps being argued about. Twice now something
+   * has tried to retire it once the chain is proven: the optical work made
+   * Clean Take collapse it to the mark, and control's own view faded the whole
+   * pill a couple of seconds after it confirmed. Both were reasoning about the
+   * same real cost — a waveform is continuous peripheral motion beside the
+   * words somebody is reading — and both got the same thing wrong.
+   *
+   * "The microphone is being heard" is not a fact that stays true. It is a
+   * claim about the last second, and whoever needs it is twenty minutes into a
+   * take whose script has stopped moving, unable to tell whether that is them,
+   * the microphone, or the aligner. An instrument that retires itself once
+   * things are going well is an instrument that is never there for the only
+   * question anybody asks it.
+   *
+   * The MARK does settle, and that is a different decision: see
+   * `StageVoicePillReading`. A tick held for the length of a take is reporting
+   * an event nobody can still act on.
+   *
+   * Control resolves the reading, the dock draws it, and the trace runs for the
+   * whole take.
+   */
+
   /**
    * The fixed-pace transport, or null while nothing has ever set it.
    *
-   * Local state for the same reason the transcript bar is: it arrives on the
-   * directive road, it has to survive the phases where the reducer refuses to
+   * Local state for the same reason the transcript bar is: it arrives from the
+   * take's bridge, it has to survive the phases where the reducer refuses to
    * act, and the presenter's document must not start or stop rolling because a
    * generation changed underneath it.
    */
@@ -1193,14 +1172,6 @@
       : undefined,
   );
   /**
-   * The watchdog has frozen the stage because control stopped answering.
-   *
-   * Narrowed to the watchdog's own reason rather than reading `app.frozen`,
-   * because a directive-ordered freeze is somebody deciding the glass should
-   * hold — reporting that as a failure would announce an intention as a fault.
-   */
-  const controlLost = $derived(app.frozen && app.frozenReason === 'control_lost');
-  /**
    * A named hardware condition, taken from the voice pill.
    *
    * The pill is the only thing on the stage that knows the input chain is
@@ -1244,9 +1215,6 @@
         // exactly the take that never produces a snapshot at all.
         alignmentState: state ?? 'following',
         holdingForMs: holdSinceMs === null ? 0 : now - holdSinceMs,
-        // Above the fault, and above the ladder. See `resolveHoldStatus`: once
-        // control is gone every other input here is a stale measurement.
-        controlLost,
         hasFault: voiceFaultLabel !== null,
         faultLabel: voiceFaultLabel,
         followPaused,
@@ -1281,17 +1249,12 @@
     // And the fourth: starting the transport withdraws the recovery hint while
     // the fault that earned it is still true.
     void autoScroll?.running;
-    // The fifth. Control dying is a state change with no snapshot behind it and
-    // no hold to time, so nothing else in this effect would prompt the
-    // crossing — and the recovery heartbeat is equally silent on the way back.
-    void controlLost;
     refreshHoldStatus();
     if (!holding) return;
     const timer = window.setInterval(refreshHoldStatus, HOLD_TICK_MS);
     return () => clearInterval(timer);
   });
 
-  let heartbeatSeen = false;
   /** Layout generation the stage is currently measured at (companion §7.2). */
   let layoutGeneration = $state(0);
   /** §62: fatal line-map issues after the bounded rebuild retry. */
@@ -1318,9 +1281,6 @@
   }
 
   function applyAlignment(snapshot: StageAlignmentPayload) {
-    // Deliberately does NOT touch the control-liveness clock. On the separate
-    // window these arrive straight from Rust, so they say nothing about whether
-    // the control window is still answering. See `lastHeartbeatAt`.
     alignmentArrived += 1;
     const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
     const stats = scriptLayer?.alignmentFeedStats();
@@ -1354,62 +1314,10 @@
       // See `inboundGeneration`. Recording it cannot widen what the stage is
       // allowed to do: every stamp it produces is still checked by Rust.
       if (payload.stageGeneration > 0) inboundGeneration = payload.stageGeneration;
-      if (payload.directive.kind === 'transcript') {
-        /*
-         * Generation-checked here rather than in the reducer, because the bar
-         * is local state: it has to keep reading before the envelope has
-         * arrived and after a blank, which is exactly when the reducer refuses
-         * to act. An unknown generation is accepted for the same reason the
-         * bar is not gated on `phase === 'live'` — this is the instrument that
-         * says whether anything is being heard at all, and it may not be
-         * switched off by the conditions it exists to explain.
-         */
-        const generation = app.envelope?.stageGeneration ?? 0;
-        if (generation === 0 || payload.stageGeneration === generation) {
-          transcriptTapsArrived += 1;
-          transcriptTap = payload.directive.text;
-        }
-        return;
-      }
-      if (payload.directive.kind === 'voicePill') {
-        const generation = app.envelope?.stageGeneration ?? 0;
-        if (
-          generation !== 0 &&
-          payload.stageGeneration === generation &&
-          payload.directive.pill.stageGeneration === generation
-        ) {
-          voicePill = payload.directive.pill;
-        }
-        return;
-      }
-      if (payload.directive.kind === 'autoScroll') {
-        /*
-         * Local state, beside the transcript bar and the pill, and generation
-         * checked here for the same reason: the transport must keep running
-         * across the phases where the reducer stands down. An unknown
-         * generation is NOT accepted, though — unlike the bar, this one moves
-         * the document, and a stale window rolling somebody's script because it
-         * could not tell whose instruction it was is the failure the generation
-         * check exists to prevent.
-         */
-        const generation = app.envelope?.stageGeneration ?? 0;
-        if (generation !== 0 && payload.stageGeneration === generation) {
-          autoScroll = payload.directive.autoScroll;
-        }
-        return;
-      }
       dispatch({
         type: 'directive',
         stageGeneration: payload.stageGeneration,
         directive: payload.directive,
-      });
-    };
-
-    const requestLiveSync = (stageGeneration: number) => {
-      if (!isTauri || stageGeneration === 0) return;
-      emitStageEvent<StageSyncRequestPayload>(STAGE_EVENT.syncRequest, {
-        stageGeneration,
-        lastRevision: liveSyncRevision,
       });
     };
 
@@ -1418,54 +1326,22 @@
         const subs = await Promise.all([
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           dispatch({ type: 'snapshot', envelope });
-          /*
-           * An envelope that belongs to a take (one carrying
-           * `sessionGeneration`) STARTS the liveness deadline, and it is the
-           * only other thing allowed to touch it. Only the separate window gets
-           * here: a take's embedded stage has no heartbeat to keep.
-           *
-           * Two holes close here, and both are the watchdog failing to fire at
-           * all rather than firing wrongly:
-           *
-           *   • control began its heartbeat on a ~1 s `setInterval`, so the
-           *     first beat is a second away. Arming only on a beat meant that a
-           *     control window which died inside that window could never set
-           *     `heartbeatSeen`, and the stage would sit there forever with no
-           *     deadline running — the exact silence this whole change exists
-           *     to break, at the most likely moment for a start to go wrong;
-           *   • a NEW generation inherited the previous one's timestamp. Once
-           *     its handshake completed, a deadline measured from a take that
-           *     had already ended could fire against a take that was perfectly
-           *     healthy.
-           *
-           * Seeding here is honest about what it proves: control published this
-           * envelope, so control was alive when it did. A real beat was meant
-           * to refresh it about a second later, and if none comes the deadline
-           * expires on schedule.
-           *
-           * `sessionGeneration` is the discriminator, and it is not incidental:
-           * `buildStageEnvelope` omits it exactly when the payload belongs to no
-           * take, and the Settings appearance preview is the only caller that
-           * does so. That preview opens a REAL stage window and publishes a REAL
-           * envelope, but nothing ever heartbeats it. Arming on any envelope
-           * therefore put "Control stopped responding" on the glass five seconds
-           * into a preview that control was alive and actively driving, which is
-           * the stage lying to the presenter: the one failure this disclosure
-           * exists to prevent, committed by the disclosure itself.
-           */
-          if (envelope.sessionGeneration !== undefined) {
-            lastHeartbeatAt = performance.now();
-            heartbeatSeen = true;
-          }
           // Handshake step 1 (§43.3): confirm hydration to Rust.
           emitStageEvent<StageHydratedPayload>(STAGE_EVENT.hydrated, {
             stageGeneration: envelope.stageGeneration,
             sessionId: envelope.sessionId,
           });
-          requestLiveSync(envelope.stageGeneration);
         }),
+        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         /*
-         * Alignment snapshots, straight from Rust, about once a second.
+         * Alignment snapshots, for the browser harness only: the synthetic
+         * driver and the recorded-speech replay feed them over the local bus.
+         *
+         * Not under Tauri. Snapshots exist only during a take, and a take's
+         * stage is embedded and gets them through the bridge. Rust still
+         * publishes them to the stage label until #491, and a Settings preview
+         * open beside a take would only reject each one on session generation
+         * and count it as dropped in its diagnostics.
          *
          * They reach the motion engine directly rather than through the
          * reducer: the engine's own receiver is the gate that validates and
@@ -1473,92 +1349,14 @@
          * Svelte update between the presenter's voice and the glass. The
          * reducer gets a copy for the status readout only.
          */
-        subscribeStageEvent<StageAlignmentPayload>(
-          STAGE_EVENT.alignmentSnapshot,
-          applyAlignment,
-        ),
-        subscribeStageEvent<StageLiveSyncPayload>(STAGE_EVENT.liveSync, (payload) => {
-          const generation = app.envelope?.stageGeneration ?? 0;
-          if (generation === 0 || payload.stageGeneration !== generation) return;
-          if (payload.revision <= liveSyncRevision) return;
-          liveSyncRevision = payload.revision;
-          if (payload.transcript) onDirective(payload.transcript);
-          if (payload.voicePill) onDirective(payload.voicePill);
-          if (payload.alignment) applyAlignment(payload.alignment);
-        }),
-        /*
-         * The transcript bar. Raw recogniser text, read straight off the wire
-         * — it deliberately does not pass through the reducer, because its
-         * whole value is being true when the things that do are wrong.
-         */
-        subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
-          /*
-           * Counted, because "control sent 6 of 6" and an empty bar cannot both
-           * be true and neither side could see the other. Control's count was
-           * of what it EMITTED — an attempt, not a delivery, since the promise
-           * was fire-and-forget with a swallowed rejection. This counts what
-           * arrived on the separate window's event path. The embedded bridge's
-           * transcript is not counted here.
-           */
-          transcriptTapsArrived += 1;
-          transcriptTap = payload.text;
-        }),
-        /*
-         * The voice pill. Like the transcript bar it bypasses the reducer: it
-         * is an instrument pointed at the session rather than part of the
-         * session's render model, and its whole value is being true when the
-         * things that do go through the reducer are wrong.
-         */
-        subscribeStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, (payload) => {
-          /*
-           * Generation-checked, like every other directive: a payload from a
-           * superseded start attempt must not be able to put a fault on the
-           * corner of a take that is running perfectly well.
-           *
-           * "No envelope yet" is a REJECTION here, not a pass. Everywhere else
-           * an unknown generation is treated as "we cannot tell, so accept";
-           * that is wrong for this one, because the window between a stage
-           * subscribing and its envelope arriving is exactly when the previous
-           * generation's last payloads are still in flight. Accepting one there
-           * left the outgoing take's reading — including a cross — sitting on
-           * the new stage until control published again.
-           */
-          const generation = app.envelope?.stageGeneration ?? 0;
-          if (generation === 0 || payload.stageGeneration !== generation) return;
-          voicePill = payload;
-        }),
-        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
-        subscribeStageEvent<StageHeartbeatPayload>(STAGE_EVENT.heartbeat, (payload) => {
-          /*
-           * The liveness clock refreshed, and only for a beat this take owns.
-           *
-           * Stricter than the reducer's own rule, deliberately, and this is the
-           * one place the two are allowed to differ. The reducer accepts a beat
-           * that arrives before any envelope, because it has nothing to check it
-           * against; for a DEADLINE that is the wrong call. This file already
-           * documents that a previous generation's payloads are still in flight
-           * during exactly that window, so an outgoing take's last beat could
-           * seed the clock and then be inherited by whatever envelope arrived
-           * next — a deadline measured from a take that had already ended.
-           *
-           * There is no gap left by refusing it: the envelope handler above
-           * starts the deadline itself, so the clock is always running by the
-           * time the phase leaves `handshake` and the watchdog is armed.
-           */
-          const generation = app.envelope?.stageGeneration ?? null;
-          if (generation !== null && payload.stageGeneration === generation) {
-            lastHeartbeatAt = performance.now();
-            heartbeatSeen = true;
-          }
-          dispatch({ type: 'heartbeat', payload, receivedAtMs: Date.now() });
-          emitStageEvent<StageHeartbeatAckPayload>(STAGE_EVENT.heartbeatAck, {
-            stageGeneration: payload.stageGeneration,
-            revision: payload.revision,
-            trackingRevision: app.lastTrackingRevision,
-            mediaHealthy,
-            respondedAtMs: Date.now(),
-          });
-        }),
+        ...(isTauri
+          ? []
+          : [
+              subscribeStageEvent<StageAlignmentPayload>(
+                STAGE_EVENT.alignmentSnapshot,
+                applyAlignment,
+              ),
+            ]),
         ]);
         if (disposed) {
           subs.forEach((u) => u());
@@ -1614,21 +1412,6 @@
       },
     );
 
-    // Watchdog (§43.5): if control's heartbeat stops while live, freeze locally
-    // and wait. Only armed by an envelope carrying a session generation, or a
-    // beat it owns, in the separate window — never by an embedded take — and
-    // only under Tauri; neither the preview bus nor the Settings appearance
-    // preview has a liveness contract to hold control to.
-    const watchdog = window.setInterval(() => {
-      if (!isTauri || !heartbeatSeen || app.phase === 'handshake') return;
-      if (performance.now() - lastHeartbeatAt > STAGE_HEARTBEAT_GRACE_MS) {
-        dispatch({ type: 'control_lost' });
-      }
-    }, 1000);
-    const liveSync = window.setInterval(() => {
-      requestLiveSync(app.envelope?.stageGeneration ?? 0);
-    }, 500);
-
     /*
      * `?preview=1&replay=<url>` replays a frozen Tier-B run — real recorded
      * speech, through the real renderer — instead of the synthetic driver. It
@@ -1658,8 +1441,6 @@
       clearTimeout(pointerTimer);
       clearTimeout(dockTimer);
       clearTimeout(escapeHintTimer);
-      clearInterval(watchdog);
-      clearInterval(liveSync);
       previewDriver?.stop();
     };
   });
@@ -1766,48 +1547,21 @@
     emitLayoutReady();
   }
 
-  /* ---- motion diagnostics (companion §54) ---- */
-  function handleMotionAck(ack: StageMotionAck) {
-    // A periodic report for diagnostics and recovery — explicitly not a
-    // high-frequency feedback loop into the aligner.
-    // S1: emitted under the stage's OWN name. A webview emit is a broadcast
-    // that reaches control directly as well as Rust, so reusing the name Rust
-    // relays under (`motionAck`) delivered every ack to control twice — once
-    // without the generation check.
-    if (embedded) return;
-    emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionReport, {
-      ...ack,
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
-    });
-  }
-
   /* ---- recoverable stage-layout failure (§62) ---- */
   function handleLayoutError(issues: string[]) {
+    // Shown in the diagnostics overlay (`layout: HELD`). Nothing on the control
+    // side reads a stage-window report of it, so none is sent.
     layoutIssues = issues;
-    // The local diagnostics overlay only helps someone standing at the stage.
-    // §62 wants the error where the operator is, so it travels the same
-    // Rust-relayed, generation-checked path as the motion report — under the
-    // stage's OWN name, never the one control listens for (see S1 above).
-    if (embedded) return;
-    emitStageEvent<StageLayoutErrorPayload>(STAGE_EVENT.layoutError, {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
-      issues,
-      layoutGeneration,
-      atMs: Date.now(),
-    });
   }
 
-  /* ---- outbound intents (§16.9: control/Rust decides) ---- */
+  /* ---- outbound intents (§16.9: control decides) ---- */
+  /**
+   * Intents belong to a take, and a take is always embedded: the host hears
+   * them through its own callback. The separate window (a Settings preview,
+   * Calibrate) has nobody to tell, so it says nothing.
+   */
   function sendIntent(intent: StageIntent) {
-    if (embedded) {
-      embedded.onintent?.(intent);
-      return;
-    }
-    emitStageEvent<StageIntentPayload>(STAGE_EVENT.intent, {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
-      intent,
-      atMs: Date.now(),
-    });
+    embedded?.onintent?.(intent);
   }
 
   /**
@@ -1893,7 +1647,8 @@
       return;
     }
     // Escape travels on its own event so the Rust bridge can relay it (§46.9),
-    // under a name control does NOT listen for — see S1 on motionReport above.
+    // under a name control does NOT listen for (S1): a webview emit is a
+    // broadcast, so reusing the relayed name would reach control twice.
     emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapePressed, {
       stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
       presses,
@@ -2487,82 +2242,6 @@
     if (!manualScrollRelocated(scriptLayer?.alignmentGapPx() ?? null, vh)) return null;
     return scriptLayer?.readingAnchorToken() ?? null;
   }
-
-  /**
-   * The audio readout, drawn the same way in both modes.
-   *
-   * The TRACE is the half that keeps being argued about. Twice now something
-   * has tried to retire it once the chain is proven: the optical work made
-   * Clean Take collapse it to the mark, and control's own view faded the whole
-   * pill a couple of seconds after it confirmed. Both were reasoning about the
-   * same real cost — a waveform is continuous peripheral motion beside the
-   * words somebody is reading — and both got the same thing wrong.
-   *
-   * "The microphone is being heard" is not a fact that stays true. It is a
-   * claim about the last second, and whoever needs it is twenty minutes into a
-   * take whose script has stopped moving, unable to tell whether that is them,
-   * the microphone, or the aligner. An instrument that retires itself once
-   * things are going well is an instrument that is never there for the only
-   * question anybody asks it.
-   *
-   * The MARK does settle, and that is a different decision: see
-   * `StageVoicePillReading`. A tick held for the length of a take is reporting
-   * an event nobody can still act on.
-   *
-   * Control resolves the reading, the dock draws it, and the trace runs for the
-   * whole take. There is exactly ONE thing left for this window to decide, and
-   * it is below.
-   *
-   * -------------------------------------------------------------------------
-   * THE ONE EXCEPTION: THE STAGE OWNS THE FRESHNESS OF WHAT REACHES IT
-   * -------------------------------------------------------------------------
-   * This was a plain alias, on the principle that control resolves every part
-   * of the reading together so the mark and the waveform can never be from
-   * different frames. That principle is right and is preserved: nothing here
-   * edits a field of a payload control sent.
-   *
-   * But it answers the wrong question when control is the thing that broke. A
-   * payload is a claim about the moment it was published, and once the watchdog
-   * has proved nobody is publishing any more, the last one is not a reading —
-   * it is a photograph of one. Left alone it draws a settled solid dot, which
-   * is the mark this instrument uses to say "and it is still fine": the single
-   * most reassuring thing on the glass, asserting the opposite of the truth, at
-   * the exact moment the presenter is trying to work out why the script stopped.
-   *
-   * So control loss REPLACES the view wholesale rather than editing it. The
-   * stored payload is untouched, so recovery is a matter of this derived
-   * falling back to it.
-   */
-  const presenterVoicePill = $derived.by(() => {
-    if (!controlLost) return voicePill;
-    return {
-      stageGeneration: voicePill?.stageGeneration ?? app.envelope?.stageGeneration ?? 0,
-      /*
-       * Carried from the last real payload rather than stamped with `now`.
-       * It means "when control sent this", and control sent nothing: writing a
-       * fresh timestamp would date a stage-authored view as though it had come
-       * down the wire, which is the one claim this whole projection exists to
-       * stop the readout making.
-       */
-      sentAtMs: voicePill?.sentAtMs ?? 0,
-      /*
-       * Synthesised even when no payload ever arrived. A take where control
-       * died before its first pill frame is precisely the one where the dock
-       * would otherwise show its placeholder — an empty slot, indistinguishable
-       * from a take that simply has not started reporting yet.
-       */
-      reading: 'fault' as const,
-      label: 'Control lost',
-      visible: true,
-      /*
-       * The bars are cleared rather than frozen mid-trace. A waveform is the
-       * one element here that means "this is happening now", and holding the
-       * last few levels on the glass would keep drawing evidence of a
-       * microphone nobody is listening to. Flat is the honest shape.
-       */
-      levels: [],
-    } satisfies StageVoicePillPayload;
-  });
 </script>
 
 <svelte:window onkeydown={onKeyDown} bind:innerWidth={windowVw} bind:innerHeight={windowVh} />
@@ -2627,7 +2306,6 @@
             onautoscrollend={handleAutoScrollEnd}
             onlayoutready={handleLayoutReady}
             onlayoutmeasured={handleLayoutMeasured}
-            onmotionack={handleMotionAck}
             onlayoutgeneration={(generation) => (layoutGeneration = generation)}
             onlayouterror={handleLayoutError}
             ondegraded={(degraded) => (motionDegraded = degraded)}
@@ -2950,15 +2628,6 @@
               {/if}
             {/if}
           </div>
-          <!-- Transcript deliveries on the separate window's event path,
-               replayed directives included. Zero is expected in a take — the
-               embedded stage gets its transcript through the bridge, which
-               this does not count — so on its own it cannot establish a
-               delivery fault. A Read take (#243) sends no taps at all; its
-               snapshots come from hand moves, so the pair is not a fault there. -->
-          <div class:diag-fault={voiceInput && transcriptTapsArrived === 0 && alignmentArrived > 0}>
-            taps: {transcriptTapsArrived} arrived
-          </div>
           <div>viewport: {vw}×{vh}</div>
           {#if budget}
             <!-- What the presenter can actually see, in rendered lines. Short
@@ -3010,7 +2679,6 @@
           {/if}
           <div>profile: {followProfile.id} (v{followProfile.version})</div>
           <div>frames: {motionDegraded ? 'degraded' : 'ok'}</div>
-          <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
         </div>
       {/if}
 
@@ -3092,11 +2760,13 @@
       {/if}
 
       <StageDock
-        pill={app.envelope !== null ? presenterVoicePill : null}
+        pill={app.envelope !== null ? voicePill : null}
         readout={!app.blanked}
         revealed={dockVisible}
         {followPaused}
-        onfollowtoggle={voiceInput ? () => sendIntent({ kind: 'toggle_follow' }) : undefined}
+        onfollowtoggle={embedded && voiceInput
+          ? () => sendIntent({ kind: 'toggle_follow' })
+          : undefined}
         presentationMode={embedded?.presentationMode ?? 'prompter'}
         onpresentationtoggle={embedded?.onpresentationtoggle}
         practice={embedded?.practice ?? false}

@@ -41,7 +41,6 @@
 import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
 import type { AlignmentSnapshot, AlignmentViewportHint } from './alignment';
-import type { StageMotionAck } from './smooth-follow';
 
 /* ---------------------------------------------------------------------------
  * Event names
@@ -54,7 +53,15 @@ export const STAGE_EVENT = {
   applyCommand: 'stage://apply-command',
   /** Rust → stage: the session is over; the window is about to close. */
   closeSession: 'stage://close-session',
-  /** control → stage: liveness heartbeat (spec §43.5, ~1 s cadence). */
+  /*
+   * RETIRED NAMES. `heartbeat`, `transcriptTap`, `voicePill`, `syncRequest`,
+   * `liveSync`, `heartbeatAck`, `motionReport`, `layoutError`, `motionAck`,
+   * `layoutFailed` and `intent` served a two-window take (#212 ended it). No
+   * webview code sends or listens for any of them; they stay declared only
+   * because Rust still names them and `stage_event_names_match_ts_contract`
+   * holds the two lists equal. The Rust half (#491) removes them from both.
+   */
+  /** Retired (see above): control → stage liveness heartbeat. */
   heartbeat: 'stage://heartbeat',
   /**
    * Rust → stage: one `AlignmentSnapshot` per transcript event (~1/s).
@@ -75,34 +82,10 @@ export const STAGE_EVENT = {
    */
   viewportHint: 'stage://viewport-hint',
 
-  /**
-   * Legacy direct route, still subscribed by the standalone stage. A take hands
-   * its transcript to the embedded stage through the bridge prop.
-   */
+  /** Retired (see above): the transcript bar's old direct route. */
   transcriptTap: 'stage://transcript-tap',
 
-  /**
-   * control → stage: the voice pill — "we are picking up what you say".
-   *
-   * There used to be a full-screen microphone check here, standing between the
-   * stage going full screen and the transport opening. It was the wrong
-   * instrument: a gate that judged a microphone from two seconds of silence and
-   * refused to open the take until it approved of what it heard, which meant it
-   * accused a working rig of being deaf before the presenter had drawn breath.
-   *
-   * The take now starts immediately and this reports on it from the corner of
-   * the stage instead: a live waveform while it is listening, a tick once real
-   * recogniser text has come back, a cross if audio or transcription stops.
-   * Evidence rather than a gate — it can be ignored, and nothing it says
-   * prevents a take from running.
-   *
-   * Control owns the capture (one microphone, one owner — see
-   * audio/ownership.ts) and hands the stage a fully resolved view; the stage
-   * holds no audio state and no thresholds. In a take the view travels through
-   * the bridge prop. The standalone stage still accepts it through Rust's
-   * apply-command relay, and this direct event remains subscribed for
-   * compatibility with an older control window during development reloads.
-   */
+  /** Retired (see above): the voice pill's old direct route. */
   voicePill: 'stage://voice-pill',
 
   /**
@@ -118,15 +101,15 @@ export const STAGE_EVENT = {
    * `tauri dev`.
    */
   listening: 'stage://listening',
-  /** stage → Rust: ask for the newest recoverable live checkpoint. */
+  /** Retired (see above): ask Rust for the newest live checkpoint. */
   syncRequest: 'stage://sync-request',
-  /** Rust → stage: newest alignment and presenter diagnostics. */
+  /** Retired (see above): Rust's answer to `syncRequest`. */
   liveSync: 'stage://live-sync',
   /** stage → Rust: envelope received and applied (handshake step 1). */
   hydrated: 'stage://hydrated',
   /** stage → Rust: fonts + first stable layout done (handshake step 2). */
   layoutReady: 'stage://layout-ready',
-  /** stage → Rust: heartbeat acknowledgement. */
+  /** Retired (see above): heartbeat acknowledgement. */
   heartbeatAck: 'stage://heartbeat-ack',
   /** stage → Rust: nonfatal media failure (§40.5 containment). */
   mediaError: 'stage://media-error',
@@ -157,31 +140,15 @@ export const STAGE_EVENT = {
    * (§16.9).
    */
   escapeRequested: 'stage://escape-requested',
-  /** stage → Rust: periodic `StageMotionAck` (companion §54). Relayed as below. */
+  /** Retired (see above): periodic `StageMotionAck` (companion §54). */
   motionReport: 'stage://motion-report',
-  /**
-   * stage → Rust: a §62 stage-layout failure (line measurement unusable after
-   * the bounded rebuild), or its recovery. Relayed as below.
-   */
+  /** Retired (see above): a §62 stage-layout failure, relayed as below. */
   layoutError: 'stage://layout-error',
-  /**
-   * Rust → control: a generation-checked §62 stage-layout failure/recovery.
-   *
-   * This has its own event rather than riding `stage://error`, which carries
-   * the window layer's own errors: those are two unrelated failures with
-   * different recovery, and control was left sniffing payload substrings to
-   * tell them apart. A layout failure means motion is HELD — the
-   * operator has to see it and can act on it (§62 "expose a recoverable
-   * stage-layout error in control").
-   */
+  /** Retired (see above): Rust's relay of `layoutError`; control never listened. */
   layoutFailed: 'stage://layout-failed',
-  /**
-   * Rust → control: a generation-checked periodic `StageMotionAck`
-   * (companion §54). Diagnostics and recovery only — deliberately NOT a
-   * high-frequency feedback loop into the semantic aligner.
-   */
+  /** Retired (see above): Rust's relay of `motionReport`; control never listened. */
   motionAck: 'stage://motion-ack',
-  /** stage → control: other keyboard/pointer intents — control decides. */
+  /** Retired (see above): stage intents. A take's go through the embedded bridge. */
   intent: 'stage://intent',
 } as const;
 
@@ -404,73 +371,23 @@ export interface StageStatePayload {
   directive: StageDirective;
 }
 
-export interface StageLiveSyncPayload {
-  stageGeneration: number;
-  revision: number;
-  alignment: AlignmentSnapshot | null;
-  transcript: StageStatePayload | null;
-  voicePill: StageStatePayload | null;
-}
-
-export interface StageSyncRequestPayload {
-  stageGeneration: number;
-  lastRevision: number;
-}
-
 /** `stage://close-session` — emitted just before the window is destroyed. */
 export interface StageCloseSessionPayload {
   sessionId: Uuid;
 }
 
-/** `stage://heartbeat` — periodic liveness signal (spec §43.5); see above. */
-export interface StageHeartbeatPayload {
-  stageGeneration: number;
-  revision: number;
-  sentAtMs: number;
-}
-
 /**
- * `stage://transcript-tap` — the words the recogniser is returning, shown raw
- * along the bottom of the stage.
+ * How many words of the recogniser's text the transcript bar draws.
  *
- * This is a diagnostic the presenter can read at a glance, and it exists
- * because its absence cost days. "It followed for a bit then stopped" and "the
- * microphone was never captured" and "the transcript is fine but the aligner
- * is not" are three completely different faults that look identical from the
- * stage — a script that has stopped moving. One of them was another
- * application holding the microphone, which Speaking Glass cannot prevent and had
- * no way to report.
- *
- * Deliberately the RAW recogniser text rather than anything the aligner has
- * decided: this is the reading upstream of every judgement the app makes, so
- * it stays truthful when the judgements are wrong.
- */
-/**
- * How many words the tap carries, and therefore how many the stage draws.
- *
- * ONE number, shared by the payload and the renderer's crop
- * (`transcript-tail.ts`). The stage has to crop on the way in, because a take
- * hands it text through the bridge prop rather than through this payload; two
- * constants for one policy would mean the wire carrying words nothing will ever
- * draw, and a change to either one silently doing nothing.
+ * ONE number, read by the renderer's crop (`transcript-tail.ts`) and by
+ * whatever trims the text before handing it over. The stage crops on the way
+ * in, because a take hands it text through the bridge prop, untrimmed.
  *
  * Ten is about a spoken phrase: enough that a presenter recognises what they
  * just said rather than reading a fragment, few enough to take in at a glance
  * from prompting distance, which is the only way this is ever read.
  */
 export const STAGE_TRANSCRIPT_TAP_WORDS = 10;
-
-export interface StageTranscriptTapPayload {
-  stageGeneration: number;
-  /**
-   * The most recent words heard, oldest first, already trimmed for display —
-   * at most {@link STAGE_TRANSCRIPT_TAP_WORDS} of them.
-   */
-  text: string;
-  /** True when the recogniser finalised the utterance this text came from. */
-  final: boolean;
-  sentAtMs: number;
-}
 
 /**
  * What the voice pill is currently reporting.
@@ -609,27 +526,6 @@ export const STAGE_VOICE_PILL_TRACE_SAMPLES = 20;
  */
 export const ESCAPE_DOUBLE_PRESS_MS = 1500;
 
-/**
- * If no HEARTBEAT arrives for this long once the handshake is over, the
- * standalone stage freezes locally and says so on the glass (control is
- * presumed gone; it owns recovery). Only an envelope carrying a session
- * generation, or a beat for the current stage generation, arms it, and no
- * shipped path does either today: the Settings preview omits the session
- * generation, Calibrate sends no envelope, and a take's embedded stage bypasses
- * both handlers.
- *
- * Heartbeats only, and generation-scoped. This used to read "heartbeat/snapshot
- * /tracking", and the stage implemented exactly that — which made the watchdog
- * unable to fire in the one situation it exists for. Alignment snapshots come
- * from RUST, with control out of the motion path by design, so they say nothing
- * whatever about whether the control window is still answering: a control window
- * that had crashed went on being counted as alive for as long as the aligner
- * kept publishing, which mid-take was indefinitely. The heartbeat is the only
- * inbound event control alone can produce, so it is the only one that can
- * answer the question. Do not widen this back.
- */
-export const STAGE_HEARTBEAT_GRACE_MS = 5000;
-
 /* ---------------------------------------------------------------------------
  * Outbound payloads (stage → Rust/control; requires emit permission)
  * ------------------------------------------------------------------------- */
@@ -663,25 +559,6 @@ export interface StageReadyPayload {
   viewportHeight: number;
   devicePixelRatio: number;
 }
-
-/** `stage://heartbeat-ack` — response to `stage://heartbeat`. */
-export interface StageHeartbeatAckPayload {
-  stageGeneration: number;
-  revision: number;
-  /** Field name mirrored by the Rust bridge (app.rs reads `trackingRevision`). */
-  trackingRevision: number | null;
-  mediaHealthy: boolean;
-  respondedAtMs: number;
-}
-
-/**
- * `stage://motion-report` (stage → Rust), relayed to control as
- * `stage://motion-ack` — periodic motion report (companion §54). Carries the
- * stage's current layout generation, which is how control learns that the stage
- * rebuilt its line map and that older frames are being rejected (companion
- * §33).
- */
-export type StageMotionAckPayload = StageMotionAck & { stageGeneration: number };
 
 /**
  * `stage://escape-pressed` (stage → Rust), relayed to control as
@@ -800,33 +677,6 @@ export type StageIntent =
    * move withdraws the offer on the stage itself before it can be pressed.
    */
   | { kind: 'read_from'; token: number; sessionGeneration: number; seq: number; atMs: number };
-
-export interface StageIntentPayload {
-  stageGeneration: number;
-  intent: StageIntent;
-  atMs: number;
-}
-
-/**
- * `stage://layout-error` (stage → Rust), relayed to control as
- * `stage://layout-failed` — §62.
- *
- * The stage measures its rendered layout into a line map, validates monotonic
- * token/baseline ordering, and rebuilds once if that fails. If the rebuild is
- * unusable too, motion is HELD (the stage will not move on guessed line
- * positions) and this is the only way the operator finds out.
- *
- * `issues` is the list of fatal line-map issue codes. An EMPTY list is the
- * recovery signal: a later rebuild succeeded and the held state is over.
- */
-export interface StageLayoutErrorPayload {
-  stageGeneration: number;
-  /** Fatal `RenderedLineMap` issue codes; empty means "recovered". */
-  issues: string[];
-  /** Layout generation the stage was measuring at when it gave up. */
-  layoutGeneration: number;
-  atMs: number;
-}
 
 /* ---------------------------------------------------------------------------
  * Rust → control payloads

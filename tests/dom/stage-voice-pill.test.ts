@@ -1,5 +1,5 @@
 /**
- * The voice pill on the REAL stage, driven through the real event bridge.
+ * The voice pill on the REAL stage, driven through the take's bridge prop.
  *
  * ---------------------------------------------------------------------------
  * THE DEFECT THIS FILE EXISTS FOR
@@ -14,22 +14,23 @@
  * Every unit test passed: the reducer was right, the payloads were right, the
  * component rendered fine in isolation. The bug lived in one boolean in a
  * template, which is why this file mounts the actual `StageApp` and drives it
- * with the events control and Rust actually send.
+ * the way a take does: embedded in the control window, with the pill arriving
+ * as the `voicePill` prop Live feeds from `SessionState.voicePill`. Nothing
+ * sends the pill to the separate stage window any more (#212, #235).
  */
 import { render } from '@testing-library/svelte';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import StageApp from '../../src/stage/StageApp.svelte';
-import { dispatchLocalStageEvent } from '../../src/stage/events';
-import { STAGE_EVENT, STAGE_VOICE_PILL_TRACE_SAMPLES } from '../../src/shared/contracts';
+import { STAGE_VOICE_PILL_TRACE_SAMPLES } from '../../src/shared/contracts';
 import type {
   StageRenderDocument,
   StageSessionEnvelope,
-  StageStatePayload,
   StageVoicePillPayload,
 } from '../../src/shared/contracts';
 import { buildStageSettings } from '../../src/control/services/stage-envelope';
 
-const STAGE_GENERATION = 4;
+/** A take renders the stage inside the control window, at stage generation 0. */
+const STAGE_GENERATION = 0;
 
 beforeAll(() => {
   (globalThis as { ResizeObserver: unknown }).ResizeObserver = class {
@@ -121,12 +122,27 @@ function pill(container: Element): HTMLElement | null {
   return el instanceof HTMLElement ? el : null;
 }
 
-async function mountStage(): Promise<{ container: HTMLElement }> {
-  const { container } = render(StageApp);
+function bridge(voicePill: StageVoicePillPayload | null, blanked = false) {
+  return {
+    embedded: {
+      envelope: ENVELOPE,
+      alignment: null,
+      transcript: '',
+      voicePill,
+      blanked,
+      onexit: vi.fn(),
+      onintent: vi.fn(),
+    },
+  };
+}
+
+/** One envelope for the whole mount: a new object would read as a new document. */
+const ENVELOPE = envelope();
+
+async function mountStage(voicePill: StageVoicePillPayload | null = null) {
+  const mounted = render(StageApp, { props: bridge(voicePill) as never });
   await settle();
-  dispatchLocalStageEvent(STAGE_EVENT.loadSession, envelope());
-  await settle();
-  return { container };
+  return mounted;
 }
 
 beforeEach(() => {
@@ -140,15 +156,15 @@ afterEach(() => {
 describe('the voice pill on the stage', () => {
   it('draws without a single alignment snapshot ever arriving', async () => {
     /*
-     * The regression check. No `stage://alignment-snapshot` is sent here, so
-     * the stage never reaches `live` — which is precisely the state a take has
+     * The regression check. No alignment snapshot is handed over here, so the
+     * stage never reaches `live` — which is precisely the state a take has
      * while transcription is producing nothing, and precisely when the
      * presenter needs to be told.
      */
-    const { container } = await mountStage();
+    const { container, rerender } = await mountStage();
     expect(pill(container), 'nothing to draw until control says something').toBeNull();
 
-    dispatchLocalStageEvent(STAGE_EVENT.voicePill, pillPayload());
+    await rerender(bridge(pillPayload()));
     await settle();
 
     const drawn = pill(container);
@@ -158,27 +174,20 @@ describe('the voice pill on the stage', () => {
     expect(container.querySelectorAll('.bar')).toHaveLength(STAGE_VOICE_PILL_TRACE_SAMPLES);
   });
 
-  it('draws the pill delivered through Rust’s apply-command relay', async () => {
-    const { container } = await mountStage();
-    const payload = pillPayload();
-    dispatchLocalStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, {
-      stageGeneration: STAGE_GENERATION,
-      directive: { kind: 'voicePill', pill: payload },
-    });
-    await settle();
-
-    expect(pill(container)?.getAttribute('aria-label')).toBe('Listening');
-  });
-
   it('shows a fault, in words, on a stage that has never gone live', async () => {
-    const { container } = await mountStage();
-    dispatchLocalStageEvent(
-      STAGE_EVENT.voicePill,
-      pillPayload({ reading: 'fault', label: 'No audio' }),
-    );
-    await settle();
+    const { container } = await mountStage(pillPayload({ reading: 'fault', label: 'No audio' }));
     expect(pill(container)?.dataset.reading).toBe('fault');
     expect(container.querySelector('.voice-pill .label')?.textContent).toBe('No audio');
+  });
+
+  it('follows the prop from one reading to the next', async () => {
+    const { container, rerender } = await mountStage(pillPayload());
+    expect(pill(container)?.getAttribute('aria-label')).toBe('Listening');
+
+    await rerender(bridge(pillPayload({ reading: 'fault', label: 'Not hearing you' })));
+    await settle();
+    expect(pill(container)?.dataset.reading).toBe('fault');
+    expect(container.querySelector('.voice-pill .label')?.textContent).toBe('Not hearing you');
   });
 
   it('fades rather than unmounts when control clears `visible`', async () => {
@@ -189,107 +198,32 @@ describe('the voice pill on the stage', () => {
      * about the renderer either way — the flag fades the pill, it never
      * unmounts it.
      */
-    const { container } = await mountStage();
-    dispatchLocalStageEvent(STAGE_EVENT.voicePill, pillPayload({ reading: 'confirmed' }));
-    await settle();
-    expect(pill(container)?.dataset.visible).toBe('true');
+    const { container, rerender } = await mountStage(pillPayload({ reading: 'confirmed' }));
+    const before = pill(container);
+    expect(before?.dataset.visible).toBe('true');
 
-    dispatchLocalStageEvent(
-      STAGE_EVENT.voicePill,
-      pillPayload({ reading: 'confirmed', visible: false }),
-    );
+    await rerender(bridge(pillPayload({ reading: 'confirmed', visible: false })));
     await settle();
-    // Still mounted: a pill that was removed would pop back at full opacity in
-    // the corner of a script somebody is reading.
-    expect(pill(container), 'the pill fades, it is not removed').not.toBeNull();
+    // Still mounted, and the SAME node: a pill that was removed or remounted
+    // would pop back at full opacity in the corner of a script somebody is
+    // reading.
+    expect(pill(container), 'the pill fades, it is not removed').toBe(before);
     expect(pill(container)?.dataset.visible).toBe('false');
-  });
-
-  it('ignores a payload that arrives before this stage knows which take it is', async () => {
-    /*
-     * The window between a stage subscribing and its envelope arriving is
-     * exactly when the PREVIOUS generation's last payloads are still in
-     * flight. Treating "generation unknown" as "accept" — which is what every
-     * other directive does — left the outgoing take's cross sitting on the new
-     * stage the moment its envelope loaded.
-     */
-    const { container } = render(StageApp);
-    await settle();
-    dispatchLocalStageEvent(
-      STAGE_EVENT.voicePill,
-      pillPayload({ stageGeneration: STAGE_GENERATION - 1, reading: 'fault', label: 'No audio' }),
-    );
-    await settle();
-    dispatchLocalStageEvent(STAGE_EVENT.loadSession, envelope());
-    await settle();
-    expect(pill(container), 'the dead take must not be drawn on the new one').toBeNull();
-  });
-
-  it('ignores a payload from a superseded stage generation', async () => {
-    const { container } = await mountStage();
-    dispatchLocalStageEvent(
-      STAGE_EVENT.voicePill,
-      pillPayload({ stageGeneration: STAGE_GENERATION - 1, reading: 'fault', label: 'No audio' }),
-    );
-    await settle();
-    expect(pill(container), 'a dead take must not put a cross on a live one').toBeNull();
   });
 
   it('disappears while the stage is blanked', async () => {
     // §16.6 is a deliberate "show nothing"; it is not a moment to report on
     // the microphone.
-    const { container } = await mountStage();
-    dispatchLocalStageEvent(STAGE_EVENT.voicePill, pillPayload());
-    await settle();
+    const { container, rerender } = await mountStage(pillPayload());
     expect(pill(container)).not.toBeNull();
 
-    dispatchLocalStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, {
-      stageGeneration: STAGE_GENERATION,
-      revision: 1,
-      directive: { kind: 'blank', blanked: true },
-      sentAtMs: 2000,
-    } as unknown as StageStatePayload);
+    await rerender(bridge(pillPayload(), true));
     await settle();
     expect(pill(container)).toBeNull();
-  });
-});
 
-/*
- * The production road. A take renders the stage inside the control window at
- * stage generation 0, and the pill arrives as the `voicePill` prop Live feeds
- * from `SessionState.voicePill` — not as an event from another window.
- */
-describe('the voice pill on the embedded stage', () => {
-  function embedded(voicePill: StageVoicePillPayload | null, env: StageSessionEnvelope) {
-    return {
-      embedded: {
-        envelope: env,
-        alignment: null,
-        transcript: '',
-        voicePill,
-        onexit: vi.fn(),
-        onintent: vi.fn(),
-      },
-    };
-  }
-
-  it('draws from the prop before any alignment snapshot, and follows it', async () => {
-    const env = { ...envelope(), stageGeneration: 0 };
-    const { container, rerender } = render(StageApp, {
-      props: embedded(pillPayload({ stageGeneration: 0 }), env) as never,
-    });
+    // And it comes back when the glass does.
+    await rerender(bridge(pillPayload(), false));
     await settle();
-
-    const drawn = pill(container);
-    expect(drawn, 'the pill must not wait for transcription to succeed').not.toBeNull();
-    expect(drawn?.getAttribute('aria-label')).toBe('Listening');
-    expect(drawn?.dataset.visible).toBe('true');
-
-    await rerender(
-      embedded(pillPayload({ stageGeneration: 0, reading: 'fault', label: 'No audio' }), env),
-    );
-    await settle();
-    expect(pill(container)?.dataset.reading).toBe('fault');
-    expect(container.querySelector('.voice-pill .label')?.textContent).toBe('No audio');
+    expect(pill(container)).not.toBeNull();
   });
 });

@@ -313,10 +313,18 @@ describe('the menu holds whatever this window can actually offer', () => {
   });
 
   it('offers no Follow voice to a take that does not listen (#243)', async () => {
-    const { container } = mount({ onfollowtoggle: undefined });
+    const { container } = mount({ onfollowtoggle: undefined, appearancePanel: PANEL });
     await openMenu(container);
+    expect(menuRow(container, 'appearance')).not.toBeNull();
     expect(menuRow(container, 'follow')).toBeNull();
     expect(container.textContent).not.toContain('Follow voice');
+  });
+
+  it('draws no menu trigger when it has nothing to offer (a Settings preview)', () => {
+    const { container } = mount({ onfollowtoggle: undefined });
+    expect(container.querySelector('.menu-trigger')).toBeNull();
+    // The way out is still there.
+    expect(container.querySelector('.dock-button.end')).not.toBeNull();
   });
 
   it('replaces itself with the level the panel row opens', async () => {

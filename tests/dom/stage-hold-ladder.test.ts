@@ -207,6 +207,58 @@ describe('a hold that outlasts the ladder', () => {
   }, 12_000);
 });
 
+/*
+ * The fault arrives as the voice pill, and the pill reaches the stage only
+ * through a take's bridge prop: the stage is embedded in the control window at
+ * stage generation 0, and nothing sends the pill to the separate window.
+ */
+const FAULT_PILL: StageVoicePillPayload = {
+  stageGeneration: 0,
+  reading: 'fault',
+  levels: [0, 0, 0],
+  label: 'No audio from the microphone',
+  visible: true,
+  sentAtMs: 1000,
+};
+const EMBEDDED_ENVELOPE = { ...envelope(), stageGeneration: 0 };
+
+function bridge(alignment: AlignmentSnapshot | null, voicePill: StageVoicePillPayload | null) {
+  return {
+    embedded: {
+      envelope: EMBEDDED_ENVELOPE,
+      alignment,
+      transcript: '',
+      voicePill,
+      onexit: () => {},
+      onintent: () => {},
+    },
+  };
+}
+
+/**
+ * A take that is live and holding, with no fault yet: the ladder's own timer
+ * is running, and a hold this young has earned nothing on the glass.
+ */
+async function mountHoldingTake() {
+  const { container, rerender } = render(StageApp, { props: bridge(null, null) as never });
+  await settle();
+  // The reducer refuses alignment while the phase is still `handshake`.
+  await wait(420);
+  await settle();
+  const holding = snapshot('holding');
+  await rerender(bridge(holding, null) as never);
+  await settle();
+  expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).toBe('live');
+  expect(chip(container)?.getAttribute('data-visible')).not.toBe('true');
+  return {
+    container,
+    fault: async () => {
+      await rerender(bridge(holding, FAULT_PILL) as never);
+      await settle();
+    },
+  };
+}
+
 describe('a named fault', () => {
   it('skips the ladder entirely and says so at once', async () => {
     /*
@@ -215,16 +267,9 @@ describe('a named fault', () => {
      * spent waiting to mention it is a second of a take recorded against a rig
      * that is not listening.
      */
-    const container = await mountLiveStage();
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'fault',
-      levels: [0, 0, 0],
-      label: 'No audio from the microphone',
-      visible: true,
-      sentAtMs: 1000,
-    });
-    await settle();
+    const { container, fault } = await mountHoldingTake();
+    // No wait: an ordinary hold needs 3.5 s to earn words.
+    await fault();
 
     expect(chip(container)?.getAttribute('data-visible')).toBe('true');
     // The condition, drawn as its own line above the recovery hint.
@@ -239,16 +284,8 @@ describe('a named fault', () => {
      * camera correctly informed and with nothing to do about it. The transport
      * is the thing to do, and it is one key.
      */
-    const container = await mountLiveStage();
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'fault',
-      levels: [0, 0, 0],
-      label: 'No audio from the microphone',
-      visible: true,
-      sentAtMs: 1000,
-    });
-    await settle();
+    const { container, fault } = await mountHoldingTake();
+    await fault();
 
     expect(chip(container)?.querySelector('.hint .sr-only')?.textContent?.trim()).toBe(
       HOLD_FAULT_HINT.spoken,
@@ -258,21 +295,12 @@ describe('a named fault', () => {
   it('is reported on a stage that has never received a single snapshot', async () => {
     // The take that transcribes nothing never leaves `ready`, which is exactly
     // the take whose presenter most needs to be told why.
-    const { container } = render(StageApp);
-    await settle();
-    dispatchLocalStageEvent(STAGE_EVENT.loadSession, envelope());
-    await settle();
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'fault',
-      levels: [],
-      label: 'No audio from the microphone',
-      visible: true,
-      sentAtMs: 1000,
-    });
+    const { container } = render(StageApp, { props: bridge(null, FAULT_PILL) as never });
     await settle();
 
     expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).not.toBe('live');
     expect(chip(container)?.getAttribute('data-visible')).toBe('true');
+    expect(chip(container)?.firstChild?.textContent?.trim()).toBe('No audio from the microphone');
+    expect(chip(container)?.getAttribute('data-tone')).toBe('fault');
   });
 });

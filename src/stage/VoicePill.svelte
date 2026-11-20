@@ -311,9 +311,9 @@
    * the 126px of permanent dead space this replaced.
    *
    * The cost is honest and bounded: when a fault does arrive the pill grows by
-   * the width of one short word and the buttons beside it shift once. All four
-   * labels are short (`No audio`, `Voice off`, `Not hearing you`,
-   * `Control lost`) and a fault is rare, so the row settles immediately and
+   * the width of one short word and the buttons beside it shift once. All the
+   * labels are short (`No audio`, `Voice off`, `Not hearing you`) and a fault
+   * is rare, so the row settles immediately and
    * stays put. `white-space: nowrap` keeps the name on one line; there is no
    * ellipsis because nothing truncates when the pill sizes to its content.
    */

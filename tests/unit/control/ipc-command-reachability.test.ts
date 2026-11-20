@@ -267,4 +267,20 @@ describe('the stage motion feed has a real producer', () => {
     );
     expect(producers.length, 'no stage-side producer for stage://viewport-hint').toBeGreaterThan(0);
   });
+
+  /*
+   * And the Rust end of it. The hint is an event, so nothing fails when its
+   * listener goes: the engine simply ranks without a viewport and the
+   * off-glass leash goes slack. The listener sits among the stage-window
+   * relays that #491 retires, so it is pinned here: registered for the event,
+   * parsed as a `ViewportHint`, and handed to `apply_viewport_hint`.
+   */
+  it('has a Rust listener that applies the viewport prior to the alignment session', () => {
+    const appRs = readFileSync(APP_RS, 'utf8');
+    const at = appRs.indexOf('listen_any(events::STAGE_VIEWPORT_HINT');
+    expect(at, 'src-tauri/src/app.rs no longer listens for stage://viewport-hint').toBeGreaterThan(-1);
+    const body = appRs.slice(at, appRs.indexOf('});', at));
+    expect(body).toContain('crate::align::ViewportHint');
+    expect(body).toContain('crate::align::apply_viewport_hint(');
+  });
 });

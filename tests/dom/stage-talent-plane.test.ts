@@ -16,7 +16,9 @@
  * Every one of those components had passing unit tests. The defect was which
  * DIV they were nested in, which is only visible from the mounted stage, which
  * is why this file drives `StageApp` through the real event protocol rather
- * than rendering the leaves.
+ * than rendering the leaves. The pill and the transcript belong to a take, and
+ * a take reaches the stage through the embedded bridge prop, so the cases about
+ * them mount it that way (`mountTake`).
  */
 import { render } from '@testing-library/svelte';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -182,6 +184,57 @@ async function settleLayout(): Promise<void> {
   await settle();
 }
 
+type TakeBridge = {
+  alignment?: AlignmentSnapshot | null;
+  transcript?: string;
+  voicePill?: StageVoicePillPayload | null;
+  followPaused?: boolean;
+};
+
+/**
+ * A take's stage: embedded in the control window at stage generation 0, with
+ * its transcript, voice pill and follow switch handed over as props — the only
+ * road they have to the stage since the separate window stopped carrying takes.
+ *
+ * The envelope is built once per mount and reused by every update, because a
+ * new envelope object is how the bridge says "a new document".
+ */
+async function mountTake(stageMode: StageMode, initial: TakeBridge = {}) {
+  const env = { ...envelope(stageMode), stageGeneration: 0 };
+  const props = (state: TakeBridge) => ({
+    embedded: {
+      envelope: env,
+      alignment: state.alignment ?? null,
+      transcript: state.transcript ?? '',
+      voicePill: state.voicePill ?? null,
+      followPaused: state.followPaused ?? false,
+      onexit: () => {},
+      onintent: () => {},
+    },
+  });
+  const { container, rerender } = render(StageApp, { props: props(initial) as never });
+  await settle();
+  return {
+    container,
+    async update(next: TakeBridge) {
+      await rerender(props(next) as never);
+      await settle();
+    },
+  };
+}
+
+function pillPayload(overrides: Partial<StageVoicePillPayload> = {}): StageVoicePillPayload {
+  return {
+    stageGeneration: 0,
+    reading: 'listening',
+    levels: [0.2, 0.6],
+    label: 'Listening',
+    visible: true,
+    sentAtMs: 1000,
+    ...overrides,
+  };
+}
+
 async function mountStage(
   stageMode: StageMode = 'clean',
   optics?: ResolvedOptics,
@@ -266,10 +319,9 @@ describe('everything the presenter reads through the glass', () => {
 
 describe('the operator plane', () => {
   it('holds the diagnostics, unmirrored, and nothing the presenter needs', async () => {
-    const container = await mountStage('diagnostic');
+    const { container, update } = await mountTake('diagnostic');
     await settleLayout();
-    dispatchLocalStageEvent(STAGE_EVENT.alignmentSnapshot, snapshot());
-    await settle();
+    await update({ alignment: snapshot() });
 
     expect(planeOf(container, '.diagnostics'), 'the diagnostics readout').toBe('operator');
     expect(planeOf(container, '.transcript-tap'), 'the transcript bar').toBe('operator');
@@ -294,15 +346,7 @@ describe('the operator plane', () => {
      */
     expect(planeOf(container, '.stage-dock'), 'the session dock').toBe('operator');
 
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'listening',
-      levels: [0.2, 0.6],
-      label: 'Listening',
-      visible: true,
-      sentAtMs: 1000,
-    });
-    await settle();
+    await update({ alignment: snapshot(), voicePill: pillPayload() });
     expect(planeOf(container, '.voice-pill'), 'the audio readout').toBe('operator');
 
     // And nothing the presenter has to READ leaked into it.
@@ -383,29 +427,21 @@ describe('Clean Take against Diagnostic Take', () => {
      * The claim is not "it is hidden". It is "it is hidden AND nothing was
      * lost", so this asserts the replacement as well.
      */
-    const container = await mountStage('clean');
+    const { container, update } = await mountTake('clean');
     await settleLayout();
 
-    dispatchLocalStageEvent(STAGE_EVENT.transcriptTap, {
-      stageGeneration: STAGE_GENERATION,
-      text: 'hello there',
-      final: false,
-      sentAtMs: 1000,
-    });
-    await settle();
+    // Live, and hearing words: the state in which Diagnostic Take draws both.
+    await update({ alignment: snapshot(), transcript: 'hello there' });
+    expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).toBe('live');
     expect(container.querySelector('.transcript-tap')).toBeNull();
     expect(container.querySelector('.diagnostics')).toBeNull();
 
     // The replacement: a named fault, in the mirrored chip the presenter reads.
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'fault',
-      levels: [0.2, 0.6],
-      label: 'No audio',
-      visible: true,
-      sentAtMs: 1000,
+    await update({
+      alignment: snapshot(),
+      transcript: 'hello there',
+      voicePill: pillPayload({ reading: 'fault', label: 'No audio' }),
     });
-    await settle();
 
     const chip = container.querySelector('.hold-status');
     expect(chip?.getAttribute('data-visible'), 'the fault must reach the glass').toBe('true');
@@ -420,25 +456,23 @@ describe('Clean Take against Diagnostic Take', () => {
      * recogniser behind it both hold the script still, and neither clears by
      * itself — so both are named in the mirrored chip, in Clean Take.
      */
-    const container = await mountStage('clean');
+    const { container, update } = await mountTake('clean');
     await settleLayout();
 
-    directive({ kind: 'follow', paused: true });
-    await settle();
+    await update({ alignment: snapshot(), followPaused: true });
     const chip = container.querySelector('.hold-status');
     expect(chip?.getAttribute('data-visible'), 'a paused take must say so').toBe('true');
     expect(chip?.textContent).toContain('Following off');
 
-    directive({ kind: 'follow', paused: false });
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'fault',
-      levels: [0, 0],
-      label: 'Not connected',
-      visible: true,
-      sentAtMs: 1000,
+    // Following back on takes the notice back with it.
+    await update({ alignment: snapshot(), followPaused: false });
+    expect(container.querySelector('.hold-status')?.getAttribute('data-visible')).not.toBe('true');
+
+    await update({
+      alignment: snapshot(),
+      followPaused: false,
+      voicePill: pillPayload({ reading: 'fault', levels: [0, 0], label: 'Not connected' }),
     });
-    await settle();
     expect(container.querySelector('.hold-status')?.textContent).toContain('Not connected');
     expect(planeOf(container, '.hold-status')).toBe('talent');
 
@@ -458,17 +492,10 @@ describe('Clean Take against Diagnostic Take', () => {
      * `transcript-tail.ts` owns the rule and is unit-tested; this is the seam
      * that says the stage actually applies it, which no unit test can see.
      */
-    const container = await mountStage('diagnostic');
-    await settleLayout();
-
     const spoken = Array.from({ length: 26 }, (_, i) => `word${i + 1}`);
-    dispatchLocalStageEvent(STAGE_EVENT.transcriptTap, {
-      stageGeneration: STAGE_GENERATION,
-      text: spoken.join(' '),
-      final: false,
-      sentAtMs: 1000,
-    });
-    await settle();
+    const { container, update } = await mountTake('diagnostic');
+    await settleLayout();
+    await update({ alignment: snapshot(), transcript: spoken.join(' ') });
 
     const shown = (container.querySelector('.transcript-tap')?.textContent ?? '').trim();
     expect(shown.split(/\s+/)).toHaveLength(10);
@@ -500,20 +527,11 @@ describe('Clean Take against Diagnostic Take', () => {
      * A `confirmed` pill is the settled, everything-is-fine case. The bars have
      * to be there anyway.
      */
-    const pill: StageVoicePillPayload = {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'confirmed',
-      levels: [0.3, 0.7],
-      label: 'Hearing you',
-      visible: true,
-      sentAtMs: 1000,
-    };
+    const pill = pillPayload({ reading: 'confirmed', levels: [0.3, 0.7], label: 'Hearing you' });
 
     for (const mode of ['clean', 'diagnostic'] as const) {
       document.body.innerHTML = '';
-      const container = await mountStage(mode);
-      dispatchLocalStageEvent(STAGE_EVENT.voicePill, pill);
-      await settle();
+      const { container } = await mountTake(mode, { voicePill: pill });
       const wave = container.querySelector('.voice-pill .wave');
       expect(wave, `${mode} take must draw the trace`).not.toBeNull();
       expect(

@@ -433,24 +433,11 @@ export async function startFixtureReplay(url: string): Promise<FollowReplayHandl
       }, Math.max(0, event.atMs)),
     );
   }
-  // The stage's own liveness check; without it the watchdog would call control
-  // lost partway through a twenty-second replay and freeze the document.
-  let beat = 0;
-  const heartbeat = window.setInterval(() => {
-    beat += 1;
-    dispatchLocalStageEvent(STAGE_EVENT.heartbeat, {
-      stageGeneration: STAGE_GEN,
-      revision: beat,
-      sentAtMs: Date.now(),
-    });
-  }, 1000);
-
   const handle: FollowReplayHandle = {
     fixture,
     startedAtMs,
     stop() {
       timers.forEach((t) => clearTimeout(t));
-      clearInterval(heartbeat);
       delete (window as unknown as Record<string, unknown>)[FOLLOW_REPLAY_KEY];
     },
   };
@@ -483,7 +470,6 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
   /** Where the calibration cycle currently is: `null` is off, otherwise the mode. */
   let calibrationMode: StageCalibrationMode | null = null;
   let revision = 0;
-  let heartbeatRevision = 0;
   let tokenIndex = 0;
 
   const envelope: StageSessionEnvelope = {
@@ -564,14 +550,6 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
   let audioMs = 0;
 
   const trackingTimer = window.setInterval(trackingTick, 1000);
-  const heartbeatTimer = window.setInterval(() => {
-    heartbeatRevision += 1;
-    dispatchLocalStageEvent(STAGE_EVENT.heartbeat, {
-      stageGeneration: STAGE_GEN,
-      revision: heartbeatRevision,
-      sentAtMs: Date.now(),
-    });
-  }, 1000);
 
   const directive = (d: StageDirective) =>
     dispatchLocalStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, {
@@ -582,7 +560,6 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
   const driver: PreviewDriver = {
     stop() {
       clearInterval(trackingTimer);
-      clearInterval(heartbeatTimer);
       delete (window as unknown as Record<string, unknown>)[PREVIEW_DRIVER_KEY];
     },
     toggleBlank() {

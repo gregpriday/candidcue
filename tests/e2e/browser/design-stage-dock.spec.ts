@@ -494,12 +494,17 @@ test.describe('reading window, paper, 1280x800', () => {
 });
 
 test.describe('standalone stage window, 1024x600', () => {
-  test('s01 menu open', async ({ page }) => {
+  test('s01 the dock, with no take menu to offer', async ({ page }) => {
+    // The standalone window carries no take: no follow switch, no appearance
+    // panel, no presentation toggle. So the dock is the readout and the way
+    // out, and no cog that would open an empty menu.
     await page.setViewportSize(PROMPTER);
     await page.goto('/stage.html?preview=1');
     await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'live');
-    await openMenuWithMouse(page);
-    await shot(page, 's01-standalone-menu');
+    await page.locator('.stage-root').hover();
+    await expect(page.locator('.stage-dock .menu-trigger')).toHaveCount(0);
+    await expect(page.locator('.stage-dock .dock-button.end')).toBeVisible();
+    await shot(page, 's01-standalone-dock');
   });
 
   test('s02 a blank still answers the pointer', async ({ page }) => {

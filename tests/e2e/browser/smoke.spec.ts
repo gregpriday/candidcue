@@ -35,3 +35,10 @@ test('[mock-backed] stage window renders its waiting state before any session', 
   await expect(root).toHaveAttribute('data-phase', 'handshake');
   await expect(root.locator('.waiting')).toHaveText('Speaking Glass');
 });
+
+test('[mock-backed] stage preview harness loads its document and follows', async ({ page }) => {
+  await page.goto('/stage.html?preview=1');
+  const root = page.locator('.stage-root');
+  await expect(root).toHaveAttribute('data-phase', 'live');
+  await expect(root.locator('.script-layer span.w[data-t]').first()).toBeVisible();
+});
